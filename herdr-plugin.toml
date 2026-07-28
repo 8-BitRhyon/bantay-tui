@@ -12,6 +12,5 @@ contexts = ["workspace"]
 command = ["sh", "scripts/setup.sh"]
 
 [[events]]
-id = "agent-status"
-event = "pane.agent_status_changed"
+on = "pane.agent_status_changed"
 command = ["node", "scripts/event-adapter.mjs"]
