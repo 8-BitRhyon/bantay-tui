@@ -71,8 +71,20 @@ final class AgentEventManager: ObservableObject {
     private func showEvent(_ event: AgentEvent) {
         currentEvent = event
         clearTask?.cancel()
+
+        let config = NotchHUDConfig.shared
+        let ttl: TimeInterval
+
+        if event.kind == .accessRequest && config.stickyApprovalSources.contains(event.source.lowercased()) {
+            ttl = config.stickyApprovalTTL
+        } else if event.kind == .accessRequest {
+            ttl = config.autoClearTTL * 3
+        } else {
+            ttl = config.autoClearTTL
+        }
+
         clearTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(event.kind == .accessRequest ? 30 : 3))
+            try? await Task.sleep(for: .seconds(ttl))
             await MainActor.run {
                 if self?.currentEvent?.id == event.id {
                     self?.currentEvent = nil

@@ -9,13 +9,14 @@ const DATA_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'Bant
 const EVENTS_FILE = path.join(DATA_DIR, 'agent-events.jsonl');
 
 const STATUS_MAP = {
-  blocked: 'waiting',
+  blocked: 'access_request',
   done: 'completed',
   working: 'progress',
   running: 'started',
-  idle: 'clear',
+  idle: 'waiting',
   failed: 'failed',
   cancelled: 'cancelled',
+  clear: 'clear',
 };
 
 const eventJson = process.env.HERDR_PLUGIN_EVENT_JSON;
