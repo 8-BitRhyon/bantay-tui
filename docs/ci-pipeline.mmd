@@ -1,0 +1,17 @@
+flowchart TD
+    START["git push / open PR"] --> L1{"Layer 1 · Format<br/>swift format lint"}
+    L1 -- "fail" --> REJECT["BLOCKED"]
+    L1 -- "pass" --> L2{"Layer 2 · Compile<br/>swift build"}
+    L2 -- "fail" --> REJECT
+    L2 -- "pass" --> L3{"Layer 3 · Tests<br/>swift test"}
+    L3 -- "fail" --> REJECT
+    L3 -- "pass" --> L4{"Layer 4 · Release<br/>swift build -c release"}
+    L4 -- "fail" --> REJECT
+    L4 -- "pass" --> S1{"gitleaks<br/>secrets scan"}
+    L4 -- "pass" --> S2{"SHA-pinned<br/>actions audit"}
+    S1 -- "fail" --> REJECT
+    S2 -- "fail" --> REJECT
+    S1 -- "pass" --> GATE{"Remote barrier<br/>PR required · status checks · signed commits"}
+    S2 -- "pass" --> GATE
+    GATE -- "pass" --> MAIN[("main")]
+    REJECT --> FIX["Fix & re-push"]
