@@ -13,6 +13,11 @@ let package = Package(
         .executableTarget(
             name: "BantayTUI",
             path: "Sources/BantayTUI"
+        ),
+        .testTarget(
+            name: "BantayTUILogicTests",
+            dependencies: ["BantayTUI"],
+            path: "Tests/BantayTUILogicTests"
         )
     ]
 )

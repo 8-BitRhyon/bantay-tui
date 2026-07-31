@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 @main
 struct DynamicIslandApp: App {
@@ -17,8 +17,12 @@ struct DynamicIslandApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    @MainActor static weak var window: NSWindow?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
         guard let window = NSApplication.shared.windows.first else { return }
+        Self.window = window
 
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
@@ -31,11 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isMovableByWindowBackground = false
         window.ignoresMouseEvents = false
 
-        positionWindowAtNotch(window)
+        window.orderOut(nil)
     }
 
     @MainActor
-    private func positionWindowAtNotch(_ window: NSWindow) {
+    static func showAtNotch() {
+        guard let window else { return }
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
 
         let notchHeight = screen.safeAreaInsets.top
@@ -43,13 +48,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let screenFrame = screen.frame
 
         let menuBarHeight = screenFrame.height - visibleFrame.height - visibleFrame.origin.y
-        let topY = notchHeight > 0
+        let topY =
+            notchHeight > 0
             ? screenFrame.maxY - notchHeight - 6
             : screenFrame.maxY - menuBarHeight - 6
 
-        let windowWidth = window.frame.width
-        let x = screenFrame.midX - windowWidth / 2
+        let x = screenFrame.midX - window.frame.width / 2
 
         window.setFrameOrigin(NSPoint(x: x, y: topY - window.frame.height))
+        window.orderFrontRegardless()
+    }
+
+    @MainActor
+    static func hide() {
+        window?.orderOut(nil)
     }
 }

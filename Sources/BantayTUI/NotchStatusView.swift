@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct NotchStatusView: View {
@@ -47,6 +48,9 @@ struct NotchStatusView: View {
                 .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
                 .opacity(opacity)
                 .onAppear {
+                    if eventManager.currentEvent == nil {
+                        AppDelegate.hide()
+                    }
                     withAnimation(.easeInOut(duration: 0.25)) {
                         opacity = 1
                     }
@@ -54,6 +58,14 @@ struct NotchStatusView: View {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             showDetail = true
                         }
+                    }
+                }
+                .onChange(of: eventManager.currentEvent) {
+                    if let event = eventManager.currentEvent {
+                        AppDelegate.showAtNotch()
+                        playSound(for: event)
+                    } else {
+                        AppDelegate.hide()
                     }
                 }
                 .onChange(of: event.id) {
@@ -67,6 +79,14 @@ struct NotchStatusView: View {
             }
         }
         .frame(minWidth: 120, maxWidth: 420, minHeight: 28)
+    }
+
+    private func playSound(for event: AgentEvent) {
+        let config = NotchHUDConfig.shared
+        guard config.enableAgentAlerts else { return }
+        guard let sound = NSSound(named: event.kind.soundName) else { return }
+        sound.volume = config.soundVolume
+        sound.play()
     }
 }
 

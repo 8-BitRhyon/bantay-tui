@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 
 struct AgentEvent: Identifiable, Equatable {
     let id = UUID()
@@ -17,13 +17,23 @@ final class AgentEventManager: ObservableObject {
     @Published private(set) var currentEvent: AgentEvent?
     private var watchTask: Task<Void, Never>?
     private var clearTask: Task<Void, Never>?
-    private var readOffset: UInt64 = 0
+    private var readOffset: UInt64
+    private var lineBuffer = ""
     private let eventsFileURL: URL
 
     init(eventsFileURL: URL? = nil) {
-        self.eventsFileURL = eventsFileURL ?? FileManager.default
+        let url =
+            eventsFileURL
+            ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Bantay-TUI/agent-events.jsonl", isDirectory: false)
+        self.eventsFileURL = url
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            readOffset = (try? handle.seekToEnd()) ?? 0
+            try? handle.close()
+        } else {
+            readOffset = 0
+        }
         start()
     }
 
@@ -32,7 +42,7 @@ final class AgentEventManager: ObservableObject {
         watchTask = Task { [weak self] in
             while !Task.isCancelled {
                 await MainActor.run {
-                    self?.readPendingEvents()
+                    self?.poll()
                 }
                 try? await Task.sleep(for: .milliseconds(500))
             }
@@ -46,36 +56,65 @@ final class AgentEventManager: ObservableObject {
         clearTask = nil
     }
 
-    private func readPendingEvents() {
-        guard FileManager.default.fileExists(atPath: eventsFileURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: eventsFileURL)
-            guard let rawText = String(data: data, encoding: .utf8) else { return }
-            let lines = rawText.split(whereSeparator: \.isNewline)
-            for line in lines {
-                let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { continue }
-                guard let lineData = text.data(using: .utf8),
-                      let payload = try? JSONDecoder().decode(AgentEventPayload.self, from: lineData) else {
-                    continue
-                }
-                if let event = makeEvent(from: payload) {
-                    showEvent(event)
-                }
+    func poll() {
+        guard let handle = try? FileHandle(forReadingFrom: eventsFileURL) else { return }
+        defer { try? handle.close() }
+        guard let end = try? handle.seekToEnd() else { return }
+        if end < readOffset {
+            readOffset = 0
+        }
+        guard end > readOffset else { return }
+        try? handle.seek(toOffset: readOffset)
+        let data = handle.readDataToEndOfFile()
+        readOffset = end
+
+        guard let text = String(data: data, encoding: .utf8) else { return }
+        lineBuffer += text
+
+        var lines = lineBuffer.split(whereSeparator: \.isNewline)
+        if !lineBuffer.hasSuffix("\n"), let partial = lines.popLast() {
+            lineBuffer = String(partial)
+        } else {
+            lineBuffer = ""
+        }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                let lineData = trimmed.data(using: .utf8),
+                let payload = try? JSONDecoder().decode(AgentEventPayload.self, from: lineData),
+                let event = makeEvent(from: payload)
+            else {
+                continue
             }
-        } catch {
-            return
+            showEvent(event)
         }
     }
 
     private func showEvent(_ event: AgentEvent) {
+        if event.kind == .clear {
+            currentEvent = nil
+            clearTask?.cancel()
+            return
+        }
+
+        if let current = currentEvent,
+            current.source == event.source,
+            current.kind == event.kind,
+            current.paneId == event.paneId
+        {
+            return
+        }
+
         currentEvent = event
         clearTask?.cancel()
 
         let config = NotchHUDConfig.shared
         let ttl: TimeInterval
 
-        if event.kind == .accessRequest && config.stickyApprovalSources.contains(event.source.lowercased()) {
+        if event.kind == .accessRequest
+            && config.stickyApprovalSources.contains(event.source.lowercased())
+        {
             ttl = config.stickyApprovalTTL
         } else if event.kind == .accessRequest {
             ttl = config.autoClearTTL * 3
@@ -94,8 +133,9 @@ final class AgentEventManager: ObservableObject {
     }
 
     private func makeEvent(from payload: AgentEventPayload) -> AgentEvent? {
-        let kind = payload.type ?? .completed
-        guard AgentEventKind(rawValue: kind.rawValue) != nil else { return nil }
+        guard let kind = payload.type, AgentEventKind(rawValue: kind.rawValue) != nil else {
+            return nil
+        }
         let eventKind = AgentEventKind(rawValue: kind.rawValue)!
         return AgentEvent(
             source: payload.source ?? "herdr",
