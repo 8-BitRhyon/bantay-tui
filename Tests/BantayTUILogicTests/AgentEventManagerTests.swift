@@ -122,6 +122,7 @@ final class AgentEventManagerTests: XCTestCase {
         XCTAssertNil(manager.currentEvent)
 
         let closer = try FileHandle(forWritingTo: file)
+        try closer.seekToEnd()
         try closer.write(contentsOf: Data("\n".utf8))
         try? closer.close()
 
