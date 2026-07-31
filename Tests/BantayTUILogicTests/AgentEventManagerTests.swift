@@ -19,6 +19,10 @@ final class AgentEventManagerTests: XCTestCase {
     }
 
     private func write(_ lines: [String]) throws {
+        guard !lines.isEmpty else {
+            try Data().write(to: file, options: [.atomic])
+            return
+        }
         let text = lines.joined(separator: "\n") + "\n"
         try text.write(to: file, atomically: true, encoding: .utf8)
     }
