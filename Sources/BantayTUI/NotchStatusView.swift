@@ -138,7 +138,9 @@ struct NotchStatusView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let event = eventManager.currentEvent {
+        if isExpanded {
+            expandedList
+        } else if let event = eventManager.currentEvent {
             closedPill(
                 color: event.kind.color,
                 label: event.kind.label,
