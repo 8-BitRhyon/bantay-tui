@@ -52,6 +52,11 @@ struct NotchStatusView: View {
         }
         .scaleEffect(pulse ? 1.03 : 1, anchor: .top)
         .frame(width: islandWidth + islandCornerRadius * 2, height: islandHeight, alignment: .top)
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { size in
+            AppDelegate.resizeIsland(size: size)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
@@ -66,9 +71,6 @@ struct NotchStatusView: View {
                 cancelComposing()
             }
             eventManager.setActive(isExpanded)
-            DispatchQueue.main.async {
-                AppDelegate.resizeIsland(size: neededWindowSize)
-            }
         }
         .onChange(of: eventManager.currentEvent) {
             handleEventChange()
@@ -420,9 +422,6 @@ struct NotchStatusView: View {
             !eventManager.agents.contains(where: { $0.paneId == composingPaneId })
         {
             cancelComposing()
-        }
-        DispatchQueue.main.async {
-            AppDelegate.resizeIsland(size: neededWindowSize)
         }
     }
 
