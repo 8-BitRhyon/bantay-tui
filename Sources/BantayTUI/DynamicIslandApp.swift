@@ -197,10 +197,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
-    @MainActor
-    @objc private func testAlert() {
-        AgentEventManager.shared.publishForTesting()
-    }
+    #if DEBUG
+        @MainActor
+        @objc private func testAlert() {
+            AgentEventManager.shared.publishForTesting()
+        }
+    #endif
 
     @MainActor
     @objc private func focusAgent(_ sender: NSMenuItem) {
