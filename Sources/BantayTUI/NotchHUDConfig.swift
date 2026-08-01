@@ -23,6 +23,9 @@ final class NotchHUDConfig {
     var captureInterval: TimeInterval = 2.0 {
         didSet { defaults.set(captureInterval, forKey: "captureInterval") }
     }
+    var idlePollInterval: TimeInterval = 10.0 {
+        didSet { defaults.set(idlePollInterval, forKey: "idlePollInterval") }
+    }
     var soundCooldown: TimeInterval = 5.0 {
         didSet { defaults.set(soundCooldown, forKey: "soundCooldown") }
     }
@@ -50,6 +53,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "captureInterval") as? NSNumber {
             captureInterval = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "idlePollInterval") as? NSNumber {
+            idlePollInterval = v.doubleValue
         }
         if let v = defaults.object(forKey: "soundCooldown") as? NSNumber {
             soundCooldown = v.doubleValue

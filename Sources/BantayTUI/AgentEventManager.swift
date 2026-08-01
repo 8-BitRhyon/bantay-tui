@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -33,6 +34,11 @@ final class AgentEventManager: ObservableObject {
     private var watchTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     private var clearTask: Task<Void, Never>?
+    private var fileSource: DispatchSourceFileSystemObject?
+    private var sleepObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
+    private(set) var isActive = false
+    private var displayAsleep = false
     private var readOffset: UInt64
     private var lineBuffer = ""
     private var lastSeenKinds: [String: AgentEventKind] = [:]
@@ -55,21 +61,29 @@ final class AgentEventManager: ObservableObject {
         } else {
             readOffset = 0
         }
+        let workspace = NSWorkspace.shared.notificationCenter
+        sleepObserver = workspace.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.displayAsleep = true
+            }
+        }
+        wakeObserver = workspace.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.displayAsleep = false
+            }
+        }
         start()
         startCapture()
     }
 
     func start() {
         watchTask?.cancel()
-        guard captureEnabled else { return }
-        watchTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await MainActor.run {
-                    self?.poll()
-                }
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
+        watchTask = nil
+        startFileWatcher()
     }
 
     func stop() {
@@ -79,6 +93,18 @@ final class AgentEventManager: ObservableObject {
         captureTask = nil
         clearTask?.cancel()
         clearTask = nil
+        fileSource?.cancel()
+        fileSource = nil
+        if let sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
+        }
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+    }
+
+    func setActive(_ active: Bool) {
+        isActive = active
     }
 
     func shouldPlaySound(for event: AgentEvent) -> Bool {
@@ -346,11 +372,47 @@ extension AgentEventManager {
         guard captureEnabled, NotchHUDConfig.shared.captureEnabled else { return }
         captureTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.pollHerdrAgents()
-                try? await Task.sleep(
-                    for: .milliseconds(Int64(NotchHUDConfig.shared.captureInterval * 1000)))
+                guard let self, !self.displayAsleep else {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    continue
+                }
+                await self.pollHerdrAgents()
+                self.ensureFileWatcher()
+                let interval =
+                    self.isActive
+                    ? NotchHUDConfig.shared.captureInterval
+                    : NotchHUDConfig.shared.idlePollInterval
+                try? await Task.sleep(for: .milliseconds(Int64(interval * 1000)))
             }
         }
+    }
+
+    func stopCapture() {
+        captureTask?.cancel()
+        captureTask = nil
+    }
+
+    private func startFileWatcher() {
+        fileSource?.cancel()
+        fileSource = nil
+        guard captureEnabled else { return }
+        let fd = open(eventsFileURL.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: [.write, .extend], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                self?.poll()
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        fileSource = source
+    }
+
+    private func ensureFileWatcher() {
+        guard fileSource == nil else { return }
+        startFileWatcher()
     }
 
     func pollHerdrAgents() async {
