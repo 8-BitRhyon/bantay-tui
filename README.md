@@ -5,7 +5,14 @@
 
 Native SwiftUI macOS app that turns the MacBook notch into an interactive agent-state display, reading lifecycle events directly from Herdr.
 
-An agent is `working`, `blocked`, waiting for `approval`, or `done` — Bantay-TUI makes that visible without opening Notification Center: a floating pill under the notch, colored per state, clickable to focus the pane, with per-event sounds.
+An agent is `working`, `blocked`, waiting for `approval`, or `done` — Bantay-TUI makes that visible without opening Notification Center: a floating pill under the notch, colored per state, with per-event sounds. **Hover the pill** to expand a live roster of every active agent (source, state, what it's doing) — click any row to jump straight to that agent's pane in herdr.
+
+## Hover island
+
+- The pill shows the most urgent agent state (`blocked` > `done` > `working`); a gray `Agents · N` pill appears when agents are idle.
+- Hover (or click the idle pill) to expand a list of **all** active agents, refreshed every `captureInterval` seconds — each row: status dot, agent name, state label, terminal title.
+- Click a row (or the pill) → `herdr pane focus <paneId>` jumps to that agent's pane.
+- A menu bar icon lists the same agents with the same focus actions, plus Quit (the app is `.accessory` — no Dock icon).
 
 ## CI/CD Pipeline
 
@@ -74,11 +81,24 @@ Run it once as a launch agent (auto-starts on login, keeps running):
 sh scripts/setup.sh
 ```
 
+`setup.sh` copies the binary to `~/Library/Application Support/Bantay-TUI/bantay` and installs the launch agent pointing there. Running the agent from the repo's `.build` directory is unreliable — launchd execution of a freshly rebuilt binary under `~/Downloads` can block in dyld's `open()` (Downloads provenance/TCC evaluation never completes for a launchd-spawned GUI process).
+
 ## Herdr Integration
 
-`herdr-plugin.toml` registers the plugin with Herdr:
+Bantay-TUI captures herdr's live agent state directly — no plugin, wrapper, or in-herdr launch required. Agents herdr knows about (kilo, Freebuff, Command Code, …) show up in the notch regardless of how they were started.
 
-- **Setup action** (`scripts/setup.sh`) creates `~/Library/Application Support/Bantay-TUI/` and installs the launch agent.
+- **Direct capture** (default): the app polls `herdr agent list` every `captureInterval` seconds and maps statuses to the pill: `blocked → access_request`, `working → progress`, `done → completed`. The highest-severity agent per name wins (`blocked` > `done` > `working`); a blocked/working pill that times out silently reappears while the agent is still active.
+- **Event hook** (optional, for richer state labels): `herdr-plugin.toml` registers `scripts/event-adapter.mjs` on `pane.agent_status_changed`, appending JSONL to `agent-events.jsonl`, which the app also tails.
+
+To install the optional event hook and the launch agent:
+
+```bash
+herdr plugin link /path/to/bantay-tui   # links herdr-plugin.toml; enabled by default
+herdr server reload-config
+sh scripts/setup.sh                     # idempotent; data dir + launch agent
+```
+
+- **Setup action** (`scripts/setup.sh`) creates `~/Library/Application Support/Bantay-TUI/` and installs the launch agent (`com.bantay-tui.agent`, `RunAtLoad` + `KeepAlive`).
 - **Event hook** (`scripts/event-adapter.mjs`) subscribes to `pane.agent_status_changed`, maps Herdr statuses to Bantay event kinds, and appends JSONL to `agent-events.jsonl`:
 
 ```
@@ -87,12 +107,29 @@ sh scripts/setup.sh
 
 Status mapping: `blocked → access_request`, `working → progress`, `running → started`, `idle → waiting`, `done → completed`, `failed → failed`, `cancelled → cancelled`, `clear → clear`.
 
+### Herdr event payload
+
+Herdr delivers each event as JSON in `HERDR_PLUGIN_EVENT_JSON` (verified against herdr's bundled API schema, protocol 17):
+
+```json
+{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"1-2","workspace_id":"1","agent_status":"blocked","display_agent":"claude","agent":"claude","title":"agent display name","state_labels":{"blocked":"Waiting for approval"}}}
+```
+
+| `data` field | Type | Used by the adapter |
+|---|---|---|
+| `agent_status` | string (required) | Mapped to event `type` (`idle`/`working`/`blocked`/`done`/`unknown`) |
+| `pane_id` | string (required) | `paneId`; pill click runs `herdr pane focus <paneId>` |
+| `workspace_id` | string (required) | `workspaceId` (reserved) |
+| `display_agent` / `agent` | string? | `source` |
+| `title` | string? | `title` |
+| `state_labels` | object? | First label value becomes `message` |
+
 ### Event file format
 
 Newline-delimited JSON, one event per line:
 
 ```json
-{"source":"codex","type":"progress","title":"agent display name","message":"custom status","paneId":"pane-123","workspaceId":"ws-1"}
+{"source":"claude","type":"access_request","title":"agent display name","message":"Waiting for approval","paneId":"1-2","workspaceId":"1"}
 ```
 
 | Field | Type | Meaning |
@@ -100,11 +137,20 @@ Newline-delimited JSON, one event per line:
 | `source` | string | Agent/display name emitting the event |
 | `type` | string | `access_request`, `waiting`, `completed`, `failed`, `started`, `progress`, `cancelled`, `clear` |
 | `title` | string? | Display title for the pill |
-| `message` | string? | Custom status text |
+| `message` | string? | State label text (`state_labels`), e.g. "Waiting for approval" |
 | `paneId` | string? | Herdr pane id; pill click runs `herdr pane focus <paneId>` |
 | `workspaceId` | string? | Workspace label (reserved) |
 
 The app tails the file — events written before launch are skipped, duplicate events for an active state are ignored, and a `clear` event dismisses the pill.
+
+### Verify the integration
+
+```bash
+herdr plugin list                          # bantay-tui.integration: enabled
+herdr plugin log list                      # event-adapter runs show exit_code 0
+tail -f ~/Library/Application Support/Bantay-TUI/agent-events.jsonl
+launchctl print gui/$(id -u)/com.bantay-tui.agent   # state = running
+```
 
 ## Configuration
 
@@ -116,6 +162,8 @@ Stored in `UserDefaults` (domain `BantayTUI`):
 | `soundVolume` | `0.35` | Alert volume |
 | `autoClearTTL` | `3.0` | Seconds before a finished event auto-clears |
 | `stickyApprovalTTL` | `30.0` | Seconds an approval request stays (sticky sources: `codex`, `cursor`, `freebuff`, `commandcode`) |
+| `captureEnabled` | `true` | Poll herdr's live agent list |
+| `captureInterval` | `2.0` | Seconds between `herdr agent list` polls |
 
 ## Architecture
 

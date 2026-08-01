@@ -17,6 +17,12 @@ final class NotchHUDConfig {
     var stickyApprovalTTL: TimeInterval = 30.0 {
         didSet { defaults.set(stickyApprovalTTL, forKey: "stickyApprovalTTL") }
     }
+    var captureEnabled = true {
+        didSet { defaults.set(captureEnabled, forKey: "captureEnabled") }
+    }
+    var captureInterval: TimeInterval = 2.0 {
+        didSet { defaults.set(captureInterval, forKey: "captureInterval") }
+    }
 
     private let defaults = UserDefaults.standard
 
@@ -32,6 +38,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "stickyApprovalTTL") as? NSNumber {
             stickyApprovalTTL = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "captureEnabled") as? Bool {
+            captureEnabled = v
+        }
+        if let v = defaults.object(forKey: "captureInterval") as? NSNumber {
+            captureInterval = v.doubleValue
         }
     }
 }

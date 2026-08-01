@@ -1,6 +1,6 @@
 import Foundation
 
-final class HerdrSocketAdapter {
+final class HerdrSocketAdapter: Sendable {
     private let herdrBinPath: String
 
     init(herdrBinPath: String = "herdr") {
@@ -52,6 +52,53 @@ final class HerdrSocketAdapter {
         }
         return raw.result?.panes ?? raw.panes ?? []
     }
+
+    nonisolated func listAgents() async -> [HerdrAgentInfo] {
+        guard let url = herdrExecutableURL() else { return [] }
+        let process = Process()
+        process.executableURL = url
+        process.arguments = ["agent", "list"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        guard !output.isEmpty else { return [] }
+
+        let decoder = JSONDecoder()
+        guard let jsonData = output.data(using: .utf8),
+            let raw = try? decoder.decode(HerdrAgentListResponse.self, from: jsonData)
+        else {
+            return []
+        }
+        return raw.result?.agents ?? []
+    }
+}
+
+struct HerdrAgentInfo: Decodable {
+    let agent: String
+    let agentStatus: String?
+    let paneId: String?
+    let workspaceId: String?
+    let terminalTitle: String?
+
+    enum CodingKeys: String, CodingKey {
+        case agent
+        case agentStatus = "agent_status"
+        case paneId = "pane_id"
+        case workspaceId = "workspace_id"
+        case terminalTitle = "terminal_title_stripped"
+    }
+}
+
+private struct HerdrAgentListResponse: Decodable {
+    let result: HerdrAgentListResult?
+}
+
+private struct HerdrAgentListResult: Decodable {
+    let agents: [HerdrAgentInfo]?
 }
 
 private struct HerdrResponse: Decodable {
