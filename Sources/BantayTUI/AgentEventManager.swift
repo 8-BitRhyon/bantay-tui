@@ -372,6 +372,7 @@ extension AgentEventManager {
 extension AgentEventManager {
     func startCapture() {
         captureTask?.cancel()
+        signalWaitExit()
         for process in waitProcesses.values {
             process.terminate()
         }
@@ -434,8 +435,9 @@ extension AgentEventManager {
             waitProcesses[pane] = process
             process.terminationHandler = { [weak self] _ in
                 DispatchQueue.main.async {
-                    self?.waitProcesses.removeValue(forKey: pane)
-                    self?.signalWaitExit()
+                    guard let self, self.waitProcesses[pane] === process else { return }
+                    self.waitProcesses.removeValue(forKey: pane)
+                    self.signalWaitExit()
                 }
             }
         }
