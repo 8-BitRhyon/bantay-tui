@@ -3,6 +3,7 @@ import Foundation
 enum AgentEventKind: String, Decodable, CaseIterable {
     case accessRequest = "access_request"
     case clear = "clear"
+    case idle = "idle"
     case waiting = "waiting"
     case completed = "completed"
     case failed = "failed"
@@ -14,6 +15,7 @@ enum AgentEventKind: String, Decodable, CaseIterable {
         switch self {
         case .accessRequest: return "Need approval"
         case .clear: return ""
+        case .idle: return "Idle"
         case .waiting: return "Blocked"
         case .completed: return "Done"
         case .failed: return "Failed"
@@ -27,12 +29,20 @@ enum AgentEventKind: String, Decodable, CaseIterable {
         switch self {
         case .accessRequest: return "#ff6b6b"
         case .clear: return "#8a8aa8"
+        case .idle: return "#6e6e8a"
         case .waiting: return "#ffe066"
         case .completed: return "#4ecdc4"
         case .failed: return "#ff6b6b"
         case .started: return "#8b7eff"
         case .progress: return "#8b7eff"
         case .cancelled: return "#8a8aa8"
+        }
+    }
+
+    var isOngoing: Bool {
+        switch self {
+        case .progress, .accessRequest, .started: return true
+        default: return false
         }
     }
 

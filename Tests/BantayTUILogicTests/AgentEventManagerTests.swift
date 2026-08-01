@@ -43,7 +43,7 @@ final class AgentEventManagerTests: XCTestCase {
 
     func testPreExistingEventsAreSkippedOnLaunch() throws {
         try write([event("completed", title: "old")])
-        let manager = AgentEventManager(eventsFileURL: file)
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }
 
         manager.poll()
@@ -53,7 +53,7 @@ final class AgentEventManagerTests: XCTestCase {
 
     func testAppendedEventsAreShownInOrder() throws {
         try write([])
-        let manager = AgentEventManager(eventsFileURL: file)
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }
 
         try append(event("progress", title: "working"))
@@ -68,7 +68,7 @@ final class AgentEventManagerTests: XCTestCase {
 
     func testDuplicateActiveEventIsIgnored() throws {
         try write([])
-        let manager = AgentEventManager(eventsFileURL: file)
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }
 
         try append(event("progress", title: "working", paneId: "p1"))
@@ -86,7 +86,7 @@ final class AgentEventManagerTests: XCTestCase {
 
     func testClearDismissesCurrentEvent() throws {
         try write([])
-        let manager = AgentEventManager(eventsFileURL: file)
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }
 
         try append(event("access_request", title: "approve me", paneId: "p2"))
@@ -102,7 +102,7 @@ final class AgentEventManagerTests: XCTestCase {
         try write([
             event("completed", title: "a-very-long-title-that-makes-the-file-big-1234567890")
         ])
-        let manager = AgentEventManager(eventsFileURL: file)
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }
 
         manager.poll()
@@ -115,7 +115,7 @@ final class AgentEventManagerTests: XCTestCase {
 
     func testPartialLineIsBufferedUntilNewline() throws {
         try write([])
-        let manager = AgentEventManager(eventsFileURL: file)
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }
 
         let handle = try FileHandle(forWritingTo: file)
@@ -136,7 +136,7 @@ final class AgentEventManagerTests: XCTestCase {
 
     func testInvalidLinesAreSkipped() throws {
         try write([])
-        let manager = AgentEventManager(eventsFileURL: file)
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }
 
         try append("not json at all")
@@ -144,5 +144,196 @@ final class AgentEventManagerTests: XCTestCase {
         manager.poll()
 
         XCTAssertEqual(manager.currentEvent?.kind, .completed)
+    }
+
+    func testHerdrStatusMapping() {
+        XCTAssertEqual(AgentEventManager.kind(for: "blocked"), .accessRequest)
+        XCTAssertEqual(AgentEventManager.kind(for: "working"), .progress)
+        XCTAssertEqual(AgentEventManager.kind(for: "done"), .completed)
+        XCTAssertEqual(AgentEventManager.kind(for: "running"), .started)
+        XCTAssertEqual(AgentEventManager.kind(for: "idle"), .idle)
+        XCTAssertNil(AgentEventManager.kind(for: "unknown"))
+        XCTAssertNil(AgentEventManager.kind(for: ""))
+    }
+
+    func testHerdrSeverityOrdering() {
+        let blocked = AgentEventManager.severity(of: .accessRequest)
+        let done = AgentEventManager.severity(of: .completed)
+        let working = AgentEventManager.severity(of: .progress)
+        let idle = AgentEventManager.severity(of: .idle)
+        XCTAssertGreaterThan(blocked, done)
+        XCTAssertGreaterThan(done, working)
+        XCTAssertGreaterThan(working, AgentEventManager.severity(of: .waiting))
+        XCTAssertLessThan(idle, AgentEventManager.severity(of: .waiting))
+    }
+
+    func testHerdrSnapshotBuilder() {
+        let agent = HerdrAgentInfo(
+            agent: "kilo",
+            agentStatus: "blocked",
+            paneId: "w3:p3",
+            workspaceId: "w3",
+            terminalTitle: "Kilo CLI | Working")
+        let snapshot = AgentEventManager.snapshot(for: agent)
+        XCTAssertEqual(snapshot?.source, "kilo")
+        XCTAssertEqual(snapshot?.kind, .accessRequest)
+        XCTAssertEqual(snapshot?.paneId, "w3:p3")
+        XCTAssertEqual(snapshot?.workspaceId, "w3")
+        XCTAssertEqual(snapshot?.title, "Kilo CLI | Working")
+        XCTAssertEqual(snapshot?.id, "w3:p3")
+    }
+
+    // MARK: - herdr capture update() logic
+
+    private func agent(_ name: String, _ status: String, pane: String) -> HerdrAgentInfo {
+        HerdrAgentInfo(
+            agent: name,
+            agentStatus: status,
+            paneId: pane,
+            workspaceId: String(pane.split(separator: ":").first ?? ""),
+            terminalTitle: "\(name) | \(status)")
+    }
+
+    func testFirstPollEmitsWorkingEvent() {
+        var seen: [String: AgentEventKind] = [:]
+        let result = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertEqual(result.events.map(\.kind), [.progress])
+        XCTAssertEqual(result.events.first?.playSound, true)
+        XCTAssertEqual(result.events.first?.persistent, true)
+        XCTAssertEqual(result.roster.map(\.source), ["kilo"])
+    }
+
+    func testSameStateDoesNotReemit() {
+        var seen: [String: AgentEventKind] = [:]
+        let first = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+        let second = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: first.events.first)
+
+        XCTAssertTrue(second.events.isEmpty)
+    }
+
+    func testTransitionEmitsAccessRequest() {
+        var seen: [String: AgentEventKind] = [:]
+        _ = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+        let second = AgentEventManager.update(
+            from: [agent("kilo", "blocked", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertEqual(second.events.map(\.kind), [.accessRequest])
+    }
+
+    func testIdleIsRosterOnly() {
+        var seen: [String: AgentEventKind] = [:]
+        let result = AgentEventManager.update(
+            from: [agent("kilo", "idle", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertTrue(result.events.isEmpty)
+        XCTAssertEqual(result.roster.map(\.kind), [.idle])
+    }
+
+    func testUnknownStatusExcluded() {
+        var seen: [String: AgentEventKind] = [:]
+        let result = AgentEventManager.update(
+            from: [agent("kilo", "unknown", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertTrue(result.events.isEmpty)
+        XCTAssertTrue(result.roster.isEmpty)
+    }
+
+    func testDoneIsNotPersistent() {
+        var seen: [String: AgentEventKind] = [:]
+        let result = AgentEventManager.update(
+            from: [agent("kilo", "done", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertEqual(result.events.first?.kind, .completed)
+        XCTAssertEqual(result.events.first?.persistent, false)
+    }
+
+    func testRosterSortedBySeverity() {
+        var seen: [String: AgentEventKind] = [:]
+        let result = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "w3:p3"),
+                agent("freebuff", "blocked", pane: "w3:p4"),
+                agent("kilo2", "done", pane: "w3:p5"),
+            ],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertEqual(result.roster.map(\.kind), [.accessRequest, .completed, .progress])
+    }
+
+    func testEmptyAgentsClearsStaleRosterAndPersistentEvent() {
+        var seen: [String: AgentEventKind] = [:]
+        let shown = AgentEvent(
+            source: "kilo",
+            kind: .progress,
+            title: nil,
+            message: nil,
+            paneId: "w3:p3",
+            workspaceId: "w3",
+            playSound: true,
+            persistent: true)
+
+        let result = AgentEventManager.update(from: [], lastSeenKinds: &seen, current: shown)
+
+        XCTAssertEqual(result.events.map(\.kind), [.clear])
+        XCTAssertTrue(result.roster.isEmpty)
+    }
+
+    func testVanishedShownAgentFallsBackSilently() {
+        var seen: [String: AgentEventKind] = [:]
+        let first = AgentEventManager.update(
+            from: [
+                agent("kilo", "blocked", pane: "w3:p3"),
+                agent("freebuff", "working", pane: "w3:p4"),
+            ],
+            lastSeenKinds: &seen,
+            current: nil)
+        XCTAssertEqual(first.events.map(\.kind), [.progress, .accessRequest])
+        let shown = first.events.last!
+
+        let second = AgentEventManager.update(
+            from: [agent("freebuff", "working", pane: "w3:p4")],
+            lastSeenKinds: &seen,
+            current: shown)
+
+        XCTAssertEqual(second.events.map(\.kind), [.clear, .progress])
+        XCTAssertEqual(second.events.last?.source, "freebuff")
+        XCTAssertEqual(second.events.last?.playSound, false)
+    }
+
+    func testSameStateReshowsWhenCurrentNil() {
+        var seen: [String: AgentEventKind] = [:]
+        _ = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+        let result = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "w3:p3")],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertEqual(result.events.map(\.kind), [.progress])
+        XCTAssertEqual(result.events.first?.playSound, false)
     }
 }

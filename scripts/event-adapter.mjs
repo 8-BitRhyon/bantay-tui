@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
 const DATA_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'Bantay-TUI');
 const EVENTS_FILE = path.join(DATA_DIR, 'agent-events.jsonl');
@@ -42,11 +42,15 @@ if (!mapped) {
   process.exit(0);
 }
 
+const stateLabels = data.state_labels && typeof data.state_labels === 'object'
+  ? Object.values(data.state_labels)
+  : [];
+
 const payload = {
   source: data.display_agent || data.agent || 'herdr',
   type: mapped,
   title: data.title || null,
-  message: data.custom_status || null,
+  message: stateLabels[0] || data.custom_status || null,
   paneId: data.pane_id || null,
   workspaceId: data.workspace_id || null,
 };

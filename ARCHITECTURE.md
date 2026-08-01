@@ -3,50 +3,51 @@
 Native SwiftUI macOS app that turns the MacBook notch into an interactive agent-state display, reading lifecycle events directly from Herdr.
 
 ## Why
-Focus-notify (installed) sends native macOS toasts on `agent_status_changed`. This complements it with persistent notch-level visibility: which agent is `blocked`, which just finished (`done`), which needs approval (`accessRequest`), without opening Notification Center.
+`herdr-focus-notify` (installed) sends native macOS toasts on `agent_status_changed`. This complements it with persistent notch-level visibility: which agent is `blocked`, which just finished (`done`), which needs approval (`access_request`), without opening Notification Center.
 
 ## Architecture
 
-| Component | Role | Source Basis |
-|---|---|---|
-| `DynamicIslandApp.swift` | Main SwiftUI entry | Notchly `App/DynamicIslandApp.swift` |
-| `AgentEventManager.swift` | Reads events file / socket | Notchly `Managers/AgentEventManager.swift` |
-| `HerdrSocketAdapter.swift` | Swift wrapper for herdr local socket (`pane list`, `wait agent-status`) | Custom (herdr socket docs) |
-| `AgentEventKind.swift` | Enum mapping herdr states | Notchly `AgentEventKind` |
-| `NotchStatusView.swift` | Dynamic Island rendering | Notchly `Views/Island/` |
-| `NotchHUDConfig.swift` | Settings: sound per event, auto-clear TTL, sticky approvals | Notchly `Managers/SettingsManager.swift` |
+| Component | Role |
+|---|---|
+| `DynamicIslandApp.swift` | Main SwiftUI entry; `.accessory` window hidden when idle, shown at the notch on events; menu bar item (live agent roster, focus actions, Quit) |
+| `AgentEventManager.swift` | Dual-source event pipeline: tails `agent-events.jsonl` (launch offset, partial-line buffering, truncation recovery, duplicate suppression, `clear` handling) and polls herdr's live agent list (transition detection, per-source severity, silent re-show of persistent states); publishes `agents` snapshot roster |
+| `AgentEventKind.swift` | Enum mapping herdr states to event kinds (`idle` included for the roster) |
+| `NotchStatusView.swift` | Notch pill + hover-expandable agent roster; shows on state change, plays per-event sounds (suppressed for silent re-shows), row click focuses the pane |
+| `NotchHUDConfig.swift` | `UserDefaults` settings: sounds, volume, auto-clear TTL, sticky approvals, capture interval |
+| `HerdrSocketAdapter.swift` | Runs herdr CLI: `herdr agent list` (capture), `herdr pane focus <paneId>` (click-to-focus) |
 
 ## Events File vs Socket
 
-Notchly (original) reads `~/Library/Application Support/Notchly/agent-events.jsonl` (Codex hooks write to it). Bantay-TUI has two options:
+Two sources feed the same pipeline:
 
-1. **File adapter** (fast): herdr plugin (`focus-notify` or new adapter) writes `agent-events.jsonl` to `~/Library/Application Support/Bantay-TUI/agent-events.jsonl`. Bantay-TUI reads same file.
-2. **Socket adapter** (direct): Swift connects to herdr local unix socket, polls `pane agent-status` and `pane list`. No intermediate file.
+1. **Direct capture** (default, `captureEnabled`): the manager polls `herdr agent list` every `captureInterval` seconds via the herdr CLI. `blocked → access_request`, `working → progress`, `done → completed`; `idle`/`unknown` are ignored. Per source name, the highest-severity agent wins (`access_request` > `completed`/`failed` > `progress`/`started` > `waiting`); events are emitted only on state transitions, and a persistent `access_request`/`progress` pill silently reappears after TTL expiry while the state holds. No plugin or in-herdr launch required — anything herdr's sidebar knows about appears.
+2. **Event file** (optional): `scripts/event-adapter.mjs` (herdr plugin `bantay-tui.integration`, `pane.agent_status_changed`) appends JSONL to `~/Library/Application Support/Bantay-TUI/agent-events.jsonl`, which the manager tails for richer `state_labels` messages.
 
-Recommendation: start with file adapter (reuse Notchly's `AgentEventManager.readPendingEvents()` logic), then add socket adapter for lower latency.
+A direct unix-socket adapter (no CLI subprocess) remains a future option for lower latency; it is not implemented.
 
-## Herdr Integration Points
+## Herdr Event Payload
 
-| Herdr Plugin / Feature | Event Type | Bantay-TUI Mapping |
-|---|---|---|
-| `freebuff.integration` | `blocked`, `working`, `idle` | `AgentEventKind.waiting`, `.started`/`.progress`, `.completed`/`.clear` |
-| `commandcode.integration` | `blocked`, `working`, `idle`, `done` | Same mapping; `cmd-hooks` writes events |
-| `focus-notify` (`pane.agent_status_changed`) | `blocked`, `done`, `idle`, `unknown` | Direct event source; Bantay-TUI subscribes |
-| `worktrunk` (workspace isolation) | Worktree creation | Optional workspace label in notch |
-| `resurrect` (session persistence) | Restored layout | Optional session-ID tag |
+Herdr invokes the plugin command with the event JSON in `HERDR_PLUGIN_EVENT_JSON`. Verified shape for `pane.agent_status_changed` (from herdr's bundled API schema, protocol 17):
+
+```json
+{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"1-2","workspace_id":"1","agent_status":"blocked","display_agent":"claude","agent":"claude","title":"...","state_labels":{"blocked":"Waiting for approval"}}}
+```
+
+`agent_status` is one of `idle`, `working`, `blocked`, `done`, `unknown`. The adapter maps: `blocked → access_request`, `working → progress`, `idle → waiting`, `done → completed`; `state_labels` supplies the pill message.
 
 ## Click-to-Focus
 
-Notch click triggers herdr CLI: `herdr pane focus <pane_id>` (same mechanism as `focus-notify`). Pane ID resolved via event metadata (`pane.id` in event file, or `pane list` lookup in socket adapter).
+Notch click triggers the herdr CLI: `herdr pane focus <pane_id>` (same mechanism as `herdr-focus-notify`). Pane ID comes from the event's `paneId` field.
 
 ## Build Requirements
 
-- macOS 14.6+ (same as Notchly)
+- macOS 14.6+
 - SwiftUI, AppKit
+- Node.js 18+ for the event adapter (ESM)
 - No Electron; native Swift binary
-- Open source (MIT license, same as Notchly)
+- Open source (MIT license)
 - Notarized release via `notarytool` (optional for public download; can distribute as `.dmg` or `.zip` for manual install)
 
 ## Installation Path
 
-Manual (for now): download `.dmg` from GitHub releases. Future: Homebrew cask (`brew install --cask bantay-tui`) once notarized.
+Manual (for now): build with `swift build`, run `sh scripts/setup.sh` to install the launch agent, and `herdr plugin link <repo>` to register the event hook. Future: Homebrew cask (`brew install --cask bantay-tui`) once notarized.
