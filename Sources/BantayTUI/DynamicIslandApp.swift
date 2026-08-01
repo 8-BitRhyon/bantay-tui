@@ -18,10 +18,21 @@ final class KeyablePanel: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var window: NSWindow?
-    @MainActor private static let islandWindowSize = NSSize(width: 456, height: 240)
-    @MainActor static var islandHeight: CGFloat = 240
+    @MainActor private static let expandedIslandSize = NSSize(width: 456, height: 240)
+    @MainActor static var islandWidth: CGFloat = 211
+    @MainActor static var islandHeight: CGFloat = 74
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
+
+    @MainActor
+    static var notchWidth: CGFloat {
+        guard let screen = window?.screen ?? NSScreen.main else { return 211 }
+        let left = screen.auxiliaryTopLeftArea?.width ?? 0
+        let right = screen.auxiliaryTopRightArea?.width ?? 0
+        guard screen.safeAreaInsets.top > 0, left > 0, right > 0 else { return 211 }
+        let width = screen.frame.width - left - right + 2
+        return width > 100 ? width : 211
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -32,7 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor
     private func makeIslandWindow() {
-        let size = Self.islandWindowSize
+        Self.islandWidth = Self.notchWidth + 16
+        Self.islandHeight = Self.topInset + 36
+        let size = Self.islandSize()
         let window = KeyablePanel(
             contentRect: Self.islandFrame(on: NSScreen.main, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -63,8 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: window,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated {
-                AppDelegate.reposition()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    AppDelegate.reposition()
+                }
             }
         }
     }
@@ -126,12 +141,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor
     static func islandSize() -> NSSize {
-        NSSize(width: islandWindowSize.width, height: min(max(islandHeight, 240), 560))
+        NSSize(width: islandWidth, height: islandHeight)
     }
 
     @MainActor
-    static func resizeIsland(to height: CGFloat) {
-        islandHeight = height
+    static func resizeIsland(size: NSSize) {
+        islandWidth = size.width
+        islandHeight = size.height
         reposition()
     }
 

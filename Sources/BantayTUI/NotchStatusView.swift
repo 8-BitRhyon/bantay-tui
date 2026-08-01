@@ -10,17 +10,18 @@ struct NotchStatusView: View {
     @State private var hoveredRow: String?
     @State private var composingPaneId: String?
     @State private var promptText = ""
+    @State private var pulse = false
     @FocusState private var promptFocused: Bool
     private let adapter = HerdrSocketAdapter()
 
     private let pillHeight: CGFloat = 36
-    private let expandedWidth: CGFloat = 320
+    private let expandedWidth: CGFloat = 456
     private let rowHeight: CGFloat = 26
     private let spacing: CGFloat = 10
 
     private var topInset: CGFloat { AppDelegate.topInset }
 
-    private var islandWidth: CGFloat { isExpanded ? expandedWidth : 160 }
+    private var islandWidth: CGFloat { isExpanded ? expandedWidth : AppDelegate.notchWidth }
     private var islandHeight: CGFloat {
         isExpanded
             ? topInset + 40 + CGFloat(eventManager.agents.count) * rowHeight + 10
@@ -31,6 +32,9 @@ struct NotchStatusView: View {
     }
     private var neededWindowHeight: CGFloat {
         min(islandHeight, 560)
+    }
+    private var neededWindowSize: NSSize {
+        NSSize(width: islandWidth + islandCornerRadius * 2, height: neededWindowHeight)
     }
     private var islandCornerRadius: CGFloat { isExpanded ? 24 : 8 }
     private var morphAnimation: Animation { .smooth(duration: 0.42, extraBounce: 0) }
@@ -46,6 +50,7 @@ struct NotchStatusView: View {
             content
                 .frame(width: islandWidth, height: contentHeight, alignment: .top)
                 .offset(y: topInset)
+                .scaleEffect(pulse ? 1.03 : 1)
         }
         .frame(width: islandWidth + islandCornerRadius * 2, height: islandHeight, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -61,7 +66,7 @@ struct NotchStatusView: View {
                 cancelComposing()
             }
             DispatchQueue.main.async {
-                AppDelegate.resizeIsland(to: neededWindowHeight)
+                AppDelegate.resizeIsland(size: neededWindowSize)
             }
         }
         .onChange(of: eventManager.currentEvent) {
@@ -162,6 +167,7 @@ struct NotchStatusView: View {
                     color: AgentEventKind.idle.color,
                     label: "Agents · \(eventManager.agents.count)",
                     title: nil,
+                    dots: eventManager.agents.map(\.kind),
                     action: {
                         withAnimation(morphAnimation) {
                             isExpanded = true
@@ -178,13 +184,14 @@ struct NotchStatusView: View {
     private var emptyBar: some View {
         Rectangle()
             .fill(.clear)
-            .frame(width: 108, height: pillHeight)
+            .frame(width: islandWidth, height: pillHeight)
     }
 
     private func closedPill(
         color: String,
         label: String,
         title: String?,
+        dots: [AgentEventKind] = [],
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -204,6 +211,23 @@ struct NotchStatusView: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if !dots.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(Array(dots.prefix(5).enumerated()), id: \.offset) { _, kind in
+                            Circle()
+                                .fill(Color(hex: kind.color))
+                                .frame(width: 4, height: 4)
+                        }
+                        if dots.count > 5 {
+                            Text("+\(dots.count - 5)")
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                    }
                 }
             }
             .frame(width: islandWidth, height: pillHeight)
@@ -335,7 +359,7 @@ struct NotchStatusView: View {
 
     private func handleAppear() {
         DispatchQueue.main.async {
-            AppDelegate.resizeIsland(to: neededWindowHeight)
+            AppDelegate.resizeIsland(size: neededWindowSize)
         }
         withAnimation(.easeInOut(duration: 0.25)) {
             opacity = 1
@@ -363,6 +387,14 @@ struct NotchStatusView: View {
     private func handleEventChange() {
         if let event = eventManager.currentEvent {
             AppDelegate.showAtNotch()
+            withAnimation(.easeInOut(duration: 0.15)) {
+                pulse = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    pulse = false
+                }
+            }
             if event.playSound && eventManager.shouldPlaySound(for: event) {
                 playSound(for: event)
             }
@@ -372,7 +404,7 @@ struct NotchStatusView: View {
     private func handleAgentsChange() {
         AppDelegate.showAtNotch()
         DispatchQueue.main.async {
-            AppDelegate.resizeIsland(to: neededWindowHeight)
+            AppDelegate.resizeIsland(size: neededWindowSize)
         }
     }
 
@@ -402,9 +434,27 @@ struct NotchStatusView: View {
     private func playSound(for event: AgentEvent) {
         let config = NotchHUDConfig.shared
         guard config.enableAgentAlerts else { return }
+        guard !(config.muteInTerminal && isTerminalFocused()) else { return }
         guard let sound = NSSound(named: event.kind.soundName) else { return }
         sound.volume = config.soundVolume
         sound.play()
+    }
+
+    private func isTerminalFocused() -> Bool {
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else {
+            return false
+        }
+        let terminals: Set<String> = [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "io.alacritty",
+            "org.wezfurlong.wezterm",
+            "com.ghostty.app",
+            "dev.warp.Warp-Stable",
+            "com.microsoft.VSCode",
+            "com.microsoft.VSCodeInsiders",
+        ]
+        return terminals.contains(bundleID)
     }
 }
 
