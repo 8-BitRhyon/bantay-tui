@@ -26,6 +26,9 @@ final class NotchHUDConfig {
     var soundCooldown: TimeInterval = 5.0 {
         didSet { defaults.set(soundCooldown, forKey: "soundCooldown") }
     }
+    var muteInTerminal: Bool = true {
+        didSet { defaults.set(muteInTerminal, forKey: "muteInTerminal") }
+    }
 
     private let defaults = UserDefaults.standard
 
@@ -50,6 +53,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "soundCooldown") as? NSNumber {
             soundCooldown = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "muteInTerminal") as? NSNumber {
+            muteInTerminal = v.boolValue
         }
     }
 }
