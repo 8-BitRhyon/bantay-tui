@@ -18,20 +18,30 @@ final class KeyablePanel: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var window: NSWindow?
-    @MainActor private static let expandedIslandSize = NSSize(width: 456, height: 240)
-    @MainActor static var islandWidth: CGFloat = 211
-    @MainActor static var islandHeight: CGFloat = 74
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
 
     @MainActor
     static var notchWidth: CGFloat {
-        guard let screen = window?.screen ?? NSScreen.main else { return 211 }
+        guard let screen = window?.screen ?? NSScreen.main else {
+            return IslandMetrics.notchlessFallbackWidth
+        }
         let left = screen.auxiliaryTopLeftArea?.width ?? 0
         let right = screen.auxiliaryTopRightArea?.width ?? 0
-        guard screen.safeAreaInsets.top > 0, left > 0, right > 0 else { return 211 }
-        let width = screen.frame.width - left - right + 2
-        return width > 100 ? width : 211
+        return IslandMetrics.notchWidth(
+            screenWidth: screen.frame.width,
+            auxLeft: left, auxRight: right,
+            safeTop: screen.safeAreaInsets.top)
+    }
+
+    @MainActor
+    static var topInset: CGFloat {
+        guard let screen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first else {
+            return 0
+        }
+        let safe = screen.safeAreaInsets.top
+        let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
+        return IslandMetrics.topInset(safeTop: safe, menuBarHeight: menuBar)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -43,9 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor
     private func makeIslandWindow() {
-        Self.islandWidth = Self.notchWidth + 16
-        Self.islandHeight = Self.topInset + 36
-        let size = Self.islandSize()
+        let size = IslandMetrics.windowSize()
         let window = KeyablePanel(
             contentRect: Self.islandFrame(on: NSScreen.main, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -70,30 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.orderFrontRegardless()
 
         Self.window = window
-
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: window,
-            queue: .main
-        ) { _ in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    AppDelegate.reposition()
-                }
-            }
-        }
-    }
-
-    @MainActor
-    static var topInset: CGFloat {
-        guard let screen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first else {
-            return 0
-        }
-        let safe = screen.safeAreaInsets.top
-        if safe > 0 {
-            return safe
-        }
-        return screen.frame.maxY - screen.visibleFrame.maxY
     }
 
     @MainActor
@@ -101,30 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let screen = screen ?? NSScreen.main ?? NSScreen.screens.first else {
             return NSRect(origin: .zero, size: size)
         }
-        let positioning = screen.frame
-        let frame = NSRect(
-            x: positioning.midX - size.width / 2,
-            y: positioning.maxY - size.height,
-            width: size.width,
-            height: size.height)
-        return alignedToBackingPixelGrid(frame, scale: screen.backingScaleFactor)
-    }
-
-    private static func alignedToBackingPixel(_ value: CGFloat, scale: CGFloat) -> CGFloat {
-        let scale = max(scale, 1)
-        return (value * scale).rounded() / scale
-    }
-
-    private static func alignedToBackingPixelGrid(_ frame: NSRect, scale: CGFloat) -> NSRect {
-        let minX = alignedToBackingPixel(frame.minX, scale: scale)
-        let maxX = alignedToBackingPixel(frame.maxX, scale: scale)
-        let minY = alignedToBackingPixel(frame.minY, scale: scale)
-        let maxY = alignedToBackingPixel(frame.maxY, scale: scale)
-        return NSRect(
-            x: minX,
-            y: minY,
-            width: maxX - minX,
-            height: maxY - minY)
+        return IslandMetrics.windowFrame(
+            screenFrame: screen.frame, size: size, scale: screen.backingScaleFactor)
     }
 
     private func observeScreenChanges() {
@@ -133,35 +95,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated {
-                AppDelegate.reposition()
-            }
+            MainActor.assumeIsolated { AppDelegate.reposition() }
         }
-    }
-
-    @MainActor
-    static func islandSize() -> NSSize {
-        NSSize(width: islandWidth, height: islandHeight)
-    }
-
-    @MainActor
-    static func resizeIsland(size: NSSize) {
-        islandWidth = size.width
-        islandHeight = size.height
-        reposition()
     }
 
     @MainActor
     static func showAtNotch() {
         guard let window else { return }
-        window.setFrame(islandFrame(on: NSScreen.main, size: islandSize()), display: true)
+        reposition()
         window.orderFrontRegardless()
     }
 
     @MainActor
     static func reposition() {
         guard let window else { return }
-        window.setFrame(islandFrame(on: NSScreen.main, size: islandSize()), display: true)
+        window.setFrame(
+            islandFrame(on: window.screen ?? NSScreen.main, size: IslandMetrics.windowSize()),
+            display: true)
     }
 
     @MainActor

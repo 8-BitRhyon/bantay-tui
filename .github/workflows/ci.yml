@@ -55,6 +55,7 @@ jobs:
             Sources/BantayTUI/AgentEventKind.swift \
             Sources/BantayTUI/NotchHUDConfig.swift \
             Sources/BantayTUI/HerdrSocketAdapter.swift \
+            Sources/BantayTUI/IslandMetrics.swift \
             Sources/BantayTUI/AgentEventManager.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check
