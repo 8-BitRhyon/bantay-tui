@@ -211,6 +211,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let pollingItem = NSMenuItem(
+            title: "Poll agents",
+            action: #selector(togglePolling(_:)),
+            keyEquivalent: "")
+        pollingItem.target = self
+        pollingItem.state = NotchHUDConfig.shared.captureEnabled ? .on : .off
+        menu.addItem(pollingItem)
+
+        let alertsItem = NSMenuItem(
+            title: "Alert sounds",
+            action: #selector(toggleAlerts(_:)),
+            keyEquivalent: "")
+        alertsItem.target = self
+        alertsItem.state = NotchHUDConfig.shared.enableAgentAlerts ? .on : .off
+        menu.addItem(alertsItem)
+
+        menu.addItem(.separator())
+
         #if DEBUG
             let testItem = NSMenuItem(
                 title: "Test Alert",
@@ -240,6 +258,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func focusAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
         HerdrSocketAdapter().paneFocus(paneId: paneId)
+    }
+
+    @MainActor
+    @objc private func togglePolling(_ sender: NSMenuItem) {
+        let config = NotchHUDConfig.shared
+        config.captureEnabled.toggle()
+        if config.captureEnabled {
+            AgentEventManager.shared.startCapture()
+        } else {
+            AgentEventManager.shared.stopCapture()
+        }
+        sender.state = config.captureEnabled ? .on : .off
+    }
+
+    @MainActor
+    @objc private func toggleAlerts(_ sender: NSMenuItem) {
+        let config = NotchHUDConfig.shared
+        config.enableAgentAlerts.toggle()
+        sender.state = config.enableAgentAlerts ? .on : .off
     }
 
     @MainActor

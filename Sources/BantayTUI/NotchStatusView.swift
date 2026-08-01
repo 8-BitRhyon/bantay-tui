@@ -58,12 +58,14 @@ struct NotchStatusView: View {
         .animation(morphAnimation, value: eventManager.agents.count)
         .onAppear(perform: handleAppear)
         .onHover { hovering in
+            eventManager.setActive(hovering)
             handleHover(hovering)
         }
         .onChange(of: isExpanded) {
             if !isExpanded {
                 cancelComposing()
             }
+            eventManager.setActive(isExpanded)
             DispatchQueue.main.async {
                 AppDelegate.resizeIsland(size: neededWindowSize)
             }
@@ -393,6 +395,7 @@ struct NotchStatusView: View {
     }
 
     private func handleEventChange() {
+        eventManager.setActive(eventManager.currentEvent != nil)
         if let event = eventManager.currentEvent {
             AppDelegate.showAtNotch()
             if !reduceMotion {
