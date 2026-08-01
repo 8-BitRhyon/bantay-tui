@@ -15,6 +15,7 @@ struct DynamicIslandApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var window: NSWindow?
     @MainActor private static let islandWindowSize = NSSize(width: 456, height: 240)
+    @MainActor static var islandHeight: CGFloat = 240
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
 
@@ -120,16 +121,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @MainActor
+    static func islandSize() -> NSSize {
+        NSSize(width: islandWindowSize.width, height: min(max(islandHeight, 240), 560))
+    }
+
+    @MainActor
+    static func resizeIsland(to height: CGFloat) {
+        islandHeight = height
+        reposition()
+    }
+
+    @MainActor
     static func showAtNotch() {
         guard let window else { return }
-        window.setFrame(islandFrame(on: NSScreen.main, size: islandWindowSize), display: true)
+        window.setFrame(islandFrame(on: NSScreen.main, size: islandSize()), display: true)
         window.orderFrontRegardless()
     }
 
     @MainActor
     static func reposition() {
         guard let window else { return }
-        window.setFrame(islandFrame(on: NSScreen.main, size: islandWindowSize), display: true)
+        window.setFrame(islandFrame(on: NSScreen.main, size: islandSize()), display: true)
     }
 
     @MainActor

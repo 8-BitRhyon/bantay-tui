@@ -336,4 +336,22 @@ final class AgentEventManagerTests: XCTestCase {
         XCTAssertEqual(result.events.map(\.kind), [.progress])
         XCTAssertEqual(result.events.first?.playSound, false)
     }
+
+    func testSoundCooldownSuppressesRapidRepeatsPerSourceAndKind() throws {
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
+        defer { manager.stop() }
+        let first = AgentEvent(
+            source: "kilo", kind: .progress, title: "t", message: nil,
+            paneId: nil, workspaceId: nil, playSound: true, persistent: true)
+        let sameAgain = AgentEvent(
+            source: "kilo", kind: .progress, title: "t2", message: nil,
+            paneId: nil, workspaceId: nil, playSound: true, persistent: true)
+        let otherSource = AgentEvent(
+            source: "freebuff", kind: .progress, title: "t", message: nil,
+            paneId: nil, workspaceId: nil, playSound: true, persistent: true)
+
+        XCTAssertTrue(manager.shouldPlaySound(for: first))
+        XCTAssertFalse(manager.shouldPlaySound(for: sameAgain))
+        XCTAssertTrue(manager.shouldPlaySound(for: otherSource))
+    }
 }

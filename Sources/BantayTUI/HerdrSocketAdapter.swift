@@ -26,7 +26,17 @@ final class HerdrSocketAdapter: Sendable {
         guard let url = herdrExecutableURL() else { return }
         let process = Process()
         process.executableURL = url
-        process.arguments = ["pane", "focus", paneId]
+        process.arguments = ["agent", "focus", paneId]
+        try? process.run()
+    }
+
+    func agentPrompt(paneId: String, text: String) {
+        guard let url = herdrExecutableURL() else { return }
+        let process = Process()
+        process.executableURL = url
+        process.arguments = ["agent", "prompt", paneId, text]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         try? process.run()
     }
 

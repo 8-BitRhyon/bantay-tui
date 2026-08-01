@@ -36,6 +36,7 @@ final class AgentEventManager: ObservableObject {
     private var readOffset: UInt64
     private var lineBuffer = ""
     private var lastSeenKinds: [String: AgentEventKind] = [:]
+    private var lastSoundAt: [String: Date] = [:]
     private let eventsFileURL: URL
     private let captureEnabled: Bool
     private let herdrAdapter = HerdrSocketAdapter()
@@ -77,6 +78,18 @@ final class AgentEventManager: ObservableObject {
         captureTask = nil
         clearTask?.cancel()
         clearTask = nil
+    }
+
+    func shouldPlaySound(for event: AgentEvent) -> Bool {
+        let key = "\(event.source):\(event.kind)"
+        let now = Date()
+        if let last = lastSoundAt[key],
+            now.timeIntervalSince(last) < NotchHUDConfig.shared.soundCooldown
+        {
+            return false
+        }
+        lastSoundAt[key] = now
+        return true
     }
 
     #if DEBUG

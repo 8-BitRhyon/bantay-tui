@@ -41,7 +41,7 @@ cat > "$AGENTS_PLIST" <<PLIST
     <key>StandardErrorPath</key>
     <string>$DATA_DIR/bantay.err</string>
 </dict>
-</PLIST>
+</plist>
 PLIST
 
 launchctl bootout gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || true
