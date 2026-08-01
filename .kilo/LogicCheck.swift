@@ -193,6 +193,18 @@ struct LogicCheckMain {
             workspaceId: nil, playSound: true, persistent: true)
         check(manager.shouldPlaySound(for: eventC), "different source not suppressed")
 
+        var seenWorst: [String: AgentEventKind] = [:]
+        let simultaneous = AgentEventManager.update(
+            from: [
+                agent("kilo", "blocked", pane: "w3:p3"),
+                agent("freebuff", "done", pane: "w3:p4"),
+            ],
+            lastSeenKinds: &seenWorst,
+            current: nil)
+        expectKinds(
+            simultaneous.events, [.completed, .accessRequest],
+            "worst state sorted last wins the pill")
+
         manager.stop()
         try? FileManager.default.removeItem(atPath: tmp)
 

@@ -61,6 +61,7 @@ final class AgentEventManager: ObservableObject {
 
     func start() {
         watchTask?.cancel()
+        guard captureEnabled else { return }
         watchTask = Task { [weak self] in
             while !Task.isCancelled {
                 await MainActor.run {
@@ -298,6 +299,8 @@ extension AgentEventManager {
                     persistent: false
                 ))
         }
+
+        events.sort { severity(of: $0.kind) < severity(of: $1.kind) }
 
         var effective = current
         for event in events {

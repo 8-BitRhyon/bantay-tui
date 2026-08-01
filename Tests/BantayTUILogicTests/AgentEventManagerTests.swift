@@ -337,6 +337,20 @@ final class AgentEventManagerTests: XCTestCase {
         XCTAssertEqual(result.events.first?.playSound, false)
     }
 
+    func testWorstStateWinsWhenMultipleAgentsChange() {
+        var seen: [String: AgentEventKind] = [:]
+        let result = AgentEventManager.update(
+            from: [
+                agent("kilo", "blocked", pane: "w3:p3"),
+                agent("freebuff", "done", pane: "w3:p4"),
+            ],
+            lastSeenKinds: &seen,
+            current: nil)
+
+        XCTAssertEqual(result.events.map(\.kind), [.completed, .accessRequest])
+        XCTAssertEqual(result.events.last?.kind, .accessRequest)
+    }
+
     func testSoundCooldownSuppressesRapidRepeatsPerSourceAndKind() throws {
         let manager = AgentEventManager(eventsFileURL: file, capture: false)
         defer { manager.stop() }

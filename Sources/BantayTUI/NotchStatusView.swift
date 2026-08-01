@@ -12,6 +12,7 @@ struct NotchStatusView: View {
     @State private var promptText = ""
     @State private var pulse = false
     @FocusState private var promptFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let adapter = HerdrSocketAdapter()
 
     private let pillHeight: CGFloat = 36
@@ -37,10 +38,8 @@ struct NotchStatusView: View {
         NSSize(width: islandWidth + islandCornerRadius * 2, height: neededWindowHeight)
     }
     private var islandCornerRadius: CGFloat { isExpanded ? 24 : 8 }
-    private var morphAnimation: Animation { .smooth(duration: 0.42, extraBounce: 0) }
-
-    private var isIdle: Bool {
-        eventManager.currentEvent == nil && !eventManager.agents.isEmpty
+    private var morphAnimation: Animation {
+        reduceMotion ? .linear(duration: 0.1) : .smooth(duration: 0.42, extraBounce: 0)
     }
 
     var body: some View {
@@ -50,8 +49,8 @@ struct NotchStatusView: View {
             content
                 .frame(width: islandWidth, height: contentHeight, alignment: .top)
                 .offset(y: topInset)
-                .scaleEffect(pulse ? 1.03 : 1)
         }
+        .scaleEffect(pulse ? 1.03 : 1, anchor: .top)
         .frame(width: islandWidth + islandCornerRadius * 2, height: islandHeight, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(opacity)
@@ -92,7 +91,6 @@ struct NotchStatusView: View {
                     )
                     .frame(width: islandWidth, height: islandHeight)
             }
-            .shadow(color: .black.opacity(0.12), radius: 12)
     }
 
     private var islandMask: some View {
@@ -263,6 +261,14 @@ struct NotchStatusView: View {
                 .fill(.white.opacity(0.06))
                 .frame(height: 1)
 
+            if eventManager.agents.isEmpty {
+                Text("No active agents")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.4))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: rowHeight)
+            }
+
             ForEach(eventManager.agents) { agent in
                 let composing = composingPaneId == agent.paneId
                 HStack(spacing: 8) {
@@ -387,12 +393,14 @@ struct NotchStatusView: View {
     private func handleEventChange() {
         if let event = eventManager.currentEvent {
             AppDelegate.showAtNotch()
-            withAnimation(.easeInOut(duration: 0.15)) {
-                pulse = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    pulse = false
+            if !reduceMotion {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    pulse = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        pulse = false
+                    }
                 }
             }
             if event.playSound && eventManager.shouldPlaySound(for: event) {
@@ -403,6 +411,11 @@ struct NotchStatusView: View {
 
     private func handleAgentsChange() {
         AppDelegate.showAtNotch()
+        if let composingPaneId,
+            !eventManager.agents.contains(where: { $0.paneId == composingPaneId })
+        {
+            cancelComposing()
+        }
         DispatchQueue.main.async {
             AppDelegate.resizeIsland(size: neededWindowSize)
         }
