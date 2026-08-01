@@ -33,6 +33,9 @@ final class AgentEventManager: ObservableObject {
     @Published private(set) var agents: [AgentSnapshot] = []
     private var watchTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
+    private var waitProcesses: [String: Process] = [:]
+    private var waitContinuation: CheckedContinuation<Void, Never>?
+    private var waitSignalCount = 0
     private var clearTask: Task<Void, Never>?
     private var fileSource: DispatchSourceFileSystemObject?
     private var sleepObserver: NSObjectProtocol?
@@ -369,6 +372,10 @@ extension AgentEventManager {
 extension AgentEventManager {
     func startCapture() {
         captureTask?.cancel()
+        for process in waitProcesses.values {
+            process.terminate()
+        }
+        waitProcesses.removeAll()
         guard captureEnabled, NotchHUDConfig.shared.captureEnabled else { return }
         captureTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -376,13 +383,13 @@ extension AgentEventManager {
                     try? await Task.sleep(for: .milliseconds(500))
                     continue
                 }
-                await self.pollHerdrAgents()
-                self.ensureFileWatcher()
-                let interval =
-                    self.isActive
-                    ? NotchHUDConfig.shared.captureInterval
-                    : NotchHUDConfig.shared.idlePollInterval
-                try? await Task.sleep(for: .milliseconds(Int64(interval * 1000)))
+                await self.refreshRosterAndArmWaits()
+                if self.waitProcesses.isEmpty {
+                    try? await Task.sleep(
+                        for: .milliseconds(Int64(NotchHUDConfig.shared.idlePollInterval * 1000)))
+                } else {
+                    await self.awaitWaitExit()
+                }
             }
         }
     }
@@ -390,6 +397,67 @@ extension AgentEventManager {
     func stopCapture() {
         captureTask?.cancel()
         captureTask = nil
+        for process in waitProcesses.values {
+            process.terminate()
+        }
+        waitProcesses.removeAll()
+        signalWaitExit()
+    }
+
+    private func refreshRosterAndArmWaits() async {
+        ensureFileWatcher()
+        let agents = await herdrAdapter.listAgents()
+        let result = Self.update(
+            from: agents,
+            lastSeenKinds: &lastSeenKinds,
+            current: currentEvent)
+        self.agents = result.roster
+        for event in result.events {
+            showEvent(event)
+        }
+
+        let livePanes = Set(agents.compactMap(\.paneId))
+        let stale = waitProcesses.keys.filter { !livePanes.contains($0) }
+        for pane in stale {
+            waitProcesses[pane]?.terminate()
+            waitProcesses.removeValue(forKey: pane)
+        }
+
+        for agent in agents {
+            guard let pane = agent.paneId, waitProcesses[pane] == nil else { continue }
+            var statuses = Set(["idle", "working", "blocked", "done", "unknown"])
+            if let status = agent.agentStatus {
+                statuses.remove(status)
+            }
+            guard let process = herdrAdapter.spawnAgentWait(paneId: pane, statuses: Array(statuses))
+            else { continue }
+            waitProcesses[pane] = process
+            process.terminationHandler = { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.waitProcesses.removeValue(forKey: pane)
+                    self?.signalWaitExit()
+                }
+            }
+        }
+    }
+
+    private func awaitWaitExit() async {
+        let base = waitSignalCount
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if waitSignalCount != base {
+                continuation.resume()
+            } else {
+                waitContinuation = continuation
+            }
+        }
+    }
+
+    private func signalWaitExit() {
+        waitSignalCount += 1
+        if let continuation = waitContinuation {
+            waitContinuation = nil
+            continuation.resume()
+        }
     }
 
     private func startFileWatcher() {

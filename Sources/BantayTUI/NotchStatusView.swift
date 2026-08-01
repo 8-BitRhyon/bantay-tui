@@ -34,10 +34,21 @@ struct NotchStatusView: View {
     private var neededWindowHeight: CGFloat {
         min(islandHeight, 560)
     }
-    private var neededWindowSize: NSSize {
-        NSSize(width: islandWidth + islandCornerRadius * 2, height: neededWindowHeight)
+    private var neededWindowSize: NSSize { windowSize(expanded: isExpanded) }
+
+    private func cornerRadius(expanded: Bool) -> CGFloat {
+        expanded ? 24 : 8
     }
-    private var islandCornerRadius: CGFloat { isExpanded ? 24 : 8 }
+
+    private func windowSize(expanded: Bool) -> NSSize {
+        let width = expanded ? expandedWidth : AppDelegate.notchWidth
+        let height =
+            expanded
+            ? min(topInset + 40 + CGFloat(eventManager.agents.count) * rowHeight + 10, 560)
+            : topInset + pillHeight
+        return NSSize(width: width + cornerRadius(expanded: expanded) * 2, height: height)
+    }
+    private var islandCornerRadius: CGFloat { cornerRadius(expanded: isExpanded) }
     private var morphAnimation: Animation {
         reduceMotion ? .linear(duration: 0.1) : .smooth(duration: 0.42, extraBounce: 0)
     }
@@ -52,11 +63,6 @@ struct NotchStatusView: View {
         }
         .scaleEffect(pulse ? 1.03 : 1, anchor: .top)
         .frame(width: islandWidth + islandCornerRadius * 2, height: islandHeight, alignment: .top)
-        .onGeometryChange(for: CGSize.self) { proxy in
-            proxy.size
-        } action: { size in
-            AppDelegate.resizeIsland(size: size)
-        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
@@ -173,9 +179,7 @@ struct NotchStatusView: View {
                     title: nil,
                     dots: eventManager.agents.map(\.kind),
                     action: {
-                        withAnimation(morphAnimation) {
-                            isExpanded = true
-                        }
+                        expandTo(true)
                     })
             }
         } else if isExpanded {
@@ -385,14 +389,19 @@ struct NotchStatusView: View {
         }
     }
 
+    private func expandTo(_ expanded: Bool) {
+        AppDelegate.resizeIsland(size: windowSize(expanded: expanded))
+        withAnimation(morphAnimation) {
+            isExpanded = expanded
+        }
+    }
+
     private func handleHover(_ hovering: Bool) {
         hoverTask?.cancel()
         hoverTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(hovering ? 120 : 150))
+            try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
-            withAnimation(morphAnimation) {
-                isExpanded = hovering && !eventManager.agents.isEmpty
-            }
+            expandTo(hovering && !eventManager.agents.isEmpty)
         }
     }
 

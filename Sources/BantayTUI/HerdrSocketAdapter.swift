@@ -49,6 +49,26 @@ final class HerdrSocketAdapter: Sendable {
         _ = runHerdr(["agent", "prompt", paneId, text], timeout: 1.0)
     }
 
+    func spawnAgentWait(paneId: String, statuses: [String]) -> Process? {
+        guard let url = herdrExecutableURL() else { return nil }
+        var arguments = ["agent", "wait", paneId]
+        for status in statuses {
+            arguments += ["--until", status]
+        }
+        arguments += ["--timeout", "1800000"]
+        let process = Process()
+        process.executableURL = url
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return process
+        } catch {
+            return nil
+        }
+    }
+
     func listPanes() -> [PaneInfo] {
         let output = runHerdr(["pane", "list", "--format", "json"])
         guard !output.isEmpty else { return [] }
