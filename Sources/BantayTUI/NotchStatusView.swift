@@ -19,14 +19,15 @@ struct NotchStatusView: View {
 
     private var islandWidth: CGFloat { isExpanded ? expandedWidth : 160 }
     private var islandHeight: CGFloat {
-        if isExpanded {
-            let content = 40 + CGFloat(eventManager.agents.count) * rowHeight + 10
-            return min(topInset + content, 240)
-        }
-        return topInset + pillHeight
+        isExpanded
+            ? topInset + 40 + CGFloat(eventManager.agents.count) * rowHeight + 10
+            : topInset + pillHeight
     }
     private var contentHeight: CGFloat {
         isExpanded ? islandHeight - topInset : pillHeight
+    }
+    private var neededWindowHeight: CGFloat {
+        min(islandHeight, 560)
     }
     private var islandCornerRadius: CGFloat { isExpanded ? 24 : 8 }
     private var morphAnimation: Animation { .smooth(duration: 0.42, extraBounce: 0) }
@@ -51,6 +52,11 @@ struct NotchStatusView: View {
         .onAppear(perform: handleAppear)
         .onHover { hovering in
             handleHover(hovering)
+        }
+        .onChange(of: isExpanded) {
+            DispatchQueue.main.async {
+                AppDelegate.resizeIsland(to: neededWindowHeight)
+            }
         }
         .onChange(of: eventManager.currentEvent) {
             handleEventChange()
@@ -276,6 +282,9 @@ struct NotchStatusView: View {
     // MARK: - Behavior
 
     private func handleAppear() {
+        DispatchQueue.main.async {
+            AppDelegate.resizeIsland(to: neededWindowHeight)
+        }
         withAnimation(.easeInOut(duration: 0.25)) {
             opacity = 1
         }
@@ -302,7 +311,7 @@ struct NotchStatusView: View {
     private func handleEventChange() {
         if let event = eventManager.currentEvent {
             AppDelegate.showAtNotch()
-            if event.playSound {
+            if event.playSound && eventManager.shouldPlaySound(for: event) {
                 playSound(for: event)
             }
         }
@@ -310,6 +319,9 @@ struct NotchStatusView: View {
 
     private func handleAgentsChange() {
         AppDelegate.showAtNotch()
+        DispatchQueue.main.async {
+            AppDelegate.resizeIsland(to: neededWindowHeight)
+        }
     }
 
     private func playSound(for event: AgentEvent) {
