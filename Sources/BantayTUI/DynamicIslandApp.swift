@@ -12,6 +12,10 @@ struct DynamicIslandApp: App {
     }
 }
 
+final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var window: NSWindow?
     @MainActor private static let islandWindowSize = NSSize(width: 456, height: 240)
@@ -29,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     private func makeIslandWindow() {
         let size = Self.islandWindowSize
-        let window = NSPanel(
+        let window = KeyablePanel(
             contentRect: Self.islandFrame(on: NSScreen.main, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
