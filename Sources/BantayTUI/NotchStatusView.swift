@@ -8,6 +8,9 @@ struct NotchStatusView: View {
     @State private var opacity: Double = 0
     @State private var showDetail = false
     @State private var hoveredRow: String?
+    @State private var composingPaneId: String?
+    @State private var promptText = ""
+    @FocusState private var promptFocused: Bool
     private let adapter = HerdrSocketAdapter()
 
     private let pillHeight: CGFloat = 36
@@ -54,6 +57,9 @@ struct NotchStatusView: View {
             handleHover(hovering)
         }
         .onChange(of: isExpanded) {
+            if !isExpanded {
+                cancelComposing()
+            }
             DispatchQueue.main.async {
                 AppDelegate.resizeIsland(to: neededWindowHeight)
             }
@@ -234,43 +240,89 @@ struct NotchStatusView: View {
                 .frame(height: 1)
 
             ForEach(eventManager.agents) { agent in
-                Button(action: {
-                    if let paneId = agent.paneId {
-                        adapter.paneFocus(paneId: paneId)
-                    }
-                }) {
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(Color(hex: agent.kind.color))
-                            .frame(width: 6, height: 6)
+                let composing = composingPaneId == agent.paneId
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color(hex: agent.kind.color))
+                        .frame(width: 6, height: 6)
 
-                        Text(agent.source)
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    if composing {
+                        TextField("Ask agent…", text: $promptText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundColor(.white)
-                            .lineLimit(1)
+                            .focused($promptFocused)
+                            .onSubmit { submitPrompt() }
+                            .onKeyPress(.escape) {
+                                cancelComposing()
+                                return .handled
+                            }
+                            .padding(.horizontal, 6)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 20)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(.white.opacity(0.08))
+                            )
 
-                        Text(agent.kind.label)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
+                        Button(action: submitPrompt) {
+                            Image(systemName: "paperplane.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Send prompt (Return)")
 
-                        Spacer(minLength: 8)
+                        Button(action: cancelComposing) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Cancel (Esc)")
+                    } else {
+                        Button(action: { beginComposing(agent) }) {
+                            HStack(spacing: 8) {
+                                Text(agent.source)
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
 
-                        if let title = agent.title {
-                            Text(title)
-                                .font(.system(size: 9, weight: .regular))
-                                .foregroundColor(.white.opacity(0.45))
-                                .lineLimit(1)
+                                Text(agent.kind.label)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+
+                                Spacer(minLength: 8)
+
+                                if let title = agent.title {
+                                    Text(title)
+                                        .font(.system(size: 9, weight: .regular))
+                                        .foregroundColor(.white.opacity(0.45))
+                                        .lineLimit(1)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if let paneId = agent.paneId {
+                            Button(action: { adapter.paneFocus(paneId: paneId) }) {
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.white.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Focus pane")
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .frame(height: rowHeight)
-                    .background(
-                        hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear
-                    )
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .frame(height: rowHeight)
+                .background(
+                    hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear
+                )
+                .contentShape(Rectangle())
                 .onHover { hovering in
                     hoveredRow = hovering ? agent.id : nil
                 }
@@ -322,6 +374,29 @@ struct NotchStatusView: View {
         DispatchQueue.main.async {
             AppDelegate.resizeIsland(to: neededWindowHeight)
         }
+    }
+
+    private func beginComposing(_ agent: AgentSnapshot) {
+        guard agent.paneId != nil else { return }
+        composingPaneId = agent.paneId
+        promptText = ""
+        DispatchQueue.main.async {
+            promptFocused = true
+        }
+    }
+
+    private func submitPrompt() {
+        let text = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let paneId = composingPaneId, !text.isEmpty {
+            adapter.agentPrompt(paneId: paneId, text: text)
+        }
+        cancelComposing()
+    }
+
+    private func cancelComposing() {
+        composingPaneId = nil
+        promptText = ""
+        promptFocused = false
     }
 
     private func playSound(for event: AgentEvent) {
