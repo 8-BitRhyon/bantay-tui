@@ -22,36 +22,35 @@ final class HerdrSocketAdapter: Sendable {
         return FileManager.default.isExecutableFile(atPath: fallback.path) ? fallback : nil
     }
 
-    func paneFocus(paneId: String) {
-        guard let url = herdrExecutableURL() else { return }
+    private func runHerdr(_ arguments: [String], timeout: TimeInterval = 3.0) -> String {
+        guard let url = herdrExecutableURL() else { return "" }
         let process = Process()
         process.executableURL = url
-        process.arguments = ["agent", "focus", paneId]
-        try? process.run()
-    }
-
-    func agentPrompt(paneId: String, text: String) {
-        guard let url = herdrExecutableURL() else { return }
-        let process = Process()
-        process.executableURL = url
-        process.arguments = ["agent", "prompt", paneId, text]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-    }
-
-    func listPanes() async throws -> [PaneInfo] {
-        guard let url = herdrExecutableURL() else { return [] }
-        let process = Process()
-        process.executableURL = url
-        process.arguments = ["pane", "list", "--format", "json"]
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        try process.run()
+        try? process.run()
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            if process.isRunning {
+                process.terminate()
+            }
+        }
         process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    func paneFocus(paneId: String) {
+        _ = runHerdr(["agent", "focus", paneId], timeout: 1.0)
+    }
+
+    func agentPrompt(paneId: String, text: String) {
+        _ = runHerdr(["agent", "prompt", paneId, text], timeout: 1.0)
+    }
+
+    func listPanes() -> [PaneInfo] {
+        let output = runHerdr(["pane", "list", "--format", "json"])
         guard !output.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
@@ -64,17 +63,7 @@ final class HerdrSocketAdapter: Sendable {
     }
 
     nonisolated func listAgents() async -> [HerdrAgentInfo] {
-        guard let url = herdrExecutableURL() else { return [] }
-        let process = Process()
-        process.executableURL = url
-        process.arguments = ["agent", "list"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
+        let output = runHerdr(["agent", "list"])
         guard !output.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
