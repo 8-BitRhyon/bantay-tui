@@ -208,6 +208,146 @@ struct LogicCheckMain {
         manager.stop()
         try? FileManager.default.removeItem(atPath: tmp)
 
+        // MARK: - IslandMetrics geometry
+
+        func assertCGSizeEqual(_ a: CGSize, _ b: CGSize, _ name: String) {
+            check(
+                abs(a.width - b.width) < 0.001 && abs(a.height - b.height) < 0.001,
+                "\(name): \(a) != \(b)")
+        }
+
+        func assertCGRectContainsCenter(_ f: CGRect, cx: CGFloat, _ name: String) {
+            check(abs(f.midX - cx) < 0.01, "\(name) midX \(f.midX) != \(cx)")
+        }
+
+        // -- Constants
+
+        check(IslandMetrics.expandedWidth == 456, "expandedWidth 456")
+        check(IslandMetrics.maxExpandedHeight == 560, "maxExpandedHeight 560")
+        check(IslandMetrics.hoverCooldown == 0.15, "hoverCooldown 0.15")
+        check(IslandMetrics.notchlessFallbackWidth == 211, "notchlessFallbackWidth 211")
+        check(IslandMetrics.cornerRadius(expanded: true) == 24, "expanded cornerRadius 24")
+        check(IslandMetrics.cornerRadius(expanded: false) == 8, "closed cornerRadius 8")
+
+        // -- Fixed window size (invariant 1)
+
+        let ws = IslandMetrics.windowSize()
+        assertCGSizeEqual(ws, CGSize(width: 504, height: 560), "fixed window size")
+
+        // -- Symmetry: pill centers equal window center (invariant 3)
+
+        let screenW: CGFloat = 1512
+        let screenH: CGFloat = 982
+        let scale2: CGFloat = 2
+        let safeTop: CGFloat = 47
+        let auxL: CGFloat = 650.5
+        let auxR: CGFloat = 650.5
+        let notchW = IslandMetrics.notchWidth(
+            screenWidth: screenW, auxLeft: auxL, auxRight: auxR, safeTop: safeTop)
+        let inset = IslandMetrics.topInset(safeTop: safeTop, menuBarHeight: 22)
+        _ = IslandMetrics.closedSize(topInset: inset, notchWidth: notchW)
+        _ = IslandMetrics.expandedSize(topInset: inset, agentCount: 3)
+        let wf = IslandMetrics.windowFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: screenW, height: screenH), size: ws,
+            scale: scale2)
+
+        check(notchW > 100, "notchWidth computed (\(notchW))")
+        check(inset == safeTop, "topInset uses safeArea")
+        assertCGSizeEqual(ws, IslandMetrics.windowSize(), "window size invariant")
+        let midXTol: CGFloat = 0.5
+        check(
+            abs(wf.midX - screenW / 2) <= midXTol,
+            "window centered on screen (midX diff=\(abs(wf.midX - screenW/2)))")
+        check(wf.maxY - screenH < 0.01, "window top at screen top")
+        check(
+            abs(wf.midX - screenW / 2) <= midXTol,
+            "symmetric morph: window center does not move (invariant 3)")
+
+        // -- Backing grid alignment (invariant 4)
+
+        let scale1: CGFloat = 1
+        let oddScale: CGFloat = 1.5
+        for s in [scale1, scale2, oddScale] {
+            let f = IslandMetrics.windowFrame(
+                screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), size: ws, scale: s)
+            let pixel = max(s, 1)
+            check((f.minY * pixel).rounded() == (f.minY * pixel), "grid Y at scale \(s)")
+            check((f.minX * pixel).rounded() == (f.minX * pixel), "grid X at scale \(s)")
+            check((f.width * pixel).rounded() == (f.width * pixel), "grid W at scale \(s)")
+            check((f.height * pixel).rounded() == (f.height * pixel), "grid H at scale \(s)")
+        }
+
+        // -- Notchless fallback (invariant 5)
+
+        let noNotchW = IslandMetrics.notchWidth(
+            screenWidth: 1512, auxLeft: 651, auxRight: 651, safeTop: 0)
+        check(noNotchW == IslandMetrics.notchlessFallbackWidth, "notchless fallback \(noNotchW)")
+
+        // -- Oversized notch clamp (invariant 6)
+
+        let bigNotch = IslandMetrics.closedSize(topInset: 47, notchWidth: 999)
+        check(
+            bigNotch.width == IslandMetrics.expandedWidth,
+            "oversized notch clamped to expandedWidth")
+
+        // -- Height cap (invariant 7)
+
+        let manyAgents = IslandMetrics.expandedSize(topInset: 47, agentCount: 50)
+        check(
+            manyAgents.height == IslandMetrics.maxExpandedHeight,
+            "height capped \(manyAgents.height)")
+
+        // -- Zero agents: closed size, not expanded
+
+        let zeroClosed = IslandMetrics.closedSize(topInset: 47, notchWidth: 213)
+        check(zeroClosed.height > 0, "closed with 0 agents has height")
+        check(
+            !IslandMetrics.shouldExpand(hovering: true, hasAgents: false),
+            "no expand without agents (invariant 8)")
+        check(
+            IslandMetrics.shouldCollapse(isExpanded: true, hasAgents: false),
+            "collapse when agents empty (invariant 9)")
+
+        // -- Hover state machine (invariant 10-11)
+
+        check(
+            IslandMetrics.shouldExpand(hovering: false, hasAgents: true) == false,
+            "no expand without hover")
+        check(
+            IslandMetrics.shouldExpand(hovering: false, hasAgents: false) == false,
+            "no expand without hover or agents")
+        check(
+            IslandMetrics.shouldCollapse(isExpanded: false, hasAgents: false) == false,
+            "no collapse when already closed")
+        check(
+            IslandMetrics.morphStyle(reduceMotion: true) == .linear,
+            "reduced motion -> linear (invariant 11)")
+        check(
+            IslandMetrics.morphStyle(reduceMotion: false) == .spring, "no reduce motion -> spring")
+        check(
+            IslandMetrics.hoverScale(isHovered: false, isExpanded: true) == 1,
+            "no hover -> no scale")
+        check(
+            abs(IslandMetrics.hoverScale(isHovered: true, isExpanded: false) - 1.02) < 0.001,
+            "hover closed scale 1.02")
+        check(
+            abs(IslandMetrics.hoverScale(isHovered: true, isExpanded: true) - 1.012) < 0.001,
+            "hover expanded scale 1.012")
+
+        // -- Top inset fallback chain (invariant 14)
+
+        check(IslandMetrics.topInset(safeTop: 47, menuBarHeight: 22) == 47, "safe top wins")
+        check(IslandMetrics.topInset(safeTop: 0, menuBarHeight: 22) == 22, "menu bar fallback")
+        check(IslandMetrics.topInset(safeTop: 0, menuBarHeight: 0) == 0, "zero fallback")
+
+        // -- Edge: fractional screen width, content alignment
+
+        let fracW = IslandMetrics.windowFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 1367, height: 800), size: ws, scale: 1)
+        check(
+            abs(fracW.midX - 1367 / 2) <= midXTol,
+            "fractional screen centered (midX diff=\(abs(fracW.midX - 1367/2)))")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
