@@ -29,6 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
 
+    /// Diagnostic trace written to stderr (landld captures it in bantay.err).
+    static func dbg(_ message: String) {
+        let line = "[bantay] \(message)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        FileHandle.standardError.synchronizeFile()
+    }
+
     @MainActor
     static var notchWidth: CGFloat {
         guard let screen = window?.screen ?? NSScreen.main else {
@@ -57,8 +64,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         makeIslandWindow()
         installMenuBar()
         observeScreenChanges()
+        Self.dbg(
+            "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
             Self.pendingWelcome = true
+        }
+        if NotchHUDConfig.shared.hideAtStartup {
+            Self.dbg("launch: hideAtStartup set, island stays hidden until an event")
+        } else {
+            Self.dbg("launch: showing island")
             Self.showAtNotch()
         }
     }

@@ -528,7 +528,14 @@ struct NotchStatusView: View {
         let hiddenAtStart =
             config.hideAtStartup && !AppDelegate.didShowOnce
             && eventManager.currentEvent?.kind != .accessRequest
-        if config.islandEnabled && !config.isSnoozed && hasWork && !hiddenAtStart {
+        let shouldShow = config.islandEnabled && !config.isSnoozed && hasWork && !hiddenAtStart
+        let visible = AppDelegate.window?.isVisible ?? false
+        if shouldShow != visible {
+            AppDelegate.dbg(
+                "visibility: \(shouldShow ? "SHOW" : "HIDE") enabled=\(config.islandEnabled) snoozed=\(config.isSnoozed) hasWork=\(hasWork) hiddenAtStart=\(hiddenAtStart) cur=\(eventManager.currentEvent?.kind.rawValue ?? "nil") agents=\(eventManager.agents.count)"
+            )
+        }
+        if shouldShow {
             AppDelegate.showAtNotch()
         } else {
             AppDelegate.hide()
