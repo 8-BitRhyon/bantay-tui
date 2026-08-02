@@ -38,6 +38,9 @@ final class NotchHUDConfig {
     var snoozedUntil: Date? {
         didSet { defaults.set(snoozedUntil, forKey: "snoozedUntil") }
     }
+    var hideAtStartup = false {
+        didSet { defaults.set(hideAtStartup, forKey: "hideAtStartup") }
+    }
 
     var isSnoozed: Bool {
         guard let snoozedUntil else { return false }
@@ -79,6 +82,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "snoozedUntil") as? Date {
             snoozedUntil = v
+        }
+        if let v = defaults.object(forKey: "hideAtStartup") as? Bool {
+            hideAtStartup = v
         }
     }
 }

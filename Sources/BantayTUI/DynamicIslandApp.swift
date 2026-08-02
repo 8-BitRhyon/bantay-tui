@@ -11,7 +11,7 @@ struct DynamicIslandApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            SettingsView()
         }
     }
 }
@@ -22,6 +22,10 @@ final class KeyablePanel: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var window: NSWindow?
+    /// Set once the island has shown at least once; un-gates `hideAtStartup`.
+    @MainActor static var didShowOnce = false
+    /// Set at launch when the one-time welcome sheet must appear.
+    @MainActor static var pendingWelcome = false
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
 
@@ -53,6 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         makeIslandWindow()
         installMenuBar()
         observeScreenChanges()
+        if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
+            Self.pendingWelcome = true
+            Self.showAtNotch()
+        }
     }
 
     @MainActor
@@ -105,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     static func showAtNotch() {
         guard let window else { return }
+        didShowOnce = true
         reposition()
         window.orderFrontRegardless()
     }

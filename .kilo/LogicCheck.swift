@@ -492,11 +492,40 @@ struct LogicCheckMain {
                 "L1: islandEnabled persisted to defaults")
             cfg.snoozedUntil = Date().addingTimeInterval(-10)
             check(!cfg.isSnoozed, "L1: expired snooze is inactive")
+            cfg.snoozedUntil = Date().addingTimeInterval(-10)
+            check(!cfg.isSnoozed, "L1: expired snooze is inactive")
+            let origHidden = cfg.hideAtStartup
+            check(cfg.hideAtStartup == false, "L1/L2 default: island not hidden at startup")
+            cfg.hideAtStartup = true
+            check(
+                defaults.object(forKey: "hideAtStartup") as? Bool == true,
+                "L2: hideAtStartup persisted")
+            cfg.hideAtStartup = origHidden
             cfg.islandEnabled = true
             cfg.snoozedUntil = nil
             defaults.removeObject(forKey: "islandEnabled")
             defaults.removeObject(forKey: "snoozedUntil")
+            defaults.removeObject(forKey: "hideAtStartup")
         }
+
+        // L2. LaunchAgent (plan 002): plist detection + launchctl status seam.
+        let oldPath = LaunchAgent.plistPath
+        let oldRunner = LaunchAgent.processRunner
+        let stubPlist = NSTemporaryDirectory() + "/bantay-l2-\(UUID().uuidString).plist"
+        LaunchAgent.plistPath = stubPlist
+        check(!LaunchAgent.isInstalled, "L2 uninstalled plist not detected")
+        FileManager.default.createFile(atPath: stubPlist, contents: Data(), attributes: nil)
+        check(LaunchAgent.isInstalled, "L2 installed plist detected")
+        LaunchAgent.processRunner = { _ in 0 }
+        check(LaunchAgent.isLoaded(), "L2 launchctl exit 0 = loaded")
+        LaunchAgent.processRunner = { _ in 1 }
+        check(!LaunchAgent.isLoaded(), "L2 launchctl exit 1 = not loaded")
+        LaunchAgent.processRunner = { _ in 113 }
+        check(!LaunchAgent.isLoaded(), "L2 launchctl exit 113 = not loaded")
+        try? FileManager.default.removeItem(atPath: stubPlist)
+        check(!LaunchAgent.isInstalled, "L2 removed plist not detected")
+        LaunchAgent.plistPath = oldPath
+        LaunchAgent.processRunner = oldRunner
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

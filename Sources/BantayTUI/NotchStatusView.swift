@@ -13,6 +13,8 @@ struct NotchStatusView: View {
     @State private var promptText = ""
     @State private var pulse = false
     @State private var selectedChoices: Set<Int> = []
+    @State private var showWelcome = false
+    @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let adapter = HerdrSocketAdapter()
@@ -87,6 +89,12 @@ struct NotchStatusView: View {
             NotificationCenter.default.publisher(for: .notchVisibilityChanged)
         ) { _ in
             updateIslandVisibility()
+        }
+        .onChange(of: hasSeenOnboarding) { _, seen in
+            if !seen { showWelcome = true }
+        }
+        .sheet(isPresented: $showWelcome) {
+            WelcomeView()
         }
     }
 
@@ -433,6 +441,10 @@ struct NotchStatusView: View {
     // MARK: - Behavior
 
     private func handleAppear() {
+        if AppDelegate.pendingWelcome {
+            AppDelegate.pendingWelcome = false
+            showWelcome = true
+        }
         updateIslandVisibility()
         withAnimation(.easeInOut(duration: 0.25)) { opacity = 1 }
         if eventManager.currentEvent != nil {
@@ -485,9 +497,11 @@ struct NotchStatusView: View {
 
     private func updateIslandVisibility() {
         let config = NotchHUDConfig.shared
-        if config.islandEnabled && !config.isSnoozed,
-            eventManager.currentEvent != nil || !eventManager.agents.isEmpty
-        {
+        let hasWork = eventManager.currentEvent != nil || !eventManager.agents.isEmpty
+        let hiddenAtStart =
+            config.hideAtStartup && !AppDelegate.didShowOnce
+            && eventManager.currentEvent?.kind != .accessRequest
+        if config.islandEnabled && !config.isSnoozed && hasWork && !hiddenAtStart {
             AppDelegate.showAtNotch()
         } else {
             AppDelegate.hide()
