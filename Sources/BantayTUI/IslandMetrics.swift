@@ -65,13 +65,17 @@ public enum IslandMetrics: Sendable {
         safeTop > 0 ? safeTop : (menuBarHeight > 0 ? menuBarHeight : 0)
     }
 
-    /// Builds a centered, pixel-aligned window frame.
+    /// Builds a centered, pixel-aligned window frame, clamped to the display so the
+    /// island never hangs off-screen on displays smaller than the fixed window size.
     public static func windowFrame(screenFrame: CGRect, size: CGSize, scale: CGFloat) -> CGRect {
+        let fitted = CGSize(
+            width: min(size.width, screenFrame.width),
+            height: min(size.height, screenFrame.height))
         let r = CGRect(
-            x: screenFrame.midX - size.width / 2,
-            y: screenFrame.maxY - size.height,
-            width: size.width,
-            height: size.height)
+            x: screenFrame.midX - fitted.width / 2,
+            y: screenFrame.maxY - fitted.height,
+            width: fitted.width,
+            height: fitted.height)
         return alignedToBackingPixelGrid(r, scale: scale)
     }
 
@@ -109,5 +113,14 @@ public enum IslandMetrics: Sendable {
 
     public static func shouldCollapse(isExpanded: Bool, hasAgents: Bool) -> Bool {
         isExpanded && !hasAgents
+    }
+
+    /// Collapse on hover-exit unless the user is mid-prompt (composing).
+    public static func shouldCollapseOnHoverExit(isExpanded: Bool, isComposing: Bool) -> Bool {
+        isExpanded && !isComposing
+    }
+
+    public static func requiresApproval(_ kind: String) -> Bool {
+        kind == "accessRequest" || kind == "access_request"
     }
 }

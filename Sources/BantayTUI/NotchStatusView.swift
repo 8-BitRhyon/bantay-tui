@@ -12,6 +12,7 @@ struct NotchStatusView: View {
     @State private var composingPaneId: String?
     @State private var promptText = ""
     @State private var pulse = false
+    @State private var selectedChoices: Set<Int> = []
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let adapter = HerdrSocketAdapter()
@@ -62,6 +63,10 @@ struct NotchStatusView: View {
         }
         .scaleEffect(activeHoverScale, anchor: .top)
         .frame(width: islandWidth + cornerRad * 2, height: islandHeight, alignment: .top)
+        .onHover { hovering in
+            eventManager.setActive(hovering)
+            handleHover(hovering)
+        }
         .frame(
             width: IslandMetrics.windowSize().width,
             height: IslandMetrics.windowSize().height,
@@ -72,10 +77,6 @@ struct NotchStatusView: View {
         .animation(morphAnimation, value: isExpanded)
         .animation(morphAnimation, value: eventManager.agents.count)
         .onAppear(perform: handleAppear)
-        .onHover { hovering in
-            eventManager.setActive(hovering)
-            handleHover(hovering)
-        }
         .onChange(of: isExpanded) {
             if !isExpanded { cancelComposing() }
             eventManager.setActive(isExpanded)
@@ -140,6 +141,10 @@ struct NotchStatusView: View {
     private var content: some View {
         if isExpanded {
             expandedList
+        } else if let event = eventManager.currentEvent, let paneId = event.paneId,
+            IslandMetrics.requiresApproval(event.kind.rawValue)
+        {
+            approvalPill(event: event, paneId: paneId)
         } else if let event = eventManager.currentEvent {
             closedPill(
                 color: event.kind.color,
@@ -209,6 +214,115 @@ struct NotchStatusView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func approvalPill(event: AgentEvent, paneId: String) -> some View {
+        let variance = event.effectiveVariance
+        let choices = event.choices ?? []
+        let pill = HStack(spacing: 8) {
+            Circle().fill(Color(hex: event.kind.color)).frame(width: 7, height: 7)
+            Text(event.kind.label)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+            if showDetail, let title = event.title, !title.isEmpty {
+                Text("·").foregroundStyle(.secondary)
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            approvalActions(variance: variance, choices: choices, paneId: paneId)
+            approvalActionButton(
+                systemName: "arrow.up.right", color: .white.opacity(0.6), help: "Focus pane"
+            ) {
+                adapter.paneFocus(paneId: paneId)
+            }
+        }
+        .frame(width: islandWidth, height: IslandMetrics.pillHeight)
+        .contentShape(Rectangle())
+        return pill
+    }
+
+    @ViewBuilder
+    private func approvalActions(
+        variance: ApprovalVariance, choices: [String], paneId: String
+    ) -> some View {
+        switch variance {
+        case .yesNo:
+            approvalActionButton(
+                systemName: "checkmark.circle.fill", color: .green, help: "Approve"
+            ) {
+                adapter.approve(paneId: paneId)
+            }
+            approvalActionButton(systemName: "xmark.circle.fill", color: .red, help: "Deny") {
+                adapter.deny(paneId: paneId)
+            }
+        case .choices:
+            ForEach(0..<choices.count, id: \.self) { index in
+                approvalActionButton(
+                    label: Text("\(index + 1)"),
+                    color: .white,
+                    help: choices[index]
+                ) {
+                    adapter.approveChoice(paneId: paneId, choice: index + 1)
+                }
+            }
+            if choices.isEmpty {
+                approvalActionButton(
+                    systemName: "checkmark.circle.fill", color: .green, help: "Approve"
+                ) {
+                    adapter.approve(paneId: paneId)
+                }
+            }
+        case .multi:
+            ForEach(0..<choices.count, id: \.self) { index in
+                approvalActionButton(
+                    label: Text("\(index + 1)"),
+                    color: selectedChoices.contains(index) ? .green : .white.opacity(0.6),
+                    help: choices[index]
+                ) {
+                    if selectedChoices.contains(index) {
+                        selectedChoices.remove(index)
+                    } else {
+                        selectedChoices.insert(index)
+                    }
+                }
+            }
+            approvalActionButton(
+                systemName: "checkmark.circle.fill", color: .green, help: "Submit"
+            ) {
+                let selections = selectedChoices.sorted().map { $0 + 1 }
+                adapter.approveMulti(paneId: paneId, selections: selections)
+                selectedChoices.removeAll()
+            }
+        }
+    }
+
+    private func approvalActionButton(
+        systemName: String, color: Color, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(color)
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func approvalActionButton(
+        label: Text, color: Color, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            label
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundColor(color)
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var expandedList: some View {
@@ -314,6 +428,7 @@ struct NotchStatusView: View {
     // MARK: - Behavior
 
     private func handleAppear() {
+        updateIslandVisibility()
         withAnimation(.easeInOut(duration: 0.25)) { opacity = 1 }
         if eventManager.currentEvent != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -329,27 +444,25 @@ struct NotchStatusView: View {
     private func handleHover(_ hovering: Bool) {
         hoverTask?.cancel()
         isHovered = hovering
-        guard
-            IslandMetrics.shouldExpand(hovering: hovering, hasAgents: !eventManager.agents.isEmpty)
-        else {
-            if IslandMetrics.shouldCollapse(
-                isExpanded: isExpanded, hasAgents: !eventManager.agents.isEmpty)
-            {
-                expandTo(false)
+        if IslandMetrics.shouldExpand(hovering: hovering, hasAgents: !eventManager.agents.isEmpty) {
+            hoverTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(Int(IslandMetrics.hoverCooldown * 1000)))
+                guard !Task.isCancelled else { return }
+                expandTo(true)
             }
-            return
-        }
-        hoverTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(Int(IslandMetrics.hoverCooldown * 1000)))
-            guard !Task.isCancelled else { return }
-            expandTo(true)
+        } else if IslandMetrics.shouldCollapseOnHoverExit(
+            isExpanded: isExpanded, isComposing: composingPaneId != nil)
+        {
+            expandTo(false)
         }
     }
 
     private func handleEventChange() {
         eventManager.setActive(eventManager.currentEvent != nil)
+        updateIslandVisibility()
+        showDetail = false
+        selectedChoices.removeAll()
         if let event = eventManager.currentEvent {
-            AppDelegate.showAtNotch()
             if !reduceMotion {
                 withAnimation(.easeInOut(duration: 0.15)) { pulse = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -359,11 +472,22 @@ struct NotchStatusView: View {
             if event.playSound && eventManager.shouldPlaySound(for: event) {
                 playSound(for: event)
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.easeInOut(duration: 0.3)) { showDetail = true }
+            }
+        }
+    }
+
+    private func updateIslandVisibility() {
+        if eventManager.currentEvent != nil || !eventManager.agents.isEmpty {
+            AppDelegate.showAtNotch()
+        } else {
+            AppDelegate.hide()
         }
     }
 
     private func handleAgentsChange() {
-        AppDelegate.showAtNotch()
+        updateIslandVisibility()
         if IslandMetrics.shouldCollapse(
             isExpanded: isExpanded, hasAgents: !eventManager.agents.isEmpty)
         {

@@ -34,11 +34,25 @@ final class AgentEventManagerTests: XCTestCase {
         try handle.write(contentsOf: Data((line + "\n").utf8))
     }
 
-    private func event(_ type: String, title: String? = nil, paneId: String? = nil) -> String {
+    private func event(
+        _ type: String,
+        title: String? = nil,
+        paneId: String? = nil,
+        variance: String? = nil,
+        choices: [String]? = nil
+    ) -> String {
         let titleJSON = title.map { "\"title\":\"\($0)\"" } ?? "\"title\":null"
         let paneJSON = paneId.map { "\"paneId\":\"\($0)\"" } ?? "\"paneId\":null"
+        let varianceJSON = variance.map { "\"variance\":\"\($0)\"" } ?? "\"variance\":null"
+        let choicesJSON: String
+        if let choices {
+            let items = choices.map { "\"\($0)\"" }.joined(separator: ",")
+            choicesJSON = "\"choices\":[\(items)]"
+        } else {
+            choicesJSON = "\"choices\":null"
+        }
         return
-            "{\"source\":\"herdr\",\"type\":\"\(type)\",\(titleJSON),\"message\":null,\(paneJSON),\"workspaceId\":null}"
+            "{\"source\":\"herdr\",\"type\":\"\(type)\",\(titleJSON),\"message\":null,\(paneJSON),\"workspaceId\":null,\(varianceJSON),\(choicesJSON)}"
     }
 
     func testPreExistingEventsAreSkippedOnLaunch() throws {
@@ -96,6 +110,62 @@ final class AgentEventManagerTests: XCTestCase {
         try append(event("clear"))
         manager.poll()
         XCTAssertNil(manager.currentEvent)
+    }
+
+    func testApprovalVarianceParsedFromEventFile() throws {
+        try write([])
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
+        defer { manager.stop() }
+
+        try append(
+            event(
+                "access_request",
+                title: "Pick one",
+                paneId: "p1",
+                variance: "choices",
+                choices: ["Read file", "Write file", "Exit"]))
+        manager.poll()
+
+        let event = manager.currentEvent
+        XCTAssertEqual(event?.kind, .accessRequest)
+        XCTAssertEqual(event?.variance, .choices)
+        XCTAssertEqual(event?.choices, ["Read file", "Write file", "Exit"])
+        XCTAssertEqual(event?.effectiveVariance, .choices)
+    }
+
+    func testMultiSelectVarianceParsedFromEventFile() throws {
+        try write([])
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
+        defer { manager.stop() }
+
+        try append(
+            event(
+                "access_request",
+                title: "Select all",
+                paneId: "p2",
+                variance: "multi",
+                choices: ["option-a", "option-b", "option-c"]))
+        manager.poll()
+
+        let event = manager.currentEvent
+        XCTAssertEqual(event?.kind, .accessRequest)
+        XCTAssertEqual(event?.variance, .multi)
+        XCTAssertEqual(event?.choices?.count, 3)
+    }
+
+    func testYesNoVarianceDefaultsWhenAbsent() throws {
+        try write([])
+        let manager = AgentEventManager(eventsFileURL: file, capture: false)
+        defer { manager.stop() }
+
+        try append(event("access_request", title: "Approve?", paneId: "p3"))
+        manager.poll()
+
+        let event = manager.currentEvent
+        XCTAssertEqual(event?.kind, .accessRequest)
+        XCTAssertNil(event?.variance)
+        XCTAssertNil(event?.choices)
+        XCTAssertEqual(event?.effectiveVariance, .yesNo)
     }
 
     func testTruncationResetsOffsetAndReadsNewEvents() throws {
@@ -291,6 +361,8 @@ final class AgentEventManagerTests: XCTestCase {
             message: nil,
             paneId: "w3:p3",
             workspaceId: "w3",
+            variance: nil,
+            choices: nil,
             playSound: true,
             persistent: true)
 
@@ -356,16 +428,42 @@ final class AgentEventManagerTests: XCTestCase {
         defer { manager.stop() }
         let first = AgentEvent(
             source: "kilo", kind: .progress, title: "t", message: nil,
-            paneId: nil, workspaceId: nil, playSound: true, persistent: true)
+            paneId: nil, workspaceId: nil, variance: nil, choices: nil,
+            playSound: true, persistent: true)
         let sameAgain = AgentEvent(
             source: "kilo", kind: .progress, title: "t2", message: nil,
-            paneId: nil, workspaceId: nil, playSound: true, persistent: true)
+            paneId: nil, workspaceId: nil, variance: nil, choices: nil,
+            playSound: true, persistent: true)
         let otherSource = AgentEvent(
             source: "freebuff", kind: .progress, title: "t", message: nil,
-            paneId: nil, workspaceId: nil, playSound: true, persistent: true)
+            paneId: nil, workspaceId: nil, variance: nil, choices: nil,
+            playSound: true, persistent: true)
 
         XCTAssertTrue(manager.shouldPlaySound(for: first))
         XCTAssertFalse(manager.shouldPlaySound(for: sameAgain))
         XCTAssertTrue(manager.shouldPlaySound(for: otherSource))
+    }
+
+    // MARK: - ApprovalVariance
+
+    func testApprovalVarianceDecoding() throws {
+        XCTAssertEqual(ApprovalVariance(rawValue: "yes-no"), .yesNo)
+        XCTAssertEqual(ApprovalVariance(rawValue: "choices"), .choices)
+        XCTAssertEqual(ApprovalVariance(rawValue: "multi"), .multi)
+        XCTAssertNil(ApprovalVariance(rawValue: "bogus"))
+    }
+
+    func testEffectiveVarianceDefaultsToYesNo() {
+        let nilVariance = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: nil, workspaceId: nil, variance: nil, choices: nil,
+            playSound: true, persistent: true)
+        XCTAssertEqual(nilVariance.effectiveVariance, .yesNo)
+
+        let explicit = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: nil, workspaceId: nil, variance: .multi, choices: nil,
+            playSound: true, persistent: true)
+        XCTAssertEqual(explicit.effectiveVariance, .multi)
     }
 }

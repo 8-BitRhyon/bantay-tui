@@ -4,15 +4,29 @@ import Foundation
 
 struct AgentEvent: Identifiable, Equatable {
     let id = UUID()
-    let source: String
+    let source: String?
     let kind: AgentEventKind
     let title: String?
     let message: String?
     let paneId: String?
     let workspaceId: String?
+    let variance: ApprovalVariance?
+    let choices: [String]?
     let playSound: Bool
     let persistent: Bool
     let createdAt = Date()
+
+    var effectiveVariance: ApprovalVariance {
+        variance ?? .yesNo
+    }
+
+    var sourceKey: String {
+        source ?? "herdr"
+    }
+
+    var identityKey: String {
+        paneId ?? source ?? "unknown"
+    }
 }
 
 struct AgentSnapshot: Identifiable, Equatable {
@@ -111,7 +125,7 @@ final class AgentEventManager: ObservableObject {
     }
 
     func shouldPlaySound(for event: AgentEvent) -> Bool {
-        let key = "\(event.source):\(event.kind)"
+        let key = "\(event.sourceKey):\(event.kind)"
         let now = Date()
         if let last = lastSoundAt[key],
             now.timeIntervalSince(last) < NotchHUDConfig.shared.soundCooldown
@@ -132,6 +146,8 @@ final class AgentEventManager: ObservableObject {
                     message: nil,
                     paneId: nil,
                     workspaceId: nil,
+                    variance: .yesNo,
+                    choices: nil,
                     playSound: true,
                     persistent: true
                 ))
@@ -197,7 +213,7 @@ final class AgentEventManager: ObservableObject {
         let ttl: TimeInterval
 
         if event.kind == .accessRequest
-            && config.stickyApprovalSources.contains(event.source.lowercased())
+            && config.stickyApprovalSources.contains(event.sourceKey.lowercased())
         {
             ttl = config.stickyApprovalTTL
         } else if event.kind == .accessRequest {
@@ -228,6 +244,8 @@ final class AgentEventManager: ObservableObject {
             message: payload.message,
             paneId: payload.paneId,
             workspaceId: payload.workspaceId,
+            variance: payload.variance,
+            choices: payload.choices,
             playSound: true,
             persistent: false
         )
@@ -292,6 +310,8 @@ extension AgentEventManager {
                     message: agent.agentStatus,
                     paneId: agent.paneId,
                     workspaceId: agent.workspaceId,
+                    variance: nil,
+                    choices: nil,
                     playSound: true,
                     persistent: kind.isOngoing
                 ))
@@ -304,7 +324,7 @@ extension AgentEventManager {
 
         var events: [AgentEvent] = []
         for event in best {
-            let key = event.paneId ?? event.source
+            let key = event.identityKey
             let prev = lastSeenKinds[key]
             lastSeenKinds[key] = event.kind
             if prev != event.kind {
@@ -312,8 +332,10 @@ extension AgentEventManager {
             }
         }
 
+        // Keep lastSeenKinds sticky: a pane that vanishes and re-enters with the
+        // same kind must re-show silently (no new event), per the silent-reshow
+        // invariant. No purge here.
         let liveKeys = Set(best.map { $0.paneId ?? $0.source })
-        lastSeenKinds = lastSeenKinds.filter { liveKeys.contains($0.key) }
 
         if let current, current.persistent, !liveKeys.contains(current.paneId ?? current.source) {
             events.append(
@@ -324,6 +346,8 @@ extension AgentEventManager {
                     message: nil,
                     paneId: current.paneId,
                     workspaceId: current.workspaceId,
+                    variance: nil,
+                    choices: nil,
                     playSound: false,
                     persistent: false
                 ))
@@ -348,7 +372,7 @@ extension AgentEventManager {
 
         if effective == nil,
             let top = best.first,
-            lastSeenKinds[top.paneId ?? top.source] == top.kind,
+            lastSeenKinds[top.identityKey] == top.kind,
             !events.contains(where: { $0.paneId ?? $0.source == top.paneId ?? top.source })
         {
             events.append(
@@ -359,6 +383,8 @@ extension AgentEventManager {
                     message: top.message,
                     paneId: top.paneId,
                     workspaceId: top.workspaceId,
+                    variance: nil,
+                    choices: nil,
                     playSound: false,
                     persistent: top.persistent
                 ))
@@ -505,4 +531,6 @@ private struct AgentEventPayload: Decodable {
     let message: String?
     let paneId: String?
     let workspaceId: String?
+    let variance: ApprovalVariance?
+    let choices: [String]?
 }

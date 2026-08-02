@@ -75,7 +75,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             rootView: NotchStatusView().environmentObject(AgentEventManager.shared))
         hostingController.sizingOptions = []
         window.contentViewController = hostingController
-        window.orderFrontRegardless()
 
         Self.window = window
     }
