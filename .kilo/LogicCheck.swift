@@ -595,6 +595,86 @@ struct LogicCheckMain {
                 side: .right, isExpanded: true, topInset: 47) == 47,
             "L4 expanded panel keeps dropping under the menu bar")
 
+        // L5. Idle agent strip: live work facets beside the notch — style,
+        // truncation, width clamps, and config persistence.
+        check(
+            IslandMetrics.idleDefaultMaxChips == 3,
+            "L5 default max chips is 3 (got \(IslandMetrics.idleDefaultMaxChips))")
+        check(
+            IslandMetrics.idleShownChips(agentCount: 2, maxChips: 3) == 2,
+            "L5 fewer agents than cap shows all")
+        check(
+            IslandMetrics.idleShownChips(agentCount: 7, maxChips: 3) == 3,
+            "L5 more agents than cap truncates to cap")
+        check(
+            IslandMetrics.idleShownChips(agentCount: 0, maxChips: 3) == 0,
+            "L5 empty roster shows nothing")
+        let single = IslandMetrics.idleNameChipWidth(nameLength: 4)
+        let nine = IslandMetrics.idleNameChipWidth(nameLength: 40)
+        check(nine > single, "L5 longer names widen chips")
+        check(
+            abs(nine - IslandMetrics.idleNameChipWidth(nameLength: 1000)) < 40,
+            "L5 name width is clamped (got \(nine))")
+        let s3 = IslandMetrics.idleStripWidth(
+            style: .names, agentCount: 3, maxChips: 3,
+            nameLengths: [4, 4, 4])
+        let s5 = IslandMetrics.idleStripWidth(
+            style: .names, agentCount: 5, maxChips: 3,
+            nameLengths: [4, 4, 4, 4, 4])
+        check(s5 > s3, "L5 overflow adds width for +N (got \(s5) vs \(s3))")
+        let dots1 = IslandMetrics.idleStripWidth(
+            style: .dots, agentCount: 1, maxChips: 3, nameLengths: [])
+        let dotsCapped = IslandMetrics.idleStripWidth(
+            style: .dots, agentCount: 12, maxChips: 6, nameLengths: [])
+        check(dotsCapped >= dots1, "L5 dots style width grows with agents")
+        check(
+            dotsCapped <= IslandMetrics.idleDotsChipWidth(dotCount: 6) + 1,
+            "L5 dots capped at 6 dots")
+        let sumW = IslandMetrics.idleStripWidth(
+            style: .summary, agentCount: 9, maxChips: 6, nameLengths: [])
+        check(sumW > 0 && sumW < IslandMetrics.expandedWidth, "L5 summary width sane")
+        let closedNames = IslandMetrics.idleClosedWidth(
+            style: .names, agentCount: 8, maxChips: 6,
+            nameLengths: Array(repeating: 4, count: 8), notchWidth: 190)
+        check(closedNames >= IslandMetrics.idleChipWidth, "L5 closed idle never narrower than pill")
+        check(
+            closedNames <= IslandMetrics.expandedWidth && closedNames <= 190,
+            "L5 closed idle clamps to notch width (\(closedNames))")
+        let closedEmpty = IslandMetrics.idleClosedWidth(
+            style: .names, agentCount: 0, maxChips: 3, nameLengths: [], notchWidth: 190)
+        check(closedEmpty >= IslandMetrics.idleChipWidth, "L5 empty roster uses pill min width")
+
+        // L5. Idle facets persist and clamp.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origStyle = cfg.idleStyle
+            let origChips = cfg.idleMaxChips
+            check(
+                cfg.clampedIdleMaxChips >= 1 && cfg.clampedIdleMaxChips <= 6,
+                "L5 clamped max chips in range (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleStyle = .dots
+            check(
+                defaults.string(forKey: "idleStyle") == "dots",
+                "L5 idle style persisted")
+            cfg.idleMaxChips = 7
+            check(
+                cfg.clampedIdleMaxChips == 6,
+                "L5 max chips clamped at 6 (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleMaxChips = 0
+            check(
+                cfg.clampedIdleMaxChips == 1,
+                "L5 max chips clamped at 1 (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleMaxChips = 4
+            check(
+                defaults.integer(forKey: "idleMaxChips") == 4,
+                "L5 max chips persisted after clamp rewrites")
+            cfg.idleStyle = origStyle
+            cfg.idleMaxChips = origChips
+            defaults.removeObject(forKey: "idleStyle")
+            defaults.removeObject(forKey: "idleMaxChips")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

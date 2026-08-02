@@ -17,6 +17,17 @@ public enum IslandMetrics: Sendable {
         case right
     }
 
+    /// How the closed idle chip presents live agent activity on the sides of
+    /// the notch.
+    public enum IdleStyle: String, Sendable {
+        /// One small severity dot per agent (most glanceable, least text).
+        case dots
+        /// Dot + agent name chips, up to `idleMaxChips`, `+N` overflow.
+        case names
+        /// Dot + a single "N agents" summary.
+        case summary
+    }
+
     // MARK: - Constants
     public static let expandedWidth: CGFloat = 456
     public static let closedCornerRadius: CGFloat = 8
@@ -33,6 +44,80 @@ public enum IslandMetrics: Sendable {
     public static let morphDuration: TimeInterval = 0.42
     public static let hoverBounceClosed: CGFloat = 1.02
     public static let hoverBounceExpanded: CGFloat = 1.012
+
+    // MARK: - Idle agent strip
+    /// Max agents shown as chips in the idle strip before `+N`.
+    public static let idleDefaultMaxChips: Int = 3
+    /// Horizontal padding inside a chip.
+    public static let idleChipHPad: CGFloat = 10
+    /// Gap between the severiy dot and the chip label.
+    public static let idleChipDotGap: CGFloat = 5
+    /// Gap between adjacent chips in a strip.
+    public static let idleChipGap: CGFloat = 4
+    /// Severity dot diameter.
+    public static let idleDotSize: CGFloat = 5
+    /// Overflow label width when more agents exist than shown chips.
+    public static let idleOverflowPad: CGFloat = 16
+
+    /// Width of one dot-only chip (also the "dots" style chip).
+    public static func idleDotsChipWidth(dotCount: Int) -> CGFloat {
+        let dots = min(max(dotCount, 0), 6)
+        guard dots > 0 else { return idleDotSize }
+        return idleChipHPad * 2 + CGFloat(dots) * (idleDotSize + 2) - 2
+    }
+
+    /// Width of a single name chip: dot + gap + (clamped) label.
+    public static func idleNameChipWidth(nameLength: Int) -> CGFloat {
+        let textLen = min(max(nameLength, 2), 14)
+        return idleChipHPad * 2 + idleDotSize + idleChipDotGap + CGFloat(textLen) * 6.4 + 2
+    }
+
+    /// Width of one summary chip ("N agents").
+    public static func idleSummaryChipWidth(agentCount: Int) -> CGFloat {
+        let digits = max(1, String(agentCount).count)
+        let textLen = min(digits + 9, 14)
+        return idleChipHPad * 2 + idleDotSize + idleChipDotGap + CGFloat(textLen) * 6.4 + 2
+    }
+
+    /// How many agent chips fit before truncating to `+N`.
+    public static func idleShownChips(agentCount: Int, maxChips: Int) -> Int {
+        min(max(agentCount, 0), max(maxChips, 0))
+    }
+
+    /// Total closed idle strip width for `style`.
+    public static func idleStripWidth(
+        style: IdleStyle, agentCount: Int, maxChips: Int, nameLengths: [Int]
+    ) -> CGFloat {
+        let count = max(agentCount, 0)
+        guard count > 0 else { return idleChipWidth }
+        switch style {
+        case .dots:
+            return idleDotsChipWidth(
+                dotCount: idleShownChips(agentCount: count, maxChips: maxChips))
+        case .summary:
+            return idleSummaryChipWidth(agentCount: count)
+        case .names:
+            let shown = idleShownChips(agentCount: count, maxChips: maxChips)
+            var w: CGFloat = 0
+            for i in 0..<shown {
+                let len = nameLengths.isEmpty ? 6 : nameLengths[min(i, nameLengths.count - 1)]
+                w += idleNameChipWidth(nameLength: len)
+            }
+            w += CGFloat(max(shown - 1, 0)) * idleChipGap
+            if count > shown { w += idleOverflowPad }
+            return w
+        }
+    }
+
+    /// Closed pill content width for the idle (agents-only) state.
+    public static func idleClosedWidth(
+        style: IdleStyle, agentCount: Int, maxChips: Int, nameLengths: [Int],
+        notchWidth: CGFloat, expandedWidth: CGFloat = expandedWidth
+    ) -> CGFloat {
+        let w = idleStripWidth(
+            style: style, agentCount: agentCount, maxChips: maxChips, nameLengths: nameLengths)
+        return min(max(w, idleChipWidth), min(expandedWidth, max(notchWidth, 0)))
+    }
 
     public static func cornerRadius(expanded: Bool) -> CGFloat {
         expanded ? expandedCornerRadius : closedCornerRadius

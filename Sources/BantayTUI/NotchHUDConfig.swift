@@ -44,6 +44,15 @@ final class NotchHUDConfig {
     var islandDockSide: IslandMetrics.IslandDockSide = .right {
         didSet { defaults.set(islandDockSide.rawValue, forKey: "islandDockSide") }
     }
+    var idleStyle: IslandMetrics.IdleStyle = .names {
+        didSet { defaults.set(idleStyle.rawValue, forKey: "idleStyle") }
+    }
+    var idleMaxChips: Int = IslandMetrics.idleDefaultMaxChips {
+        didSet { defaults.set(idleMaxChips, forKey: "idleMaxChips") }
+    }
+    var clampedIdleMaxChips: Int {
+        min(max(idleMaxChips, 1), 6)
+    }
 
     var isSnoozed: Bool {
         guard let snoozedUntil else { return false }
@@ -93,6 +102,14 @@ final class NotchHUDConfig {
             let side = IslandMetrics.IslandDockSide(rawValue: v)
         {
             islandDockSide = side
+        }
+        if let v = defaults.string(forKey: "idleStyle"),
+            let style = IslandMetrics.IdleStyle(rawValue: v)
+        {
+            idleStyle = style
+        }
+        if let v = defaults.object(forKey: "idleMaxChips") as? NSNumber {
+            idleMaxChips = min(max(v.intValue, 1), 6)
         }
     }
 }

@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
     @State private var muteInTerminal = NotchHUDConfig.shared.muteInTerminal
     @State private var dockSide = NotchHUDConfig.shared.islandDockSide.rawValue
+    @State private var idleStyle = NotchHUDConfig.shared.idleStyle.rawValue
+    @State private var idleMaxChips = NotchHUDConfig.shared.clampedIdleMaxChips
 
     var body: some View {
         Form {
@@ -91,6 +93,25 @@ struct SettingsView: View {
                     NotificationCenter.default.post(
                         name: .notchVisibilityChanged, object: nil)
                 }
+                Picker("Idle display", selection: $idleStyle) {
+                    Text("Agent name chips").tag(IslandMetrics.IdleStyle.names.rawValue)
+                    Text("Status dots only").tag(IslandMetrics.IdleStyle.dots.rawValue)
+                    Text("Count summary").tag(IslandMetrics.IdleStyle.summary.rawValue)
+                }
+                .help("What the closed chip shows beside the notch while agents work.")
+                .onChange(of: idleStyle) { _, newValue in
+                    NotchHUDConfig.shared.idleStyle =
+                        IslandMetrics.IdleStyle(rawValue: newValue) ?? .names
+                    NotificationCenter.default.post(
+                        name: .notchVisibilityChanged, object: nil)
+                }
+                Stepper("Max agent chips: \(idleMaxChips)", value: $idleMaxChips, in: 1...6)
+                    .help("Longer strips truncate to +N.")
+                    .onChange(of: idleMaxChips) { _, newValue in
+                        NotchHUDConfig.shared.idleMaxChips = newValue
+                        NotificationCenter.default.post(
+                            name: .notchVisibilityChanged, object: nil)
+                    }
             }
             Section {
                 Button("Show Welcome…") {
@@ -99,7 +120,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 520)
+        .frame(width: 460, height: 620)
     }
 }
 

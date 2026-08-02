@@ -31,7 +31,13 @@ struct NotchStatusView: View {
 
     private var closedPillWidth: CGFloat {
         let full = min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
-        return hasTransientEvent ? full : min(full, IslandMetrics.idleChipWidth)
+        guard !hasTransientEvent else { return full }
+        return IslandMetrics.idleClosedWidth(
+            style: NotchHUDConfig.shared.idleStyle,
+            agentCount: eventManager.agents.count,
+            maxChips: NotchHUDConfig.shared.clampedIdleMaxChips,
+            nameLengths: eventManager.agents.map(\.source.count),
+            notchWidth: AppDelegate.notchWidth)
     }
 
     private var islandWidth: CGFloat {
@@ -201,13 +207,8 @@ struct NotchStatusView: View {
                 }
             }
         } else if !eventManager.agents.isEmpty {
-            closedPill(
-                color: AgentEventKind.idle.color,
-                label: "Agents · \(eventManager.agents.count)",
-                title: nil,
-                dots: eventManager.agents.map(\.kind),
-                action: { expandTo(true) }
-            )
+            agentStrip
+                .onTapGesture { expandTo(true) }
         } else if isExpanded {
             expandedList
         } else {
@@ -254,6 +255,70 @@ struct NotchStatusView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// Idle (closed) live strip: per-agent chips beside the notch, in the style
+    /// the user picked. Tap to expand the full roster.
+    @ViewBuilder
+    private var agentStrip: some View {
+        let agents = eventManager.agents
+        let maxChips = NotchHUDConfig.shared.clampedIdleMaxChips
+        let shown = IslandMetrics.idleShownChips(agentCount: agents.count, maxChips: maxChips)
+        let overflow = max(agents.count - shown, 0)
+        ZStack {
+            switch NotchHUDConfig.shared.idleStyle {
+            case .dots:
+                HStack(spacing: 4) {
+                    ForEach(Array(agents.prefix(shown).enumerated()), id: \.offset) { _, agent in
+                        Circle()
+                            .fill(Color(hex: agent.kind.color))
+                            .frame(
+                                width: IslandMetrics.idleDotSize, height: IslandMetrics.idleDotSize)
+                    }
+                    if overflow > 0 {
+                        Text("+\(overflow)")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.55))
+                    }
+                }
+                .padding(.horizontal, IslandMetrics.idleChipHPad)
+            case .summary:
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color(hex: AgentEventKind.idle.color))
+                        .frame(width: 7, height: 7)
+                    Text("\(agents.count) agent\(agents.count == 1 ? "" : "s")")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+            case .names:
+                HStack(spacing: IslandMetrics.idleChipGap) {
+                    ForEach(Array(agents.prefix(shown).enumerated()), id: \.offset) { _, agent in
+                        HStack(spacing: IslandMetrics.idleChipDotGap) {
+                            Circle()
+                                .fill(Color(hex: agent.kind.color))
+                                .frame(
+                                    width: IslandMetrics.idleDotSize,
+                                    height: IslandMetrics.idleDotSize)
+                            Text(agent.source)
+                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, IslandMetrics.idleChipHPad)
+                        .frame(height: 20)
+                        .background(Color.white.opacity(0.10), in: Capsule())
+                    }
+                    if overflow > 0 {
+                        Text("+\(overflow)")
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
+            }
+        }
+        .frame(width: islandWidth, height: IslandMetrics.pillHeight)
+        .contentShape(Rectangle())
     }
 
     private func approvalPill(event: AgentEvent, paneId: String) -> some View {
