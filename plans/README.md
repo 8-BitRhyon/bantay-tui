@@ -19,7 +19,7 @@ adversarial corpus (`try to break it`) grows with every plan.
 | 001  | Lifecycle controls: hide/disable/snooze, quit, restart in menu bar | P1 | S |  -  | DONE |
 | 002  | Real Settings window (replace `EmptyView()`) + onboarding | P1 | M | 001 | DONE |
 | 003  | Auto-update via Sparkle | P2 | M | 002 | TODO |
-| 004  | Clean uninstall (script `--uninstall` + in-app path) | P2 | S |  -  | TODO |
+| 004  | Clean uninstall (script `--uninstall` + in-app path) | P2 | S |  -  | DONE |
 | 005  | Quiet hours + per-source mute + snooze persistence | P2 | S | 002 | TODO |
 | 006  | Spec-driven discipline + adversarial test suite (RED→GREEN) | P1 | M |  -  | IN PROGRESS |
 

@@ -164,6 +164,19 @@ tail -f ~/Library/Application Support/Bantay-TUI/agent-events.jsonl
 launchctl print gui/$(id -u)/com.bantay-tui.agent   # state = running
 ```
 
+## Uninstalling
+
+To fully remove Bantay-TUI (launch agent, app binary, event history, logs):
+
+```bash
+bash scripts/setup.sh --uninstall
+```
+
+Rerunning it is a safe no-op. Trash the app build afterwards — the agent will
+not relaunch it. Your herdr sessions and hook configuration are untouched;
+Bantay-TUI's `UserDefaults` domain is removed with the app, so Settings do not
+survive an uninstall-driven removal.
+
 ## Configuration
 
 Stored in `UserDefaults` (domain `BantayTUI`):

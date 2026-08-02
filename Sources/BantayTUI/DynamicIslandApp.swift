@@ -226,6 +226,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(.separator())
         #endif
 
+        let uninstallItem = NSMenuItem(
+            title: "Remove Bantay-TUI…",
+            action: #selector(uninstallPrompt),
+            keyEquivalent: "")
+        uninstallItem.target = self
+        uninstallItem.isEnabled = Self.uninstallScriptPath() != nil
+        menu.addItem(uninstallItem)
+
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(
             title: "Quit Bantay-TUI",
             action: #selector(quitApp),
@@ -293,5 +303,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    /// Locates the installed `setup.sh` used by the in-app uninstall path.
+    @MainActor
+    private static func uninstallScriptPath() -> String? {
+        let candidates: [String?] = [
+            NSHomeDirectory() + "/Library/Application Support/Bantay-TUI/setup.sh",
+            Bundle.main.resourceURL?.appendingPathComponent("scripts/setup.sh").path,
+            FileManager.default.currentDirectoryPath + "/scripts/setup.sh",
+        ]
+        return candidates.compactMap { $0 }.first {
+            FileManager.default.fileExists(atPath: $0)
+        }
+    }
+
+    @MainActor
+    @objc private func uninstallPrompt() {
+        guard let script = Self.uninstallScriptPath() else {
+            let alert = NSAlert()
+            alert.messageText = "Setup script not found"
+            alert.informativeText = "Install Bantay-TUI with scripts/setup.sh first."
+            alert.runModal()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Uninstall Bantay-TUI?"
+        alert.informativeText =
+            "Removes the launch agent, app binary, and event history. "
+            + "Your herdr sessions are untouched."
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [script, "--uninstall"]
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 {
+                    NSApp.terminate(nil)
+                }
+            } catch {
+                // Nothing was removed; leave the app running.
+            }
+        }
     }
 }
