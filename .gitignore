@@ -5,6 +5,7 @@ DerivedData/
 xcuserdata/
 Packages/
 *.xcodeproj
+.swiftpm/
 
 .DS_Store
 Thumbs.db
@@ -12,3 +13,9 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+*.log
+*.err
+
+# Local agent tooling config (taste/settings are per-machine, not shared)
+.commandcode/

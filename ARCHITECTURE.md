@@ -33,7 +33,7 @@ Herdr invokes the plugin command with the event JSON in `HERDR_PLUGIN_EVENT_JSON
 {"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"1-2","workspace_id":"1","agent_status":"blocked","display_agent":"claude","agent":"claude","title":"...","state_labels":{"blocked":"Waiting for approval"}}}
 ```
 
-`agent_status` is one of `idle`, `working`, `blocked`, `done`, `unknown`. The adapter maps: `blocked → access_request`, `working → progress`, `idle → waiting`, `done → completed`; `state_labels` supplies the pill message.
+`agent_status` is one of `idle`, `working`, `blocked`, `done`, `unknown`. The adapter maps: `blocked → access_request`, `working → progress`, `idle → waiting`, `done → completed`; `state_labels` supplies the pill message. Approval prompts carry an optional `variance` (`yes-no`/`choices`/`multi`) and `choices` array; nil variance defaults to yes-no.
 
 ## Click-to-Focus
 

@@ -14,6 +14,16 @@ An agent is `working`, `blocked`, waiting for `approval`, or `done` — Bantay-T
 - Click a row (or the pill) → `herdr pane focus <paneId>` jumps to that agent's pane.
 - A menu bar icon lists the same agents with the same focus actions, plus Quit (the app is `.accessory` — no Dock icon).
 
+## Approval prompts
+
+When an agent is `blocked` (access-request), the pill renders inline controls that drive the agent's terminal via `herdr agent send-keys`:
+
+- **Yes/No** (default): Approve (sends `y` + Enter) / Deny (sends `n` + Enter).
+- **Choices** (`variance: "choices"` + `choices` array): numbered buttons that send the 1-based index + Enter.
+- **Multi-select** (`variance: "multi"` + `choices` array): toggle buttons (green = selected) plus a Submit button that sends comma-joined indices (e.g. `1,3` + Enter).
+
+All variants include a Focus button that jumps to the agent's pane.
+
 ## CI/CD Pipeline
 
 Every change must pass five CI layers plus the remote merge barrier before it reaches `main`. Nothing merges — or pushes to `main` — without all gates green.
@@ -129,7 +139,7 @@ Herdr delivers each event as JSON in `HERDR_PLUGIN_EVENT_JSON` (verified against
 Newline-delimited JSON, one event per line:
 
 ```json
-{"source":"claude","type":"access_request","title":"agent display name","message":"Waiting for approval","paneId":"1-2","workspaceId":"1"}
+{"source":"claude","type":"access_request","title":"agent display name","message":"Waiting for approval","paneId":"1-2","workspaceId":"1","variance":"yes-no","choices":null}
 ```
 
 | Field | Type | Meaning |
@@ -140,6 +150,8 @@ Newline-delimited JSON, one event per line:
 | `message` | string? | State label text (`state_labels`), e.g. "Waiting for approval" |
 | `paneId` | string? | Herdr pane id; pill click runs `herdr pane focus <paneId>` |
 | `workspaceId` | string? | Workspace label (reserved) |
+| `variance` | string? | Approval prompt type: `yes-no` (default), `choices`, `multi` |
+| `choices` | [string]? | Option labels for `choices` / `multi` prompts |
 
 The app tails the file — events written before launch are skipped, duplicate events for an active state are ignored, and a `clear` event dismisses the pill.
 

@@ -107,6 +107,8 @@ struct LogicCheckMain {
             message: nil,
             paneId: "w3:p3",
             workspaceId: "w3",
+            variance: nil,
+            choices: nil,
             playSound: true,
             persistent: true)
         let empty = AgentEventManager.update(from: [], lastSeenKinds: &seen8, current: shown)
@@ -182,15 +184,15 @@ struct LogicCheckMain {
 
         let eventA = AgentEvent(
             source: "kilo", kind: .progress, title: "t", message: nil, paneId: nil,
-            workspaceId: nil, playSound: true, persistent: true)
+            workspaceId: nil, variance: nil, choices: nil, playSound: true, persistent: true)
         let eventB = AgentEvent(
             source: "kilo", kind: .progress, title: "t2", message: nil, paneId: nil,
-            workspaceId: nil, playSound: true, persistent: true)
+            workspaceId: nil, variance: nil, choices: nil, playSound: true, persistent: true)
         check(manager.shouldPlaySound(for: eventA), "first sound plays")
         check(!manager.shouldPlaySound(for: eventB), "second sound within cooldown suppressed")
         let eventC = AgentEvent(
             source: "freebuff", kind: .progress, title: "t", message: nil, paneId: nil,
-            workspaceId: nil, playSound: true, persistent: true)
+            workspaceId: nil, variance: nil, choices: nil, playSound: true, persistent: true)
         check(manager.shouldPlaySound(for: eventC), "different source not suppressed")
 
         var seenWorst: [String: AgentEventKind] = [:]
@@ -308,6 +310,48 @@ struct LogicCheckMain {
             IslandMetrics.shouldCollapse(isExpanded: true, hasAgents: false),
             "collapse when agents empty (invariant 9)")
 
+        // -- Hover-out collapse + approval (invariant 15-16)
+
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(isExpanded: false, isComposing: false),
+            "no collapse on hover-out when already closed")
+        check(
+            IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: false),
+            "collapse on hover-out when expanded")
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: true),
+            "keep expanded while composing prompt")
+        check(IslandMetrics.requiresApproval("accessRequest"), "accessRequest requires approval")
+        check(IslandMetrics.requiresApproval("access_request"), "access_request requires approval")
+        check(!IslandMetrics.requiresApproval("progress"), "progress does not require approval")
+        check(!IslandMetrics.requiresApproval("idle"), "idle does not require approval")
+
+        // -- Approval variance
+
+        check(
+            ApprovalVariance(rawValue: "yes-no") == .yesNo,
+            "variance yes-no decodes")
+        check(
+            ApprovalVariance(rawValue: "choices") == .choices,
+            "variance choices decodes")
+        check(
+            ApprovalVariance(rawValue: "multi") == .multi,
+            "variance multi decodes")
+        let noVariance = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: nil, workspaceId: nil, variance: nil, choices: nil,
+            playSound: true, persistent: true)
+        check(
+            noVariance.effectiveVariance == .yesNo,
+            "nil variance defaults to yes-no")
+        let multiEvent = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: "w3:p3", workspaceId: "w3", variance: .multi,
+            choices: ["a", "b"], playSound: true, persistent: true)
+        check(
+            multiEvent.effectiveVariance == .multi && multiEvent.choices?.count == 2,
+            "multi variance carries choices")
+
         // -- Hover state machine (invariant 10-11)
 
         check(
@@ -347,6 +391,91 @@ struct LogicCheckMain {
         check(
             abs(fracW.midX - 1367 / 2) <= midXTol,
             "fractional screen centered (midX diff=\(abs(fracW.midX - 1367/2)))")
+
+        // MARK: - Adversarial (spec-driven: try to break)
+
+        // A1. Status pollution: whitespace/case is not a known status -> no event, no crash.
+        var advSeen: [String: AgentEventKind] = [:]
+        let weirdStatus = AgentEventManager.update(
+            from: [agent("kilo", "Working ", pane: "ad:p1")],
+            lastSeenKinds: &advSeen,
+            current: nil)
+        check(weirdStatus.events.isEmpty && weirdStatus.roster.isEmpty,
+              "A1 status 'Working ' treated unknown (no event, no crash)")
+
+        // A2. Storm: 100 alternating working/blocked flips emit exactly one per round.
+        var storm: [String: AgentEventKind] = [:]
+        var stormCurrent: AgentEvent?
+        var stormFlips = 0
+        for i in 0..<100 {
+            let status = (i % 2 == 0) ? "working" : "blocked"
+            let out = AgentEventManager.update(
+                from: [agent("storm", status, pane: "w3:p3")],
+                lastSeenKinds: &storm,
+                current: stormCurrent)
+            let mine = out.events.filter { $0.paneId == "w3:p3" }
+            check(mine.count <= 1, "storm \(i): at most one event per flip (got \(mine.count))")
+            if let event = mine.first { stormCurrent = event; stormFlips += 1 }
+        }
+        check(stormFlips == 100, "A2 storm: one emission per flip (got \(stormFlips))")
+        check(stormCurrent?.kind == .accessRequest, "A2 storm ends on blocked")
+        check(stormCurrent?.playSound == true, "A2 storm blocked plays sound")
+
+        // A3. Sharded source (same agent name, two panes); one pane vanishes.
+        var advShard: [String: AgentEventKind] = [:]
+        _ = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "p1"),
+                agent("kilo", "working", pane: "p2"),
+            ],
+            lastSeenKinds: &advShard,
+            current: nil)
+        let partial = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "p2")],
+            lastSeenKinds: &advShard,
+            current: nil)
+        check(!partial.roster.contains { $0.paneId == "p1" },
+              "A3 dead pane vanishes from roster: \(partial.roster.map(\.paneId))")
+        let revival = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "p1"),
+                agent("kilo", "working", pane: "p2"),
+            ],
+            lastSeenKinds: &advShard,
+            current: nil)
+        check(
+            revival.events.allSatisfy { $0.playSound == false },
+            "A3 resurrected pane re-appears silently (no ding)")
+        check(
+            !revival.events.contains(where: { $0.kind == .accessRequest }),
+            "A3 resurrected pane never escalates to approval")
+
+        // A4. Degenerate geometry.
+        check(IslandMetrics.topInset(safeTop: -5, menuBarHeight: 32) == 32,
+              "A4 negative safe top falls back to menu bar height")
+        let tiny = IslandMetrics.windowFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 400, height: 300), size: ws, scale: 1)
+        check(tiny.minX >= 0 && tiny.minY >= 0,
+              "A4 400x300 screen: window origin non-negative (min=\(tiny.minX),\(tiny.minY))")
+        let pixelScale: CGFloat = 8
+        let dbgGrid = IslandMetrics.windowFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 1536, height: 960), size: ws, scale: pixelScale)
+        check((dbgGrid.minX * pixelScale).rounded() == dbgGrid.minX * pixelScale
+                && (dbgGrid.minY * pixelScale).rounded() == dbgGrid.minY * pixelScale,
+              "A4 grid aligned at scale 8")
+        let overwideNotch = IslandMetrics.notchWidth(
+            screenWidth: 400, auxLeft: 300, auxRight: 300, safeTop: 0)
+        check(overwideNotch <= IslandMetrics.expandedWidth,
+              "A4 aux-headed notch clamps below expandedWidth (got \(overwideNotch))")
+
+        // A5. Choices variance without a choices array must not crash or hang.
+        let hungryVariance = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: "p9", workspaceId: "w9", variance: .choices, choices: nil,
+            playSound: true, persistent: true)
+        check(
+            hungryVariance.effectiveVariance == .choices || hungryVariance.effectiveVariance == .yesNo,
+            "A5 choices variance w/o options decodes safely")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

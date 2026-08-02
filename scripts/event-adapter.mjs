@@ -53,6 +53,8 @@ const payload = {
   message: stateLabels[0] || data.custom_status || null,
   paneId: data.pane_id || null,
   workspaceId: data.workspace_id || null,
+  variance: data.variance || null,
+  choices: data.choices || data.options || null,
 };
 
 try {

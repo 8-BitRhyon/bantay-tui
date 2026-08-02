@@ -34,7 +34,14 @@ pill's size around its center.
 
 - Window: fixed `504 × 560` pt (`IslandMetrics.windowSize()`), centered via
   `IslandMetrics.windowFrame(screenFrame:size:scale:)`, aligned to the backing
-  pixel grid.
+  pixel grid. The window is created **hidden**: it appears only when there is
+  content to show (a current event or at least one agent) and hides when the
+  roster empties and no event is pending. This matches the studied notch-app
+  behavior at idle/login-launch — BoringNotch collapses the closed notch to
+  zero height when hidden, NotchDrop fades the closed notch out after 0.5 s and
+  stays invisible when launched at login, and NotchNook degrades to a small
+  handler on notchless screens. Nothing sits in the middle of the menu bar at
+  Mac startup with nothing to report.
 - Content: `ZStack` centered in the window; pill frame
   `width: closed 227 | expanded 456`, height per state, spring-animated with
   `withAnimation`.
@@ -43,6 +50,16 @@ pill's size around its center.
 - Hover cooldown 150 ms; hover scale 1.02 (closed) / 1.012 (expanded),
   anchored `.top` (Notchly parity).
 - `prefers-reduced-motion`: `.linear(duration: 0.1)`, no spring, no bounce.
+- Hover-exit collapses the island (unless a prompt is being composed).
+- Approval ("Need approval") events show inline actions that drive the agent's
+  terminal via `herdr agent send-keys`, with UI driven by the event's `variance`
+  field:
+  - `yes-no` (or absent): Approve (✓ "y" + Enter) / Deny (✗ "n" + Enter) / Focus.
+  - `choices` + `choices` array: numbered buttons (1, 2, 3…) that send the
+    1-based index + Enter. Falls back to Approve if `choices` is empty.
+  - `multi` + `choices` array: toggle buttons per option (green when selected)
+    plus a Submit button that sends comma-joined 1-based indices (e.g.
+    `1,3` + Enter); toggling off deselects. Focus is always available.
 
 ## Invariants (tested)
 
@@ -69,6 +86,19 @@ pill's size around its center.
     closed state; expanded roster header still shows the event title.
 14. **Composing survives roster churn** unless the composing agent's pane
     disappears.
+15. **Hover-exit collapse**: leaving the island collapses it unless a prompt
+    is mid-compose.
+16. **Approval actions**: `accessRequest` events render variance-specific
+     controls bound to the agent's pane: yes-no → Approve/Deny; choices →
+     numbered buttons; multi → toggle + Submit.
+17. **Approval variance**: `variance` (`yes-no`/`choices`/`multi`) and
+     `choices` array are parsed from the JSONL event payload; nil variance
+     defaults to yes-no.
+18. **Idle-hidden**: the island is invisible at launch and whenever there is no
+     content; it appears only when `currentEvent != nil` or the roster is
+     non-empty, via `AppDelegate.showAtNotch()`, and hides again via
+     `AppDelegate.hide()` once both are empty. Visibility is re-evaluated on
+     appear, event change, and roster change.
 
 ## Edge cases
 

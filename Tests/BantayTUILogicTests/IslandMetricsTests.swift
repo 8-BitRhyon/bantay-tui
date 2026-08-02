@@ -80,6 +80,17 @@ struct IslandMetricsGeometryTests {
         #expect(!IslandMetrics.shouldCollapse(isExpanded: false, hasAgents: false))
     }
 
+    @Test("hover-out collapse and approval")
+    func hoverOutCollapseAndApproval() {
+        #expect(!IslandMetrics.shouldCollapseOnHoverExit(isExpanded: false, isComposing: false))
+        #expect(IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: false))
+        #expect(!IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: true))
+        #expect(IslandMetrics.requiresApproval("accessRequest"))
+        #expect(IslandMetrics.requiresApproval("access_request"))
+        #expect(!IslandMetrics.requiresApproval("progress"))
+        #expect(!IslandMetrics.requiresApproval("idle"))
+    }
+
     @Test("morph style")
     func morphStyle() {
         #expect(IslandMetrics.morphStyle(reduceMotion: true) == .linear)
