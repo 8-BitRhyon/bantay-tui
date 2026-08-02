@@ -131,13 +131,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window?.orderOut(nil)
     }
 
+    /// A small pill-ish template icon. SF Symbols like `macbook.and.chevron.down`
+    /// are missing on some macOS versions, and a nil image on the status button
+    /// renders as an invisible menu trigger — so draw the icon ourselves so the
+    /// menu bar button is always visible.
+    @MainActor
+    private static func makeTrayIconImage() -> NSImage {
+        if let symbol = NSImage(
+            systemSymbolName: "chevron.down", accessibilityDescription: "Bantay-TUI")
+        {
+            return symbol
+        }
+        let icon = NSImage(size: NSSize(width: 18, height: 18))
+        icon.lockFocus()
+        let pill = NSBezierPath(
+            roundedRect: NSRect(x: 4, y: 7, width: 10, height: 7), xRadius: 3, yRadius: 3)
+        NSColor.labelColor.setFill()
+        pill.fill()
+        let arrow = NSBezierPath()
+        arrow.move(to: NSPoint(x: 9, y: 4))
+        arrow.line(to: NSPoint(x: 6, y: 6))
+        arrow.line(to: NSPoint(x: 12, y: 6))
+        arrow.close()
+        arrow.fill()
+        icon.unlockFocus()
+        icon.isTemplate = true
+        return icon
+    }
+
     @MainActor
     private func installMenuBar() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(
-                systemSymbolName: "macbook.and.chevron.down",
-                accessibilityDescription: "Bantay-TUI")
+            button.image = Self.makeTrayIconImage()
             button.image?.isTemplate = true
         }
         let menu = NSMenu()
