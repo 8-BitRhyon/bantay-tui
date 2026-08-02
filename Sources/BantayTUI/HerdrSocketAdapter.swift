@@ -49,6 +49,36 @@ final class HerdrSocketAdapter: Sendable {
         _ = runHerdr(["agent", "prompt", paneId, text], timeout: 1.0)
     }
 
+    /// Sends raw key presses to an agent's terminal. Works without focus.
+    func sendKeys(paneId: String, keys: [String]) {
+        var arguments = ["agent", "send-keys", paneId]
+        arguments.append(contentsOf: keys)
+        _ = runHerdr(arguments, timeout: 1.0)
+    }
+
+    /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter).
+    func approve(paneId: String) {
+        sendKeys(paneId: paneId, keys: ["y", "enter"])
+    }
+
+    /// Denies a yes-no "Need approval" prompt (e.g. "n" + Enter).
+    func deny(paneId: String) {
+        sendKeys(paneId: paneId, keys: ["n", "enter"])
+    }
+
+    /// Responds to a single-choice (choices) prompt by sending the 1-based
+    /// option index followed by Enter.
+    func approveChoice(paneId: String, choice: Int) {
+        sendKeys(paneId: paneId, keys: [String(choice), "enter"])
+    }
+
+    /// Responds to a multi-select prompt by sending the comma-joined,
+    /// 1-based option indices followed by Enter (e.g. "1,3" + Enter).
+    func approveMulti(paneId: String, selections: [Int]) {
+        let joined = selections.map(String.init).joined(separator: ",")
+        sendKeys(paneId: paneId, keys: [joined, "enter"])
+    }
+
     func spawnAgentWait(paneId: String, statuses: [String]) -> Process? {
         guard let url = herdrExecutableURL() else { return nil }
         var arguments = ["agent", "wait", paneId]
