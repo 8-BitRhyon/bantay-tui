@@ -226,7 +226,7 @@ struct LogicCheckMain {
 
         check(IslandMetrics.expandedWidth == 456, "expandedWidth 456")
         check(IslandMetrics.maxExpandedHeight == 560, "maxExpandedHeight 560")
-        check(IslandMetrics.hoverCooldown == 0.15, "hoverCooldown 0.15")
+        check(IslandMetrics.hoverCooldown == 0.22, "hoverCooldown 0.22")
         check(IslandMetrics.notchlessFallbackWidth == 211, "notchlessFallbackWidth 211")
         check(IslandMetrics.cornerRadius(expanded: true) == 24, "expanded cornerRadius 24")
         check(IslandMetrics.cornerRadius(expanded: false) == 8, "closed cornerRadius 8")
@@ -400,8 +400,9 @@ struct LogicCheckMain {
             from: [agent("kilo", "Working ", pane: "ad:p1")],
             lastSeenKinds: &advSeen,
             current: nil)
-        check(weirdStatus.events.isEmpty && weirdStatus.roster.isEmpty,
-              "A1 status 'Working ' treated unknown (no event, no crash)")
+        check(
+            weirdStatus.events.isEmpty && weirdStatus.roster.isEmpty,
+            "A1 status 'Working ' treated unknown (no event, no crash)")
 
         // A2. Storm: 100 alternating working/blocked flips emit exactly one per round.
         var storm: [String: AgentEventKind] = [:]
@@ -415,7 +416,10 @@ struct LogicCheckMain {
                 current: stormCurrent)
             let mine = out.events.filter { $0.paneId == "w3:p3" }
             check(mine.count <= 1, "storm \(i): at most one event per flip (got \(mine.count))")
-            if let event = mine.first { stormCurrent = event; stormFlips += 1 }
+            if let event = mine.first {
+                stormCurrent = event
+                stormFlips += 1
+            }
         }
         check(stormFlips == 100, "A2 storm: one emission per flip (got \(stormFlips))")
         check(stormCurrent?.kind == .accessRequest, "A2 storm ends on blocked")
@@ -434,8 +438,9 @@ struct LogicCheckMain {
             from: [agent("kilo", "working", pane: "p2")],
             lastSeenKinds: &advShard,
             current: nil)
-        check(!partial.roster.contains { $0.paneId == "p1" },
-              "A3 dead pane vanishes from roster: \(partial.roster.map(\.paneId))")
+        check(
+            !partial.roster.contains { $0.paneId == "p1" },
+            "A3 dead pane vanishes from roster: \(partial.roster.map(\.paneId))")
         let revival = AgentEventManager.update(
             from: [
                 agent("kilo", "working", pane: "p1"),
@@ -451,22 +456,26 @@ struct LogicCheckMain {
             "A3 resurrected pane never escalates to approval")
 
         // A4. Degenerate geometry.
-        check(IslandMetrics.topInset(safeTop: -5, menuBarHeight: 32) == 32,
-              "A4 negative safe top falls back to menu bar height")
+        check(
+            IslandMetrics.topInset(safeTop: -5, menuBarHeight: 32) == 32,
+            "A4 negative safe top falls back to menu bar height")
         let tiny = IslandMetrics.windowFrame(
             screenFrame: CGRect(x: 0, y: 0, width: 400, height: 300), size: ws, scale: 1)
-        check(tiny.minX >= 0 && tiny.minY >= 0,
-              "A4 400x300 screen: window origin non-negative (min=\(tiny.minX),\(tiny.minY))")
+        check(
+            tiny.minX >= 0 && tiny.minY >= 0,
+            "A4 400x300 screen: window origin non-negative (min=\(tiny.minX),\(tiny.minY))")
         let pixelScale: CGFloat = 8
         let dbgGrid = IslandMetrics.windowFrame(
             screenFrame: CGRect(x: 0, y: 0, width: 1536, height: 960), size: ws, scale: pixelScale)
-        check((dbgGrid.minX * pixelScale).rounded() == dbgGrid.minX * pixelScale
+        check(
+            (dbgGrid.minX * pixelScale).rounded() == dbgGrid.minX * pixelScale
                 && (dbgGrid.minY * pixelScale).rounded() == dbgGrid.minY * pixelScale,
-              "A4 grid aligned at scale 8")
+            "A4 grid aligned at scale 8")
         let overwideNotch = IslandMetrics.notchWidth(
             screenWidth: 400, auxLeft: 300, auxRight: 300, safeTop: 0)
-        check(overwideNotch <= IslandMetrics.expandedWidth,
-              "A4 aux-headed notch clamps below expandedWidth (got \(overwideNotch))")
+        check(
+            overwideNotch <= IslandMetrics.expandedWidth,
+            "A4 aux-headed notch clamps below expandedWidth (got \(overwideNotch))")
 
         // A5. Choices variance without a choices array must not crash or hang.
         let hungryVariance = AgentEvent(
@@ -474,7 +483,8 @@ struct LogicCheckMain {
             paneId: "p9", workspaceId: "w9", variance: .choices, choices: nil,
             playSound: true, persistent: true)
         check(
-            hungryVariance.effectiveVariance == .choices || hungryVariance.effectiveVariance == .yesNo,
+            hungryVariance.effectiveVariance == .choices
+                || hungryVariance.effectiveVariance == .yesNo,
             "A5 choices variance w/o options decodes safely")
 
         // L1. Lifecycle controls (plan 001): islandEnabled + snooze persistence.
@@ -526,6 +536,41 @@ struct LogicCheckMain {
         check(!LaunchAgent.isInstalled, "L2 removed plist not detected")
         LaunchAgent.plistPath = oldPath
         LaunchAgent.processRunner = oldRunner
+
+        // L3. Idle dock placement (UX fix): side-of-notch geometry + persistence.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.islandDockSide
+            check(
+                cfg.islandDockSide == .right || cfg.islandDockSide == .center,
+                "L3 dock default is a valid side or center (got \(cfg.islandDockSide.rawValue))")
+            cfg.islandDockSide = .left
+            check(
+                defaults.string(forKey: "islandDockSide") == "left",
+                "L3 dock side persisted")
+            cfg.islandDockSide = orig
+            defaults.removeObject(forKey: "islandDockSide")
+        }
+        check(
+            IslandMetrics.idleChipWidth > 0
+                && IslandMetrics.idleChipWidth < IslandMetrics.expandedWidth,
+            "L3 idle chip is compact (got \(IslandMetrics.idleChipWidth))")
+        check(
+            IslandMetrics.hoverCooldown >= 0.2,
+            "L3 hover cooldown long enough to cut accidental expansion (got \(IslandMetrics.hoverCooldown))"
+        )
+        let shift = IslandMetrics.dockOffset(side: .right, notchWidth: 190, chipWidth: 120)
+        check(
+            abs(shift - (190 / 2 + IslandMetrics.dockGap + 120 / 2)) < 0.001,
+            "L3 right-dock shift math (got \(shift))")
+        check(
+            abs(IslandMetrics.dockOffset(side: .left, notchWidth: 190, chipWidth: 120)) == shift,
+            "L3 left/right dock symmetric")
+        let dockedShownBounds = 252 + shift + 120 / 2
+        check(
+            dockedShownBounds <= IslandMetrics.windowSize().width,
+            "L3 idle chip stays on-window when docked (right edge \(dockedShownBounds))")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

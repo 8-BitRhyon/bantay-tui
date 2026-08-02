@@ -17,7 +17,7 @@ struct IslandMetricsGeometryTests {
     func constants() {
         #expect(IslandMetrics.expandedWidth == 456)
         #expect(IslandMetrics.maxExpandedHeight == 560)
-        #expect(IslandMetrics.hoverCooldown == 0.15)
+        #expect(IslandMetrics.hoverCooldown == 0.22)
         #expect(IslandMetrics.notchlessFallbackWidth == 211)
         #expect(IslandMetrics.cornerRadius(expanded: true) == 24)
         #expect(IslandMetrics.cornerRadius(expanded: false) == 8)

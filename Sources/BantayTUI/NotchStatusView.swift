@@ -21,10 +21,27 @@ struct NotchStatusView: View {
 
     private var topInset: CGFloat { AppDelegate.topInset }
 
+    private var hasTransientEvent: Bool { eventManager.currentEvent != nil }
+
+    private var closedPillWidth: CGFloat {
+        let full = min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
+        return hasTransientEvent ? full : min(full, IslandMetrics.idleChipWidth)
+    }
+
     private var islandWidth: CGFloat {
         isExpanded
             ? IslandMetrics.expandedWidth
-            : min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
+            : closedPillWidth
+    }
+
+    /// Idle placement: slide the closed chip beside the notch (left/right) or
+    /// keep it centered underneath it. Active events center the pill.
+    private var islandOffsetX: CGFloat {
+        guard !isExpanded, !hasTransientEvent else { return 0 }
+        return IslandMetrics.dockOffset(
+            side: NotchHUDConfig.shared.islandDockSide,
+            notchWidth: AppDelegate.notchWidth,
+            chipWidth: closedPillWidth)
     }
 
     private var islandHeight: CGFloat {
@@ -74,6 +91,8 @@ struct NotchStatusView: View {
             height: IslandMetrics.windowSize().height,
             alignment: .top
         )
+        .offset(x: islandOffsetX)
+        .animation(morphAnimation, value: isExpanded)
         .background(Color.clear.allowsHitTesting(false))
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)

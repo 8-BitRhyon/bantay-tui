@@ -9,6 +9,14 @@ public enum IslandMorphStyle: Sendable {
 }
 
 public enum IslandMetrics: Sendable {
+    /// Where the island parks when idle (closed): beside the notch or centered
+    /// underneath it.
+    public enum IslandDockSide: String, Sendable {
+        case center
+        case left
+        case right
+    }
+
     // MARK: - Constants
     public static let expandedWidth: CGFloat = 456
     public static let closedCornerRadius: CGFloat = 8
@@ -18,7 +26,9 @@ public enum IslandMetrics: Sendable {
     public static let rowHeight: CGFloat = 26
     public static let contentSpacing: CGFloat = 10
     public static let maxExpandedHeight: CGFloat = 560
-    public static let hoverCooldown: TimeInterval = 0.15
+    public static let hoverCooldown: TimeInterval = 0.22
+    public static let idleChipWidth: CGFloat = 120
+    public static let dockGap: CGFloat = 8
     public static let notchlessFallbackWidth: CGFloat = 211
     public static let morphDuration: TimeInterval = 0.42
     public static let hoverBounceClosed: CGFloat = 1.02
@@ -113,6 +123,16 @@ public enum IslandMetrics: Sendable {
 
     public static func shouldCollapse(isExpanded: Bool, hasAgents: Bool) -> Bool {
         isExpanded && !hasAgents
+    }
+
+    /// Horizontal shift (in window points) to dock the closed chip beside the
+    /// notch instead of under it. Positive shifts right, negative left.
+    public static func dockOffset(
+        side: IslandDockSide, notchWidth: CGFloat, chipWidth: CGFloat
+    ) -> CGFloat {
+        guard side != .center else { return 0 }
+        let shift = notchWidth / 2 + dockGap + chipWidth / 2
+        return side == .left ? -shift : shift
     }
 
     /// Collapse on hover-exit unless the user is mid-prompt (composing).

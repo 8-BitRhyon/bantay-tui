@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LaunchAgent.isLoaded()
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
     @State private var muteInTerminal = NotchHUDConfig.shared.muteInTerminal
+    @State private var dockSide = NotchHUDConfig.shared.islandDockSide.rawValue
 
     var body: some View {
         Form {
@@ -79,6 +80,17 @@ struct SettingsView: View {
                     .onChange(of: hideAtStartup) { _, newValue in
                         NotchHUDConfig.shared.hideAtStartup = newValue
                     }
+                Picker("Idle position", selection: $dockSide) {
+                    Text("Right of notch").tag("right")
+                    Text("Left of notch").tag("left")
+                    Text("Center").tag("center")
+                }
+                .onChange(of: dockSide) { _, newValue in
+                    NotchHUDConfig.shared.islandDockSide =
+                        IslandMetrics.IslandDockSide(rawValue: newValue) ?? .right
+                    NotificationCenter.default.post(
+                        name: .notchVisibilityChanged, object: nil)
+                }
             }
             Section {
                 Button("Show Welcome…") {
