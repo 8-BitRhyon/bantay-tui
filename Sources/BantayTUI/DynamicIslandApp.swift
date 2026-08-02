@@ -338,7 +338,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     @objc private func openSettings() {
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        let settingsWindow =
+            (NSApp.windows.first { $0.title == "Bantay-TUI Settings" })
+            ?? makeSettingsWindow()
+        settingsWindow.center()
+        settingsWindow.makeKeyAndOrderFront(nil)
+    }
+
+    @MainActor
+    private func makeSettingsWindow() -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false)
+        window.title = "Bantay-TUI Settings"
+        window.contentViewController = NSHostingController(rootView: SettingsView())
+        window.isReleasedWhenClosed = false
+        return window
     }
 
     @MainActor
