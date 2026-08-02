@@ -28,7 +28,7 @@ public enum IslandMetrics: Sendable {
     public static let maxExpandedHeight: CGFloat = 560
     public static let hoverCooldown: TimeInterval = 0.22
     public static let idleChipWidth: CGFloat = 120
-    public static let dockGap: CGFloat = 8
+    public static let dockGap: CGFloat = 0
     public static let notchlessFallbackWidth: CGFloat = 211
     public static let morphDuration: TimeInterval = 0.42
     public static let hoverBounceClosed: CGFloat = 1.02
@@ -133,6 +133,15 @@ public enum IslandMetrics: Sendable {
         guard side != .center else { return 0 }
         let shift = notchWidth / 2 + dockGap + chipWidth / 2
         return side == .left ? -shift : shift
+    }
+
+    /// How far down (from the window's top edge) the island content sits.
+    /// Docked idle chips sit flush in the notch row (0); the expanded panel and
+    /// the "center" idle mode drop under the menu bar, like BoringNotch.
+    public static func effectiveTopOffset(
+        side: IslandDockSide, isExpanded: Bool, topInset: CGFloat
+    ) -> CGFloat {
+        isExpanded ? topInset : (side == .center ? topInset : 0)
     }
 
     /// Collapse on hover-exit unless the user is mid-prompt (composing).

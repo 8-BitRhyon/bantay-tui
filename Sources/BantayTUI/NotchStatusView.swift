@@ -19,7 +19,13 @@ struct NotchStatusView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let adapter = HerdrSocketAdapter()
 
-    private var topInset: CGFloat { AppDelegate.topInset }
+    /// Docked idle chips sit flush in the notch row; only expanded/center drop
+    /// below the menu bar. Matches the BoringNotch idle look.
+    private var chipTopOffset: CGFloat {
+        IslandMetrics.effectiveTopOffset(
+            side: NotchHUDConfig.shared.islandDockSide, isExpanded: isExpanded,
+            topInset: AppDelegate.topInset)
+    }
 
     private var hasTransientEvent: Bool { eventManager.currentEvent != nil }
 
@@ -46,14 +52,16 @@ struct NotchStatusView: View {
 
     private var islandHeight: CGFloat {
         isExpanded
-            ? IslandMetrics.expandedSize(topInset: topInset, agentCount: eventManager.agents.count)
-                .height
-            : IslandMetrics.closedSize(topInset: topInset, notchWidth: islandWidth).height
+            ? IslandMetrics.expandedSize(
+                topInset: chipTopOffset, agentCount: eventManager.agents.count
+            ).height
+            : IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
     }
 
     private var contentHeight: CGFloat {
         IslandMetrics.contentHeight(
-            isExpanded: isExpanded, topInset: topInset, agentCount: eventManager.agents.count)
+            isExpanded: isExpanded, topInset: chipTopOffset,
+            agentCount: eventManager.agents.count)
     }
 
     private var cornerRad: CGFloat { IslandMetrics.cornerRadius(expanded: isExpanded) }
@@ -78,7 +86,7 @@ struct NotchStatusView: View {
             islandBackground
             content
                 .frame(width: islandWidth, height: contentHeight, alignment: .top)
-                .offset(y: topInset)
+                .offset(y: chipTopOffset)
         }
         .scaleEffect(activeHoverScale, anchor: .top)
         .frame(width: islandWidth + cornerRad * 2, height: islandHeight, alignment: .top)

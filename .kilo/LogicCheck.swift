@@ -572,6 +572,29 @@ struct LogicCheckMain {
             dockedShownBounds <= IslandMetrics.windowSize().width,
             "L3 idle chip stays on-window when docked (right edge \(dockedShownBounds))")
 
+        // L4. Idle chip sits IN the notch row (flush at the top edge), not below
+        // the menu bar — matches the BoringNotch look. Only expansion or the
+        // center mode drop under the notch.
+        check(
+            IslandMetrics.dockGap == 0,
+            "L4 idle chip is flush against the notch side (got gap \(IslandMetrics.dockGap))")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .right, isExpanded: false, topInset: 47) == 0,
+            "L4 right-dock idle chip sits at the notch level (top inset 0)")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .left, isExpanded: false, topInset: 47) == 0,
+            "L4 left-dock idle chip sits at the notch level (top inset 0)")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .center, isExpanded: false, topInset: 47) == 47,
+            "L4 center idle mode keeps dropping under the notch")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .right, isExpanded: true, topInset: 47) == 47,
+            "L4 expanded panel keeps dropping under the menu bar")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
