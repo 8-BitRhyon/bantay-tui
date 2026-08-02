@@ -83,6 +83,11 @@ struct NotchStatusView: View {
         }
         .onChange(of: eventManager.currentEvent) { handleEventChange() }
         .onChange(of: eventManager.agents) { handleAgentsChange() }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchVisibilityChanged)
+        ) { _ in
+            updateIslandVisibility()
+        }
     }
 
     // MARK: - Island chrome
@@ -479,7 +484,10 @@ struct NotchStatusView: View {
     }
 
     private func updateIslandVisibility() {
-        if eventManager.currentEvent != nil || !eventManager.agents.isEmpty {
+        let config = NotchHUDConfig.shared
+        if config.islandEnabled && !config.isSnoozed,
+            eventManager.currentEvent != nil || !eventManager.agents.isEmpty
+        {
             AppDelegate.showAtNotch()
         } else {
             AppDelegate.hide()

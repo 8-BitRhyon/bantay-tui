@@ -32,6 +32,17 @@ final class NotchHUDConfig {
     var muteInTerminal: Bool = true {
         didSet { defaults.set(muteInTerminal, forKey: "muteInTerminal") }
     }
+    var islandEnabled = true {
+        didSet { defaults.set(islandEnabled, forKey: "islandEnabled") }
+    }
+    var snoozedUntil: Date? {
+        didSet { defaults.set(snoozedUntil, forKey: "snoozedUntil") }
+    }
+
+    var isSnoozed: Bool {
+        guard let snoozedUntil else { return false }
+        return snoozedUntil.timeIntervalSinceNow > 0
+    }
 
     private let defaults = UserDefaults.standard
 
@@ -62,6 +73,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "muteInTerminal") as? NSNumber {
             muteInTerminal = v.boolValue
+        }
+        if let v = defaults.object(forKey: "islandEnabled") as? Bool {
+            islandEnabled = v
+        }
+        if let v = defaults.object(forKey: "snoozedUntil") as? Date {
+            snoozedUntil = v
         }
     }
 }

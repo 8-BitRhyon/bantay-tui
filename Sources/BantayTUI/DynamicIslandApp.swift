@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
+}
+
 @main
 struct DynamicIslandApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -178,6 +182,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let config = NotchHUDConfig.shared
+        let disableItem = NSMenuItem(
+            title: config.islandEnabled ? "Disable Island" : "Enable Island",
+            action: #selector(toggleIslandEnabled),
+            keyEquivalent: "")
+        disableItem.target = self
+        menu.addItem(disableItem)
+
+        let snoozeItem = NSMenuItem(
+            title: config.isSnoozed ? "Snooze active" : "Snooze 10 minutes",
+            action: #selector(snoozeIsland),
+            keyEquivalent: "")
+        snoozeItem.target = self
+        snoozeItem.state = config.isSnoozed ? .on : .off
+        menu.addItem(snoozeItem)
+
+        let restartItem = NSMenuItem(
+            title: "Restart pipeline",
+            action: #selector(restartPipeline),
+            keyEquivalent: "")
+        restartItem.target = self
+        menu.addItem(restartItem)
+
+        menu.addItem(.separator())
+
         #if DEBUG
             let testItem = NSMenuItem(
                 title: "Test Alert",
@@ -226,6 +255,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let config = NotchHUDConfig.shared
         config.enableAgentAlerts.toggle()
         sender.state = config.enableAgentAlerts ? .on : .off
+    }
+
+    @MainActor
+    @objc private func toggleIslandEnabled() {
+        let config = NotchHUDConfig.shared
+        config.islandEnabled.toggle()
+        NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+    }
+
+    @MainActor
+    @objc private func snoozeIsland() {
+        let config = NotchHUDConfig.shared
+        if config.isSnoozed {
+            config.snoozedUntil = nil
+        } else {
+            config.snoozedUntil = Date().addingTimeInterval(600)
+        }
+        NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+    }
+
+    @MainActor
+    @objc private func restartPipeline() {
+        AgentEventManager.shared.stopCapture()
+        AgentEventManager.shared.startCapture()
     }
 
     @MainActor

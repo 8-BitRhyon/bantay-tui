@@ -477,6 +477,27 @@ struct LogicCheckMain {
             hungryVariance.effectiveVariance == .choices || hungryVariance.effectiveVariance == .yesNo,
             "A5 choices variance w/o options decodes safely")
 
+        // L1. Lifecycle controls (plan 001): islandEnabled + snooze persistence.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            check(cfg.islandEnabled, "L1 default: island enabled")
+            check(!cfg.isSnoozed, "L1 default: not snoozed")
+            cfg.islandEnabled = false
+            cfg.snoozedUntil = Date().addingTimeInterval(600)
+            check(!cfg.islandEnabled, "L1: island can be disabled")
+            check(cfg.isSnoozed, "L1: snooze within window is active")
+            check(
+                defaults.object(forKey: "islandEnabled") as? Bool == false,
+                "L1: islandEnabled persisted to defaults")
+            cfg.snoozedUntil = Date().addingTimeInterval(-10)
+            check(!cfg.isSnoozed, "L1: expired snooze is inactive")
+            cfg.islandEnabled = true
+            cfg.snoozedUntil = nil
+            defaults.removeObject(forKey: "islandEnabled")
+            defaults.removeObject(forKey: "snoozedUntil")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

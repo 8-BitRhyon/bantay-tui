@@ -16,7 +16,7 @@ adversarial corpus (`try to break it`) grows with every plan.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 000  | UX research & usability baseline (study write-up) |  -  | M |  -  | DONE |
-| 001  | Lifecycle controls: hide/disable/snooze, quit, restart in menu bar | P1 | S |  -  | TODO |
+| 001  | Lifecycle controls: hide/disable/snooze, quit, restart in menu bar | P1 | S |  -  | DONE |
 | 002  | Real Settings window (replace `EmptyView()`) + onboarding | P1 | M | 001 | TODO |
 | 003  | Auto-update via Sparkle | P2 | M | 002 | TODO |
 | 004  | Clean uninstall (script `--uninstall` + in-app path) | P2 | S |  -  | TODO |
