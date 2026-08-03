@@ -62,6 +62,7 @@ jobs:
             Sources/BantayTUI/UsageTracker.swift \
             Sources/BantayTUI/EventIngestServer.swift \
             Sources/BantayTUI/ShelfModel.swift \
+            Sources/BantayTUI/TerminalFocusser.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check

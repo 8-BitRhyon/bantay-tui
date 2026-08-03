@@ -1505,6 +1505,53 @@ struct LogicCheckMain {
                 isVisible: true, windowFrame: onA, screens: [screenA]),
             "L17 on-screen window needs no re-anchor")
 
+        // L18. Terminal-agnostic focus: bundle-ID registry resolution and
+        // config persistence.
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["com.googlecode.iterm2"]) == "com.googlecode.iterm2",
+            "L18 iTerm2 detected")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["dev.warp.Warp-Stable", "com.apple.Terminal"])
+                == "dev.warp.Warp-Stable",
+            "L18 Warp preferred over Terminal by registry order")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["com.apple.Terminal"]) == "com.apple.Terminal",
+            "L18 Terminal fallback")
+        check(
+            TerminalRegistry.runningTerminal(runningBundleIDs: ["com.foo.Bar"]) == nil,
+            "L18 unknown apps ignored")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["io.alacritty", "com.googlecode.iterm2"],
+                preferred: "com.googlecode.iterm2") == "com.googlecode.iterm2",
+            "L18 explicit preference wins")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["io.alacritty"], preferred: "com.googlecode.iterm2")
+                == "io.alacritty",
+            "L18 unavailable preference falls back to running terminal")
+        check(
+            TerminalRegistry.preferredBundleIDs.contains("com.ghostty.app"),
+            "L18 Ghostty in registry")
+        check(
+            TerminalRegistry.preferredBundleIDs.contains("org.wezfurlong.wezterm"),
+            "L18 WezTerm in registry")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.preferredTerminalBundleID
+            check(cfg.preferredTerminalBundleID == nil, "L18 no terminal preference by default")
+            cfg.preferredTerminalBundleID = "com.ghostty.app"
+            check(
+                defaults.string(forKey: "preferredTerminalBundleID") == "com.ghostty.app",
+                "L18 terminal preference persisted")
+            cfg.preferredTerminalBundleID = orig
+            defaults.removeObject(forKey: "preferredTerminalBundleID")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

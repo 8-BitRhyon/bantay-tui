@@ -34,6 +34,7 @@ struct SettingsView: View {
     @State private var floatingPill = NotchHUDConfig.shared.floatingPillOnNoNotch
     @State private var showInFullScreen = NotchHUDConfig.shared.showInFullScreen
     @State private var avoidMenuBar = NotchHUDConfig.shared.avoidMenuBarIcons
+    @State private var preferredTerminal = NotchHUDConfig.shared.preferredTerminalBundleID ?? ""
 
     var body: some View {
         Form {
@@ -122,6 +123,19 @@ struct SettingsView: View {
                     .onChange(of: avoidMenuBar) { _, newValue in
                         NotchHUDConfig.shared.avoidMenuBarIcons = newValue
                     }
+                Picker("Focus terminal", selection: $preferredTerminal) {
+                    Text("Auto").tag("")
+                    ForEach(TerminalRegistry.preferredBundleIDs, id: \.self) { bundleID in
+                        Text(terminalLabel(bundleID)).tag(bundleID)
+                    }
+                }
+                .help(
+                    "Which terminal 'Force focus' activates (Ghostty, Warp, WezTerm, Alacritty, iTerm2, Terminal, VSCode)."
+                )
+                .onChange(of: preferredTerminal) { _, newValue in
+                    NotchHUDConfig.shared.preferredTerminalBundleID =
+                        newValue.isEmpty ? nil : newValue
+                }
             }
             Section("Alerts") {
                 Toggle("Alert sounds", isOn: $enableAlerts)
@@ -266,6 +280,21 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460, height: 860)
+    }
+
+    private func terminalLabel(_ bundleID: String) -> String {
+        switch bundleID {
+        case "com.ghostty.app": return "Ghostty"
+        case "dev.warp.Warp-Stable": return "Warp"
+        case "org.wezfurlong.wezterm": return "WezTerm"
+        case "io.alacritty": return "Alacritty"
+        case "com.googlecode.iterm2": return "iTerm2"
+        case "com.apple.Terminal": return "Terminal"
+        case "com.microsoft.VSCode": return "VS Code"
+        case "com.microsoft.VSCodeInsiders": return "VS Code Insiders"
+        case "com.jetbrains.intellij": return "IntelliJ IDEA"
+        default: return bundleID
+        }
     }
 }
 

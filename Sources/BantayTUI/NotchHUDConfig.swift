@@ -128,6 +128,9 @@ final class NotchHUDConfig {
     var avoidMenuBarIcons = true {
         didSet { defaults.set(avoidMenuBarIcons, forKey: "avoidMenuBarIcons") }
     }
+    var preferredTerminalBundleID: String? {
+        didSet { defaults.set(preferredTerminalBundleID, forKey: "preferredTerminalBundleID") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -246,6 +249,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "avoidMenuBarIcons") as? Bool {
             avoidMenuBarIcons = v
+        }
+        if let v = defaults.string(forKey: "preferredTerminalBundleID") {
+            preferredTerminalBundleID = v
         }
     }
 }

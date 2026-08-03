@@ -745,6 +745,8 @@ struct NotchStatusView: View {
                     help: "Force focus terminal"
                 ) {
                     adapter.attachPane(paneId: paneId)
+                    TerminalFocusser.focus(
+                        preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
                 }
                 approvalActionButton(
                     systemName: "arrow.clockwise", color: .white.opacity(0.55),
