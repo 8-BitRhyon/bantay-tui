@@ -91,7 +91,7 @@ final class EventIngestServer {
         _ connection: NWConnection, onLine: @escaping @Sendable (String) -> Void
     ) {
         connection.start(queue: .main)
-        var buffer = Data()
+        let buffer = ReceiveBuffer()
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             data, _, isComplete, error in
             if let data {
@@ -101,7 +101,7 @@ final class EventIngestServer {
                 connection.cancel()
                 return
             }
-            guard let request = IngestHTTP.request(from: buffer) else {
+            guard let request = IngestHTTP.request(from: buffer.data) else {
                 connection.cancel()
                 return
             }
@@ -120,5 +120,15 @@ final class EventIngestServer {
                     })
             }
         }
+    }
+}
+
+/// Mutable receive buffer shared with the `@Sendable` receive handler.
+/// A class lets us mutate it without tripping the captured-var warning.
+private final class ReceiveBuffer: @unchecked Sendable {
+    var data = Data()
+
+    func append(_ newData: Data) {
+        data.append(newData)
     }
 }

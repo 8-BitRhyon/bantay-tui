@@ -3,7 +3,7 @@ import Testing
 
 @testable import BantayTUI
 
-@Suite(.serialized, "LaunchAgent logic")
+@Suite("LaunchAgent logic", .serialized)
 struct SettingsLogicTests {
     @Test("plist presence drives isInstalled")
     func plistPresence() {
