@@ -182,6 +182,55 @@ public enum IslandMetrics: Sendable {
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
     }
 
+    // MARK: - Multi-monitor placement
+
+    /// Abstract screen facts the placement logic needs (injected for tests).
+    public struct ScreenInfo: Equatable, Sendable {
+        public let frame: CGRect
+        public let hasNotch: Bool
+        public let containsMouse: Bool
+
+        public init(frame: CGRect, hasNotch: Bool, containsMouse: Bool) {
+            self.frame = frame
+            self.hasNotch = hasNotch
+            self.containsMouse = containsMouse
+        }
+    }
+
+    /// Which screen the island should live on. Prefers the mouse's screen
+    /// when it has a notch; otherwise any notch screen; otherwise falls back
+    /// to the mouse's screen (floating pill, no notch).
+    public static func islandScreen(
+        screens: [ScreenInfo], preferMouseScreen: Bool
+    ) -> ScreenInfo? {
+        guard !screens.isEmpty else { return nil }
+        let mouse = screens.first(where: \.containsMouse)
+        if preferMouseScreen {
+            if let mouse, mouse.hasNotch { return mouse }
+            if let notch = screens.first(where: \.hasNotch) { return notch }
+            return mouse ?? screens.first
+        }
+        return screens.first(where: \.hasNotch) ?? mouse ?? screens.first
+    }
+
+    /// Vertical inset for a floating pill on a notch-less display: below the
+    /// menu bar with a small gap.
+    public static func floatingTopInset(menuBarHeight: CGFloat) -> CGFloat {
+        menuBarHeight + 6
+    }
+
+    /// Centered floating-pill frame on a notch-less screen.
+    public static func floatingPillFrame(
+        screenFrame: CGRect, size: CGSize, menuBarHeight: CGFloat
+    ) -> CGRect {
+        let topInset = floatingTopInset(menuBarHeight: menuBarHeight)
+        return CGRect(
+            x: screenFrame.midX - size.width / 2,
+            y: screenFrame.maxY - topInset - size.height,
+            width: size.width,
+            height: size.height)
+    }
+
     // MARK: - Approval controls (in-UI approvals)
 
     /// Pure description of an approval prompt's interactive surface. The UI

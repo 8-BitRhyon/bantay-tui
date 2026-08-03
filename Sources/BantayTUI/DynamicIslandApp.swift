@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor
     static var notchWidth: CGFloat {
-        guard let screen = window?.screen ?? NSScreen.main else {
+        guard let screen = islandScreen() ?? window?.screen ?? NSScreen.main else {
             return IslandMetrics.notchlessFallbackWidth
         }
         let left = screen.auxiliaryTopLeftArea?.width ?? 0
@@ -57,12 +57,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor
     static var topInset: CGFloat {
-        guard let screen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first else {
+        guard
+            let screen = islandScreen() ?? window?.screen ?? NSScreen.main
+                ?? NSScreen.screens.first
+        else {
             return 0
         }
         let safe = screen.safeAreaInsets.top
         let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
         return IslandMetrics.topInset(safeTop: safe, menuBarHeight: menuBar)
+    }
+
+    /// The screen the island should live on: prefers the notch screen under
+    /// the mouse; falls back to any notch screen; then the mouse's screen as
+    /// a floating pill.
+    @MainActor
+    static func islandScreen() -> NSScreen? {
+        let infos = NSScreen.screens.map { screen in
+            IslandMetrics.ScreenInfo(
+                frame: screen.frame,
+                hasNotch: screen.auxiliaryTopLeftArea != nil
+                    || screen.auxiliaryTopRightArea != nil,
+                containsMouse: screen.frame.contains(NSEvent.mouseLocation))
+        }
+        guard
+            let chosen = IslandMetrics.islandScreen(
+                screens: infos, preferMouseScreen: NotchHUDConfig.shared.followMouseScreen)
+        else {
+            return NSScreen.main ?? NSScreen.screens.first
+        }
+        return NSScreen.screens.first { $0.frame == chosen.frame }
+            ?? NSScreen.main ?? NSScreen.screens.first
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -117,11 +142,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @MainActor
     static func islandFrame(on screen: NSScreen?, size: CGSize) -> NSRect {
-        guard let screen = screen ?? NSScreen.main ?? NSScreen.screens.first else {
+        let target = screen ?? islandScreen() ?? NSScreen.main ?? NSScreen.screens.first
+        guard let target else {
             return NSRect(origin: .zero, size: size)
         }
+        let hasNotch =
+            target.auxiliaryTopLeftArea != nil
+            || target.auxiliaryTopRightArea != nil
+        if !hasNotch, NotchHUDConfig.shared.floatingPillOnNoNotch {
+            let menuBar = target.frame.maxY - target.visibleFrame.maxY
+            return IslandMetrics.floatingPillFrame(
+                screenFrame: target.frame, size: size, menuBarHeight: menuBar)
+        }
         return IslandMetrics.windowFrame(
-            screenFrame: screen.frame, size: size, scale: screen.backingScaleFactor)
+            screenFrame: target.frame, size: size, scale: target.backingScaleFactor)
     }
 
     private func observeScreenChanges() {

@@ -30,6 +30,8 @@ struct SettingsView: View {
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
     @State private var showShelf = NotchHUDConfig.shared.showShelfTab
     @State private var shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
+    @State private var followMouse = NotchHUDConfig.shared.followMouseScreen
+    @State private var floatingPill = NotchHUDConfig.shared.floatingPillOnNoNotch
 
     var body: some View {
         Form {
@@ -93,6 +95,18 @@ struct SettingsView: View {
                 Stepper("Shelf limit: \(shelfLimit)", value: $shelfLimit, in: 1...50)
                     .onChange(of: shelfLimit) { _, newValue in
                         NotchHUDConfig.shared.shelfLimit = newValue
+                    }
+            }
+            Section("Displays") {
+                Toggle("Follow mouse screen", isOn: $followMouse)
+                    .help("Island moves to the notch on the display under the cursor.")
+                    .onChange(of: followMouse) { _, newValue in
+                        NotchHUDConfig.shared.followMouseScreen = newValue
+                    }
+                Toggle("Floating pill without notch", isOn: $floatingPill)
+                    .help("External displays/clamshell get a centered pill below the menu bar.")
+                    .onChange(of: floatingPill) { _, newValue in
+                        NotchHUDConfig.shared.floatingPillOnNoNotch = newValue
                     }
             }
             Section("Alerts") {
@@ -237,7 +251,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 780)
+        .frame(width: 460, height: 860)
     }
 }
 

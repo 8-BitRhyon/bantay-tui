@@ -1276,6 +1276,70 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "shelfLimit")
         }
 
+        // L12. Multi-monitor: screen selection (mouse/notch preference) and
+        // floating-pill geometry, plus config persistence.
+        let notchMain = IslandMetrics.ScreenInfo(
+            frame: CGRect(x: 0, y: 0, width: 1512, height: 982), hasNotch: true,
+            containsMouse: true)
+        let extNoNotch = IslandMetrics.ScreenInfo(
+            frame: CGRect(x: 1512, y: 0, width: 2560, height: 1440), hasNotch: false,
+            containsMouse: false)
+        let mouseNoNotch = IslandMetrics.ScreenInfo(
+            frame: CGRect(x: 4072, y: 0, width: 1920, height: 1080), hasNotch: false,
+            containsMouse: true)
+        check(
+            IslandMetrics.islandScreen(screens: [notchMain, extNoNotch], preferMouseScreen: true)
+                == notchMain,
+            "L12 mouse notch screen preferred")
+        check(
+            IslandMetrics.islandScreen(
+                screens: [extNoNotch, mouseNoNotch], preferMouseScreen: true) == mouseNoNotch,
+            "L12 no notch screens: mouse wins")
+        check(
+            IslandMetrics.islandScreen(screens: [mouseNoNotch], preferMouseScreen: true)
+                == mouseNoNotch,
+            "L12 mouse screen fallback (floating)")
+        check(
+            IslandMetrics.islandScreen(
+                screens: [extNoNotch, mouseNoNotch], preferMouseScreen: false) == mouseNoNotch,
+            "L12 no-follow falls back to mouse without notch")
+        check(
+            IslandMetrics.islandScreen(screens: [mouseNoNotch], preferMouseScreen: false)
+                == mouseNoNotch,
+            "L12 no-follow falls back to mouse")
+        check(
+            IslandMetrics.islandScreen(screens: [], preferMouseScreen: true) == nil,
+            "L12 empty screens nil")
+        check(
+            IslandMetrics.floatingTopInset(menuBarHeight: 24) == 30,
+            "L12 floating inset below menu bar")
+        let pill = IslandMetrics.floatingPillFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+            size: CGSize(width: 456, height: 560), menuBarHeight: 24)
+        check(
+            abs(pill.midX - 1280) < 0.01,
+            "L12 floating pill centered horizontally (got \(pill.midX))")
+        check(
+            abs(pill.maxY - (1440 - 30)) < 0.01,
+            "L12 floating pill sits below menu bar (got \(pill.maxY))")
+
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origFollow = cfg.followMouseScreen
+            let origFloat = cfg.floatingPillOnNoNotch
+            check(cfg.followMouseScreen, "L12 follow mouse default on")
+            check(cfg.floatingPillOnNoNotch, "L12 floating pill default on")
+            cfg.followMouseScreen = false
+            check(defaults.bool(forKey: "followMouseScreen") == false, "L12 follow persisted")
+            cfg.floatingPillOnNoNotch = false
+            check(defaults.bool(forKey: "floatingPillOnNoNotch") == false, "L12 float persisted")
+            cfg.followMouseScreen = origFollow
+            cfg.floatingPillOnNoNotch = origFloat
+            defaults.removeObject(forKey: "followMouseScreen")
+            defaults.removeObject(forKey: "floatingPillOnNoNotch")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

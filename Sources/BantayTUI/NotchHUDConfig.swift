@@ -116,6 +116,12 @@ final class NotchHUDConfig {
     var clampedShelfLimit: Int {
         min(max(shelfLimit, 1), 50)
     }
+    var followMouseScreen = true {
+        didSet { defaults.set(followMouseScreen, forKey: "followMouseScreen") }
+    }
+    var floatingPillOnNoNotch = true {
+        didSet { defaults.set(floatingPillOnNoNotch, forKey: "floatingPillOnNoNotch") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -222,6 +228,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "shelfLimit") as? NSNumber {
             shelfLimit = min(max(v.intValue, 1), 50)
+        }
+        if let v = defaults.object(forKey: "followMouseScreen") as? Bool {
+            followMouseScreen = v
+        }
+        if let v = defaults.object(forKey: "floatingPillOnNoNotch") as? Bool {
+            floatingPillOnNoNotch = v
         }
     }
 }
