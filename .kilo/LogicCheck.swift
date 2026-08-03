@@ -675,6 +675,116 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "idleMaxChips")
         }
 
+        // L6. Expanded control plane: counts, queue split, group order,
+        // queue-aware height, multiplexer detection + adapter verbs.
+        let mixedKinds: [AgentEventKind] = [
+            .progress, .accessRequest, .completed, .waiting, .failed, .idle, .started,
+        ]
+        let counts = IslandMetrics.agentCounts(kinds: mixedKinds)
+        check(counts.needsInput == 2, "L6 needs-input count (got \(counts.needsInput))")
+        check(counts.working == 2, "L6 working count (got \(counts.working))")
+        check(counts.done == 1, "L6 done count (got \(counts.done))")
+        check(counts.error == 1, "L6 error count (got \(counts.error))")
+        check(counts.idle == 1, "L6 idle count (got \(counts.idle))")
+        check(counts.total == 7, "L6 total counts (got \(counts.total))")
+        check(
+            IslandMetrics.agentCounts(kinds: []).total == 0,
+            "L6 empty roster counts zero")
+        let split = IslandMetrics.queueSplit(blockedCount: 7, cap: 3)
+        check(split.shown == 3 && split.overflow == 4, "L6 queue split 3+4 (got \(split))")
+        let splitSmall = IslandMetrics.queueSplit(blockedCount: 2, cap: 3)
+        check(
+            splitSmall.shown == 2 && splitSmall.overflow == 0,
+            "L6 queue split shows all when under cap (got \(splitSmall))")
+        check(
+            IslandMetrics.queueSplit(blockedCount: 9, cap: 0).shown == 1,
+            "L6 queue cap floors at 1")
+        check(
+            IslandMetrics.expandedGroupRank(.accessRequest) == 0
+                && IslandMetrics.expandedGroupRank(.waiting) == 0,
+            "L6 needs-input ranks first")
+        check(
+            IslandMetrics.expandedGroupRank(.progress) < IslandMetrics.expandedGroupRank(.completed),
+            "L6 working before done")
+        check(
+            IslandMetrics.expandedGroupRank(.failed) < IslandMetrics.expandedGroupRank(.idle),
+            "L6 failed before idle")
+        let hNoQueue = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
+        let hQueue = IslandMetrics.expandedSize(topInset: 47, agentCount: 3, queueCount: 2)
+        check(hQueue.height > hNoQueue.height, "L6 queue adds height (got \(hQueue.height) vs \(hNoQueue.height))")
+        check(
+            hQueue.height <= IslandMetrics.maxExpandedHeight,
+            "L6 queue-aware height capped (got \(hQueue.height))")
+        let contentQueue = IslandMetrics.contentHeight(
+            isExpanded: true, topInset: 47, agentCount: 3, queueCount: 2)
+        check(
+            abs(contentQueue - (hQueue.height - 47)) < 0.01,
+            "L6 content height excludes top inset")
+        check(
+            IslandMetrics.expandedGroupRank(.cancelled) == 4
+                && IslandMetrics.expandedGroupRank(.clear) == 4,
+            "L6 cancelled/clear idle-ish")
+
+        // L6. Multiplexer detection (pure, env-injected).
+        check(
+            PlexerDetection.detect(env: ["HERDR_ENV": "1"]) == .herdr,
+            "L6 HERDR_ENV detects herdr")
+        check(
+            PlexerDetection.detect(env: [:], herdrSocketExists: true) == .herdr,
+            "L6 herdr socket detects herdr")
+        check(
+            PlexerDetection.detect(env: ["TMUX": "/private/tmp/tmux-501/default,1,0"]) == .tmux,
+            "L6 TMUX env detects tmux")
+        check(
+            PlexerDetection.detect(env: [:], tmuxSocketExists: true) == .tmux,
+            "L6 tmux socket detects tmux")
+        check(
+            PlexerDetection.detect(env: ["ZELLIJ": "1"]) == .zellij,
+            "L6 ZELLIJ env detects zellij")
+        check(
+            PlexerDetection.detect(env: [:]) == nil,
+            "L6 no multiplexer detected")
+        check(
+            PlexerDetection.detect(env: ["HERDR_ENV": "0"], herdrBinaryExists: false) == nil,
+            "L6 herdr socket without binary is ignored")
+        check(PlexerKind.herdr.label == "herdr", "L6 herdr label")
+        check(PlexerKind.tmux.label == "tmux", "L6 tmux label")
+        check(PlexerKind.zellij.label == "zellij", "L6 zellij label")
+
+        // L6. Expanded facets persist + clamp.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origCap = cfg.expandedQueueCap
+            let origShow = cfg.expandedShowQueue
+            let origGroup = cfg.expandedGroupByState
+            check(
+                cfg.clampedExpandedQueueCap >= 1 && cfg.clampedExpandedQueueCap <= 5,
+                "L6 queue cap clamped in range (got \(cfg.clampedExpandedQueueCap))")
+            cfg.expandedQueueCap = 9
+            check(
+                cfg.clampedExpandedQueueCap == 5,
+                "L6 queue cap clamps at 5 (got \(cfg.clampedExpandedQueueCap))")
+            cfg.expandedQueueCap = 2
+            check(
+                defaults.integer(forKey: "expandedQueueCap") == 2,
+                "L6 queue cap persisted")
+            cfg.expandedShowQueue = false
+            check(
+                defaults.bool(forKey: "expandedShowQueue") == false,
+                "L6 queue toggle persisted")
+            cfg.expandedGroupByState = false
+            check(
+                defaults.bool(forKey: "expandedGroupByState") == false,
+                "L6 grouping toggle persisted")
+            cfg.expandedQueueCap = origCap
+            cfg.expandedShowQueue = origShow
+            cfg.expandedGroupByState = origGroup
+            defaults.removeObject(forKey: "expandedQueueCap")
+            defaults.removeObject(forKey: "expandedShowQueue")
+            defaults.removeObject(forKey: "expandedGroupByState")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

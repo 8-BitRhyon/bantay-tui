@@ -53,6 +53,18 @@ final class NotchHUDConfig {
     var clampedIdleMaxChips: Int {
         min(max(idleMaxChips, 1), 6)
     }
+    var expandedQueueCap: Int = IslandMetrics.expandedQueueCap {
+        didSet { defaults.set(expandedQueueCap, forKey: "expandedQueueCap") }
+    }
+    var clampedExpandedQueueCap: Int {
+        min(max(expandedQueueCap, 1), 5)
+    }
+    var expandedShowQueue = true {
+        didSet { defaults.set(expandedShowQueue, forKey: "expandedShowQueue") }
+    }
+    var expandedGroupByState = true {
+        didSet { defaults.set(expandedGroupByState, forKey: "expandedGroupByState") }
+    }
 
     var isSnoozed: Bool {
         guard let snoozedUntil else { return false }
@@ -110,6 +122,15 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "idleMaxChips") as? NSNumber {
             idleMaxChips = min(max(v.intValue, 1), 6)
+        }
+        if let v = defaults.object(forKey: "expandedQueueCap") as? NSNumber {
+            expandedQueueCap = min(max(v.intValue, 1), 5)
+        }
+        if let v = defaults.object(forKey: "expandedShowQueue") as? Bool {
+            expandedShowQueue = v
+        }
+        if let v = defaults.object(forKey: "expandedGroupByState") as? Bool {
+            expandedGroupByState = v
         }
     }
 }

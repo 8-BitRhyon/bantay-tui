@@ -59,7 +59,8 @@ struct NotchStatusView: View {
     private var islandHeight: CGFloat {
         isExpanded
             ? IslandMetrics.expandedSize(
-                topInset: chipTopOffset, agentCount: eventManager.agents.count
+                topInset: chipTopOffset, agentCount: eventManager.agents.count,
+                queueCount: approvalQueueAgents.count
             ).height
             : IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
     }
@@ -67,7 +68,15 @@ struct NotchStatusView: View {
     private var contentHeight: CGFloat {
         IslandMetrics.contentHeight(
             isExpanded: isExpanded, topInset: chipTopOffset,
-            agentCount: eventManager.agents.count)
+            agentCount: eventManager.agents.count, queueCount: approvalQueueAgents.count)
+    }
+
+    /// Agents currently blocked on an approval — pinned at the top of the
+    /// expanded control plane.
+    private var approvalQueueAgents: [AgentSnapshot] {
+        eventManager.agents.filter {
+            $0.kind == .accessRequest || $0.kind == .waiting
+        }
     }
 
     private var cornerRad: CGFloat { IslandMetrics.cornerRadius(expanded: isExpanded) }
@@ -431,24 +440,30 @@ struct NotchStatusView: View {
     }
 
     private var expandedList: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Circle().fill(Color(hex: AgentEventKind.idle.color)).frame(width: 7, height: 7)
-                Text("Active agents")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-                Spacer(minLength: 8)
-                if let title = eventManager.currentEvent?.title {
-                    Text(title)
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.white.opacity(0.45))
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(height: IslandMetrics.headerHeight)
+        let counts = IslandMetrics.agentCounts(
+            kinds: eventManager.agents.map(\.kind))
+        let queue = approvalQueueAgents
+        let queueSplit = IslandMetrics.queueSplit(
+            blockedCount: queue.count,
+            cap: NotchHUDConfig.shared.clampedExpandedQueueCap)
+        return VStack(spacing: 0) {
+            headerBar(counts: counts)
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
+
+            if NotchHUDConfig.shared.expandedShowQueue {
+                ForEach(queue.prefix(queueSplit.shown)) { agent in
+                    approvalQueueCard(agent: agent)
+                }
+                if queueSplit.overflow > 0 {
+                    Text("+\(queueSplit.overflow) more waiting")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(.white.opacity(0.45))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .frame(height: 18)
+                }
+            }
 
             if eventManager.agents.isEmpty {
                 Text("No active agents")
@@ -458,76 +473,206 @@ struct NotchStatusView: View {
                     .frame(height: IslandMetrics.rowHeight)
             }
 
-            ForEach(eventManager.agents) { agent in
-                let composing = composingPaneId == agent.paneId
-                HStack(spacing: 8) {
-                    Circle().fill(Color(hex: agent.kind.color)).frame(width: 6, height: 6)
-                    if composing {
-                        TextField("Ask agent…", text: $promptText)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white)
-                            .focused($promptFocused)
-                            .onSubmit { submitPrompt() }
-                            .onKeyPress(.escape) {
-                                cancelComposing()
-                                return .handled
-                            }
-                            .padding(.horizontal, 6)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 20)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08)))
-                        Button(action: submitPrompt) {
-                            Image(systemName: "paperplane.fill").font(.system(size: 9))
-                                .foregroundColor(.white)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Send prompt (Return)")
-                        Button(action: cancelComposing) {
-                            Image(systemName: "xmark").font(.system(size: 9)).foregroundColor(
-                                .white.opacity(0.6))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Cancel (Esc)")
-                    } else {
-                        Button(action: { beginComposing(agent) }) {
-                            HStack(spacing: 8) {
-                                Text(agent.source)
-                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                    .foregroundColor(.white).lineLimit(1)
-                                Text(agent.kind.label)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundColor(.secondary).lineLimit(1)
-                                Spacer(minLength: 8)
-                                if let title = agent.title {
-                                    Text(title)
-                                        .font(.system(size: 9, weight: .regular))
-                                        .foregroundColor(.white.opacity(0.45))
-                                        .lineLimit(1)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if let paneId = agent.paneId {
-                            Button(action: { adapter.paneFocus(paneId: paneId) }) {
-                                Image(systemName: "arrow.up.right").font(.system(size: 9))
-                                    .foregroundColor(.white.opacity(0.6))
-                            }
-                            .buttonStyle(.plain)
-                            .help("Focus pane")
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .frame(height: IslandMetrics.rowHeight)
-                .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
-                .contentShape(Rectangle())
-                .onHover { hovering in hoveredRow = hovering ? agent.id : nil }
+            if NotchHUDConfig.shared.expandedGroupByState {
+                groupedAgentRows
+            } else {
+                flatAgentRows
             }
+
+            Spacer(minLength: 0)
+            footerBar(counts: counts, queueCount: queue.count)
         }
         .frame(width: islandWidth, height: contentHeight, alignment: .top)
+    }
+
+    private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color(hex: AgentEventKind.idle.color)).frame(width: 7, height: 7)
+            if counts.needsInput > 0 {
+                Text("\(counts.needsInput) need you")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.yellow)
+            }
+            if counts.working > 0 {
+                Text("\(counts.working) working")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+            }
+            if counts.needsInput == 0 && counts.working == 0 {
+                Text("Agents")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+            }
+            Spacer(minLength: 8)
+            if let title = eventManager.currentEvent?.title {
+                Text(title)
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundColor(.white.opacity(0.45))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: IslandMetrics.headerHeight)
+    }
+
+    private func approvalQueueCard(agent: AgentSnapshot) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color(hex: agent.kind.color)).frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.source)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Text(agent.title ?? agent.message ?? agent.kind.label)
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundColor(.white.opacity(0.55))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let paneId = agent.paneId {
+                approvalActionButton(
+                    systemName: "checkmark.circle.fill", color: .green, help: "Approve"
+                ) {
+                    adapter.approve(paneId: paneId)
+                }
+                approvalActionButton(systemName: "xmark.circle.fill", color: .red, help: "Deny") {
+                    adapter.deny(paneId: paneId)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: IslandMetrics.queueCardHeight)
+        .background(Color.white.opacity(0.05))
+    }
+
+    private var groupedAgentRows: some View {
+        let grouped = Dictionary(grouping: eventManager.agents) { agent in
+            IslandMetrics.expandedGroupRank(agent.kind)
+        }
+        return VStack(spacing: 0) {
+            ForEach(0..<5, id: \.self) { rank in
+                let rows = grouped[rank] ?? []
+                if !rows.isEmpty {
+                    ForEach(rows) { agent in
+                        agentRow(agent: agent)
+                    }
+                }
+            }
+        }
+    }
+
+    private var flatAgentRows: some View {
+        VStack(spacing: 0) {
+            ForEach(eventManager.agents) { agent in
+                agentRow(agent: agent)
+            }
+        }
+    }
+
+    private func footerBar(counts: IslandMetrics.AgentCounts, queueCount: Int) -> some View {
+        HStack(spacing: 8) {
+            Text("\(counts.total) agents")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.5))
+            if counts.done > 0 {
+                Text("· \(counts.done) done").foregroundColor(
+                    Color(hex: AgentEventKind.completed.color)
+                )
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+            }
+            if counts.error > 0 {
+                Text("· \(counts.error) failed").foregroundColor(
+                    Color(hex: AgentEventKind.failed.color)
+                )
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+            }
+            Spacer(minLength: 8)
+            Text(adapter.kind.label)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.4))
+            if queueCount > 0 {
+                Text("\(queueCount) pending")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.yellow)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: IslandMetrics.footerHeight)
+    }
+
+    private func agentRow(agent: AgentSnapshot) -> some View {
+        let composing = composingPaneId == agent.paneId
+        return HStack(spacing: 8) {
+            Circle().fill(Color(hex: agent.kind.color)).frame(width: 6, height: 6)
+            if composing {
+                TextField("Ask agent…", text: $promptText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white)
+                    .focused($promptFocused)
+                    .onSubmit { submitPrompt() }
+                    .onKeyPress(.escape) {
+                        cancelComposing()
+                        return .handled
+                    }
+                    .padding(.horizontal, 6)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08)))
+                Button(action: submitPrompt) {
+                    Image(systemName: "paperplane.fill").font(.system(size: 9))
+                        .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
+                .help("Send prompt (Return)")
+                Button(action: cancelComposing) {
+                    Image(systemName: "xmark").font(.system(size: 9)).foregroundColor(
+                        .white.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                .help("Cancel (Esc)")
+            } else {
+                Button(action: { beginComposing(agent) }) {
+                    HStack(spacing: 8) {
+                        Text(agent.source)
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white).lineLimit(1)
+                        Text(agent.kind.label)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary).lineLimit(1)
+                        Spacer(minLength: 8)
+                        if let title = agent.title {
+                            Text(title)
+                                .font(.system(size: 9, weight: .regular))
+                                .foregroundColor(.white.opacity(0.45))
+                                .lineLimit(1)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if let paneId = agent.paneId {
+                    Button(action: { adapter.focusPane(paneId: paneId) }) {
+                        Image(systemName: "arrow.up.right").font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Focus pane")
+                    Button(action: { adapter.stop(paneId: paneId) }) {
+                        Image(systemName: "stop.fill").font(.system(size: 9))
+                            .foregroundColor(.red.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop (Ctrl-C)")
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: IslandMetrics.rowHeight)
+        .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
+        .contentShape(Rectangle())
+        .onHover { hovering in hoveredRow = hovering ? agent.id : nil }
     }
 
     // MARK: - Behavior

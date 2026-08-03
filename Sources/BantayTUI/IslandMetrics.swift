@@ -119,6 +119,69 @@ public enum IslandMetrics: Sendable {
         return min(max(w, idleChipWidth), min(expandedWidth, max(notchWidth, 0)))
     }
 
+    // MARK: - Expanded control plane
+
+    /// How many blocked/needs-input agents get their own queue card before
+    /// collapsing into `+N more`.
+    public static let expandedQueueCap: Int = 3
+    /// Height of one approval-queue card.
+    public static let queueCardHeight: CGFloat = 42
+    /// Footer health-bar height.
+    public static let footerHeight: CGFloat = 22
+    /// Group order for the expanded roster: needs input first, then working,
+    /// then finished states — most actionable on top.
+    static func expandedGroupRank(_ kind: AgentEventKind) -> Int {
+        switch kind {
+        case .accessRequest, .waiting: return 0
+        case .progress, .started: return 1
+        case .completed: return 2
+        case .failed: return 3
+        case .idle, .cancelled, .clear: return 4
+        }
+    }
+
+    /// Aggregated counts shown in the control-plane header/footer.
+    public struct AgentCounts: Equatable, Sendable {
+        public var needsInput: Int = 0
+        public var working: Int = 0
+        public var done: Int = 0
+        public var error: Int = 0
+        public var idle: Int = 0
+        public var total: Int { needsInput + working + done + error + idle }
+    }
+
+    static func agentCounts(kinds: [AgentEventKind]) -> AgentCounts {
+        var counts = AgentCounts()
+        for kind in kinds {
+            switch kind {
+            case .accessRequest, .waiting: counts.needsInput += 1
+            case .progress, .started: counts.working += 1
+            case .completed: counts.done += 1
+            case .failed: counts.error += 1
+            case .idle, .cancelled, .clear: counts.idle += 1
+            }
+        }
+        return counts
+    }
+
+    /// Approval-queue split: how many cards to show vs `+N more` overflow.
+    public static func queueSplit(blockedCount: Int, cap: Int) -> (shown: Int, overflow: Int) {
+        let shown = min(max(blockedCount, 0), max(cap, 1))
+        return (shown, max(blockedCount - shown, 0))
+    }
+
+    /// Expanded panel height accounting for the header, approval queue,
+    /// roster rows, and footer — capped at the island max.
+    public static func expandedSize(
+        topInset: CGFloat, agentCount: Int, queueCount: Int,
+        headerHeight: CGFloat = headerHeight, rowHeight: CGFloat = rowHeight
+    ) -> CGSize {
+        let h =
+            topInset + headerHeight + CGFloat(queueCount) * queueCardHeight
+            + CGFloat(agentCount) * rowHeight + footerHeight + contentSpacing
+        return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+    }
+
     public static func cornerRadius(expanded: Bool) -> CGFloat {
         expanded ? expandedCornerRadius : closedCornerRadius
     }
@@ -135,15 +198,16 @@ public enum IslandMetrics: Sendable {
 
     /// The expanded roster content size, height-capped.
     public static func expandedSize(topInset: CGFloat, agentCount: Int) -> CGSize {
-        let h = topInset + headerHeight + CGFloat(agentCount) * rowHeight + contentSpacing
-        return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+        expandedSize(topInset: topInset, agentCount: agentCount, queueCount: 0)
     }
 
-    public static func contentHeight(isExpanded: Bool, topInset: CGFloat, agentCount: Int)
-        -> CGFloat
-    {
+    public static func contentHeight(
+        isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0
+    ) -> CGFloat {
         if isExpanded {
-            return expandedSize(topInset: topInset, agentCount: agentCount).height - topInset
+            return expandedSize(
+                topInset: topInset, agentCount: agentCount, queueCount: queueCount
+            ).height - topInset
         }
         return pillHeight
     }

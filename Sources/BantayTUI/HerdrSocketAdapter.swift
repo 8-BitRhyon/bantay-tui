@@ -1,7 +1,9 @@
 import Foundation
 
-final class HerdrSocketAdapter: Sendable {
+final class HerdrSocketAdapter: Sendable, PlexerAdapter {
     private let herdrBinPath: String
+
+    var kind: PlexerKind { .herdr }
 
     init(herdrBinPath: String = "herdr") {
         self.herdrBinPath = herdrBinPath
@@ -43,6 +45,10 @@ final class HerdrSocketAdapter: Sendable {
 
     func paneFocus(paneId: String) {
         _ = runHerdr(["agent", "focus", paneId], timeout: 1.0)
+    }
+
+    func focusPane(paneId: String) {
+        paneFocus(paneId: paneId)
     }
 
     func agentPrompt(paneId: String, text: String) {
@@ -123,6 +129,26 @@ final class HerdrSocketAdapter: Sendable {
             return []
         }
         return raw.result?.agents ?? []
+    }
+
+    // MARK: - PlexerAdapter
+
+    func captureTail(paneId: String, lines: Int) -> String {
+        runHerdr(
+            ["pane", "read", paneId, "--source", "recent", "--lines", "\(lines)"],
+            timeout: 2.0)
+    }
+
+    func sendLine(paneId: String, text: String) {
+        _ = runHerdr(["pane", "run", paneId, text], timeout: 1.0)
+    }
+
+    func stop(paneId: String) {
+        sendKeys(paneId: paneId, keys: ["ctrl+c"])
+    }
+
+    func attachPane(paneId: String) {
+        paneFocus(paneId: paneId)
     }
 }
 

@@ -15,6 +15,9 @@ struct SettingsView: View {
     @State private var dockSide = NotchHUDConfig.shared.islandDockSide.rawValue
     @State private var idleStyle = NotchHUDConfig.shared.idleStyle.rawValue
     @State private var idleMaxChips = NotchHUDConfig.shared.clampedIdleMaxChips
+    @State private var expandedQueueCap = NotchHUDConfig.shared.clampedExpandedQueueCap
+    @State private var expandedShowQueue = NotchHUDConfig.shared.expandedShowQueue
+    @State private var expandedGroupByState = NotchHUDConfig.shared.expandedGroupByState
 
     var body: some View {
         Form {
@@ -113,6 +116,26 @@ struct SettingsView: View {
                             name: .notchVisibilityChanged, object: nil)
                     }
             }
+            Section("Expanded panel") {
+                Toggle("Pin approval queue on top", isOn: $expandedShowQueue)
+                    .help("Blocked agents get approve/deny cards above the roster.")
+                    .onChange(of: expandedShowQueue) { _, newValue in
+                        NotchHUDConfig.shared.expandedShowQueue = newValue
+                    }
+                Toggle("Group agents by state", isOn: $expandedGroupByState)
+                    .help("Need-input first, then working, done, failed, idle.")
+                    .onChange(of: expandedGroupByState) { _, newValue in
+                        NotchHUDConfig.shared.expandedGroupByState = newValue
+                    }
+                Stepper(
+                    "Approval queue cards: \(expandedQueueCap)",
+                    value: $expandedQueueCap, in: 1...5
+                )
+                .help("Extra blocked agents collapse into '+N more'.")
+                .onChange(of: expandedQueueCap) { _, newValue in
+                    NotchHUDConfig.shared.expandedQueueCap = newValue
+                }
+            }
             Section {
                 Button("Show Welcome…") {
                     hasSeenOnboarding = false
@@ -120,7 +143,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 620)
+        .frame(width: 460, height: 700)
     }
 }
 
