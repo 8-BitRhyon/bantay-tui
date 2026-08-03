@@ -7,11 +7,57 @@ AGENTS_PLIST="$HOME/Library/LaunchAgents/com.bantay-tui.agent.plist"
 INSTALLED_BIN="$DATA_DIR/bantay"
 
 UNINSTALL="no"
+PACKAGE="no"
 for arg in "$@"; do
   case "$arg" in
     --uninstall) UNINSTALL="yes" ;;
+    --package) PACKAGE="yes" ;;
   esac
 done
+
+if [[ "$PACKAGE" == "yes" ]]; then
+  RELEASE_BIN="$(cd "$(dirname "$0")/.." && pwd)/.build/release/bantay"
+  if [[ ! -x "$RELEASE_BIN" ]]; then
+    echo "bantay-tui: release binary not found -- build with 'swift build -c release' first"
+    exit 1
+  fi
+  DIST="$(cd "$(dirname "$0")/.." && pwd)/dist"
+  STAGE="$DIST/Bantay-TUI.app/Contents"
+  mkdir -p "$STAGE/MacOS"
+  cp "$RELEASE_BIN" "$STAGE/MacOS/bantay"
+  cat > "$STAGE/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Bantay-TUI</string>
+    <key>CFBundleDisplayName</key>
+    <string>Bantay-TUI</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.bantay-tui</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>bantay</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+  cd "$DIST" && rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
+  echo "bantay-tui: packaged $DIST/bantay-tui.zip (release $RELEASE_BIN)"
+  exit 0
+fi
 
 if [[ "$UNINSTALL" == "yes" ]]; then
   if [[ ! -e "$AGENTS_PLIST" && ! -d "$DATA_DIR" ]]; then
