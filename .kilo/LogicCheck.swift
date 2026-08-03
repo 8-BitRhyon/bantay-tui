@@ -1748,21 +1748,22 @@ struct LogicCheckMain {
         // +N overflow rows — otherwise the bottom roster rows clip.
         let baseSize = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
         let withTab = IslandMetrics.expandedSize(
-            topInset: 47, agentCount: 3, shelfTabVisible: true)
+            topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true)
         check(
             abs(
                 withTab.height - baseSize.height
                     - (IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight)) < 0.01,
             "L24 shelf tab adds tab+divider height (got \(withTab.height) vs \(baseSize.height))")
         let withOverflow = IslandMetrics.expandedSize(
-            topInset: 47, agentCount: 3, overflowCount: 2)
+            topInset: 47, agentCount: 3, queueCount: 0, overflowCount: 2)
         check(
             abs(
                 withOverflow.height - baseSize.height - 2 * IslandMetrics.overflowRowHeight)
                 < 0.01,
             "L24 overflow rows add height (got \(withOverflow.height) vs \(baseSize.height))")
         let both = IslandMetrics.expandedSize(
-            topInset: 47, agentCount: 3, shelfTabVisible: true, overflowCount: 1)
+            topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true,
+            overflowCount: 1)
         let expected =
             baseSize.height + IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight
             + IslandMetrics.overflowRowHeight
