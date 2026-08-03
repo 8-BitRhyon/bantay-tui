@@ -1435,6 +1435,47 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "showInFullScreen")
         }
 
+        // L16. Menu-bar collision avoidance: clearance geometry, collision
+        // detection, config persistence.
+        let clear = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .right, notchWidth: 200, screenWidth: 1512,
+            auxLeft: 300, auxRight: 400)
+        check(abs(clear - 400) < 0.01, "L16 right clearance uses aux right (got \(clear))")
+        let clearLeft = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .left, notchWidth: 200, screenWidth: 1512,
+            auxLeft: 300, auxRight: 400)
+        check(abs(clearLeft - 300) < 0.01, "L16 left clearance uses aux left")
+        let clearFallback = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .right, notchWidth: 200, screenWidth: 1512, auxLeft: 0, auxRight: 0)
+        check(
+            abs(clearFallback - (1512 - 200)) < 0.01,
+            "L16 fallback clearance = screen minus notch (got \(clearFallback))")
+        let clearCenter = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .center, notchWidth: 200, screenWidth: 1512, auxLeft: 300, auxRight: 400)
+        check(abs(clearCenter - 1312) < 0.01, "L16 center clearance spans both sides")
+        check(
+            IslandMetrics.MenuBarClearance.collides(
+                side: .right, stripWidth: 500, notchWidth: 200, screenWidth: 1512,
+                auxLeft: 300, auxRight: 400),
+            "L16 wide strip collides with icons")
+        check(
+            !IslandMetrics.MenuBarClearance.collides(
+                side: .right, stripWidth: 300, notchWidth: 200, screenWidth: 1512,
+                auxLeft: 300, auxRight: 400),
+            "L16 narrow strip clears icons")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.avoidMenuBarIcons
+            check(cfg.avoidMenuBarIcons, "L16 avoid-icons default on")
+            cfg.avoidMenuBarIcons = false
+            check(
+                defaults.bool(forKey: "avoidMenuBarIcons") == false,
+                "L16 avoid-icons persisted")
+            cfg.avoidMenuBarIcons = orig
+            defaults.removeObject(forKey: "avoidMenuBarIcons")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

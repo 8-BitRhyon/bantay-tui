@@ -33,6 +33,7 @@ struct SettingsView: View {
     @State private var followMouse = NotchHUDConfig.shared.followMouseScreen
     @State private var floatingPill = NotchHUDConfig.shared.floatingPillOnNoNotch
     @State private var showInFullScreen = NotchHUDConfig.shared.showInFullScreen
+    @State private var avoidMenuBar = NotchHUDConfig.shared.avoidMenuBarIcons
 
     var body: some View {
         Form {
@@ -113,6 +114,13 @@ struct SettingsView: View {
                     .help("Stay visible over full-screen apps; re-anchors after transitions.")
                     .onChange(of: showInFullScreen) { _, newValue in
                         NotchHUDConfig.shared.showInFullScreen = newValue
+                    }
+                Toggle("Avoid menu-bar icons", isOn: $avoidMenuBar)
+                    .help(
+                        "Shrink idle chips so they never overlap status icons (Bartender/Ice safe)."
+                    )
+                    .onChange(of: avoidMenuBar) { _, newValue in
+                        NotchHUDConfig.shared.avoidMenuBarIcons = newValue
                     }
             }
             Section("Alerts") {

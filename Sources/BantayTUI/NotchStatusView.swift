@@ -39,12 +39,22 @@ struct NotchStatusView: View {
     private var closedPillWidth: CGFloat {
         let full = min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
         guard !hasTransientEvent else { return full }
-        return IslandMetrics.idleClosedWidth(
-            style: NotchHUDConfig.shared.idleStyle,
+        let config = NotchHUDConfig.shared
+        var width = IslandMetrics.idleClosedWidth(
+            style: config.idleStyle,
             agentCount: eventManager.agents.count,
-            maxChips: NotchHUDConfig.shared.clampedIdleMaxChips,
+            maxChips: config.clampedIdleMaxChips,
             nameLengths: eventManager.agents.map(\.source.count),
             notchWidth: AppDelegate.notchWidth)
+        if config.avoidMenuBarIcons {
+            let clearance = IslandMetrics.MenuBarClearance.maxIdleWidth(
+                side: config.islandDockSide, notchWidth: AppDelegate.notchWidth,
+                screenWidth: AppDelegate.islandScreen()?.frame.width
+                    ?? AppDelegate.notchWidth,
+                auxLeft: AppDelegate.auxLeftWidth, auxRight: AppDelegate.auxRightWidth)
+            width = min(width, max(clearance, IslandMetrics.idleChipWidth))
+        }
+        return width
     }
 
     private var islandWidth: CGFloat {

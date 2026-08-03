@@ -231,6 +231,45 @@ public enum IslandMetrics: Sendable {
             height: size.height)
     }
 
+    // MARK: - Menu-bar collision avoidance
+
+    /// How much horizontal room the island may use on a docked side without
+    /// overlapping the menu-bar icon cluster the OS reports via auxiliary
+    /// areas. The auxiliary areas describe the left/right menu-bar regions
+    /// (icons live there); the notch sits between them.
+    enum MenuBarClearance {
+        /// Max idle width available on `side` given the OS-reported auxiliary
+        /// area widths and the notch width. Returns the full screen width
+        /// minus the notch when the OS reports nothing (fallback).
+        static func maxIdleWidth(
+            side: IslandDockSide, notchWidth: CGFloat, screenWidth: CGFloat,
+            auxLeft: CGFloat, auxRight: CGFloat
+        ) -> CGFloat {
+            switch side {
+            case .right:
+                let rightRoom = auxRight > 0 ? auxRight : screenWidth - notchWidth
+                return max(rightRoom - dockGap, 0)
+            case .left:
+                let leftRoom = auxLeft > 0 ? auxLeft : screenWidth - notchWidth
+                return max(leftRoom - dockGap, 0)
+            case .center:
+                return max(screenWidth - notchWidth, 0)
+            }
+        }
+
+        /// Whether a strip of `width` starting at the notch edge would
+        /// collide with the icon cluster on the docked side.
+        static func collides(
+            side: IslandDockSide, stripWidth: CGFloat, notchWidth: CGFloat,
+            screenWidth: CGFloat, auxLeft: CGFloat, auxRight: CGFloat
+        ) -> Bool {
+            stripWidth
+                > maxIdleWidth(
+                    side: side, notchWidth: notchWidth, screenWidth: screenWidth,
+                    auxLeft: auxLeft, auxRight: auxRight)
+        }
+    }
+
     // MARK: - Full-screen & space policy
 
     /// Whether the island should be visible for the given full-screen state.

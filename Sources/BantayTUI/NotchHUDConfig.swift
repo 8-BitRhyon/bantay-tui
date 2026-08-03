@@ -125,6 +125,9 @@ final class NotchHUDConfig {
     var showInFullScreen = true {
         didSet { defaults.set(showInFullScreen, forKey: "showInFullScreen") }
     }
+    var avoidMenuBarIcons = true {
+        didSet { defaults.set(avoidMenuBarIcons, forKey: "avoidMenuBarIcons") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -240,6 +243,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "showInFullScreen") as? Bool {
             showInFullScreen = v
+        }
+        if let v = defaults.object(forKey: "avoidMenuBarIcons") as? Bool {
+            avoidMenuBarIcons = v
         }
     }
 }

@@ -72,6 +72,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return IslandMetrics.topInset(safeTop: safe, menuBarHeight: menuBar)
     }
 
+    /// Width of the menu-bar icon cluster left of the notch (0 when the OS
+    /// does not report auxiliary areas).
+    @MainActor
+    static var auxLeftWidth: CGFloat {
+        islandScreen()?.auxiliaryTopLeftArea?.width ?? 0
+    }
+
+    /// Width of the menu-bar icon cluster right of the notch (0 when the OS
+    /// does not report auxiliary areas).
+    @MainActor
+    static var auxRightWidth: CGFloat {
+        islandScreen()?.auxiliaryTopRightArea?.width ?? 0
+    }
+
     /// The screen the island should live on: prefers the notch screen under
     /// the mouse; falls back to any notch screen; then the mouse's screen as
     /// a floating pill.
