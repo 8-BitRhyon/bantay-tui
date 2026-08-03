@@ -104,6 +104,18 @@ final class NotchHUDConfig {
             defaults.set(ingestPort, forKey: "ingestPort")
         }
     }
+    var showShelfTab = true {
+        didSet { defaults.set(showShelfTab, forKey: "showShelfTab") }
+    }
+    var shelfLimit: Int = 20 {
+        didSet {
+            shelfLimit = min(max(shelfLimit, 1), 50)
+            defaults.set(shelfLimit, forKey: "shelfLimit")
+        }
+    }
+    var clampedShelfLimit: Int {
+        min(max(shelfLimit, 1), 50)
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -204,6 +216,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "ingestPort") as? NSNumber {
             ingestPort = Int(IngestHTTP.clampedPort(v.intValue))
+        }
+        if let v = defaults.object(forKey: "showShelfTab") as? Bool {
+            showShelfTab = v
+        }
+        if let v = defaults.object(forKey: "shelfLimit") as? NSNumber {
+            shelfLimit = min(max(v.intValue, 1), 50)
         }
     }
 }

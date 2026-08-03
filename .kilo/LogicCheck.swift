@@ -1221,6 +1221,61 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "ingestPort")
         }
 
+        // L13. Shelf: clipboard history + file drops (dedup, ordering, limits)
+        // and config facets.
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let emptyClip = ClipboardHistory.merging(existing: [], newText: "   ", now: t0, limit: 5)
+        check(emptyClip.isEmpty, "L13 whitespace clipboard ignored")
+        let c1 = ClipboardHistory.merging(existing: [], newText: "hello", now: t0, limit: 5)
+        check(c1.count == 1 && c1[0].text == "hello", "L13 first clip added")
+        let c2 = ClipboardHistory.merging(existing: c1, newText: "world", now: t0.addingTimeInterval(5), limit: 5)
+        check(c2.count == 2 && c2[0].text == "world", "L13 newest first")
+        let c3 = ClipboardHistory.merging(existing: c2, newText: "hello", now: t0.addingTimeInterval(10), limit: 5)
+        check(c3.count == 2 && c3[0].text == "hello", "L13 re-copy moves to front (got \(c3.map(\.text)))")
+        var capped = [ClipboardItem]()
+        for i in 0..<10 {
+            capped = ClipboardHistory.merging(
+                existing: capped, newText: "item\(i)", now: t0.addingTimeInterval(Double(i)), limit: 3)
+        }
+        check(capped.count == 3, "L13 clipboard capped at limit (got \(capped.count))")
+        check(capped[0].text == "item9", "L13 cap keeps newest (got \(capped.map(\.text)))")
+        let f0 = ShelfFile(url: URL(fileURLWithPath: "/tmp/a.txt"), createdAt: t0)
+        let f1 = ShelfFile(url: URL(fileURLWithPath: "/tmp/b.txt"), createdAt: t0.addingTimeInterval(1))
+        let shelf1 = ShelfFiles.adding([f0, f1], to: [], limit: 5)
+        check(shelf1.count == 2 && shelf1[0].url == f1.url, "L13 files newest first")
+        let shelfDup = ShelfFiles.adding([f0], to: shelf1, limit: 5)
+        check(shelfDup.count == 2 && shelfDup[0].url == f0.url, "L13 re-drop dedupes to front")
+        let shelfRemoved = ShelfFiles.removing(f0.url, from: shelfDup)
+        check(shelfRemoved.count == 1 && shelfRemoved[0].url == f1.url, "L13 file removed")
+        var filesCapped = [ShelfFile]()
+        for i in 0..<8 {
+            filesCapped = ShelfFiles.adding(
+                [ShelfFile(url: URL(fileURLWithPath: "/tmp/f\(i)"), createdAt: t0.addingTimeInterval(Double(i)))],
+                to: filesCapped, limit: 4)
+        }
+        check(filesCapped.count == 4, "L13 files capped (got \(filesCapped.count))")
+
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origShow = cfg.showShelfTab
+            let origLimit = cfg.shelfLimit
+            check(cfg.showShelfTab, "L13 shelf tab default on")
+            check(cfg.clampedShelfLimit == 20, "L13 default shelf limit 20")
+            cfg.showShelfTab = false
+            check(defaults.bool(forKey: "showShelfTab") == false, "L13 shelf tab persisted")
+            cfg.shelfLimit = 500
+            check(cfg.clampedShelfLimit == 50, "L13 shelf limit clamps at 50")
+            cfg.shelfLimit = 0
+            check(cfg.clampedShelfLimit == 1, "L13 shelf limit clamps at 1")
+            cfg.shelfLimit = 12
+            check(defaults.integer(forKey: "shelfLimit") == 12, "L13 shelf limit persisted")
+            cfg.showShelfTab = origShow
+            cfg.shelfLimit = origLimit
+            defaults.removeObject(forKey: "showShelfTab")
+            defaults.removeObject(forKey: "shelfLimit")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

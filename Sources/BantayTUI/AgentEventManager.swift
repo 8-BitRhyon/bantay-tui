@@ -625,7 +625,9 @@ extension AgentEventManager {
         }
         guard let handle = try? FileHandle(forWritingTo: eventsFileURL) else { return }
         defer { try? handle.close() }
-        try? handle.seekToEnd()
+        if let end = try? handle.seekToEnd() {
+            _ = end
+        }
         handle.write(Data((trimmed + "\n").utf8))
     }
 

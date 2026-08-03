@@ -17,6 +17,10 @@ struct NotchStatusView: View {
     @State private var showWelcome = false
     @State private var glowPulse = false
     @State private var now = Date()
+    @State private var showShelf = false
+    @State private var clipboardItems: [ClipboardItem] = []
+    @State private var shelfFiles: [ShelfFile] = []
+    @State private var lastChangeCount = NSPasteboard.general.changeCount
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -140,6 +144,7 @@ struct NotchStatusView: View {
             Timer.publish(every: 1, on: .main, in: .common).autoconnect()
         ) { date in
             now = date
+            pollClipboard(at: date)
         }
         .onChange(of: hasSeenOnboarding) { _, seen in
             if !seen { showWelcome = true }
@@ -528,8 +533,28 @@ struct NotchStatusView: View {
         return VStack(spacing: 0) {
             headerBar(counts: counts)
 
+            if NotchHUDConfig.shared.showShelfTab {
+                shelfTabBar
+            }
+
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
 
+            if showShelf {
+                shelfContent
+            } else {
+                queueAndRoster(queue: queue, queueSplit: queueSplit, counts: counts)
+            }
+        }
+        .frame(width: islandWidth, height: contentHeight, alignment: .top)
+    }
+
+    @ViewBuilder
+    private func queueAndRoster(
+        queue: [AgentSnapshot],
+        queueSplit: (shown: Int, overflow: Int),
+        counts: IslandMetrics.AgentCounts
+    ) -> some View {
+        VStack(spacing: 0) {
             if NotchHUDConfig.shared.expandedShowQueue {
                 ForEach(queue.prefix(queueSplit.shown)) { agent in
                     approvalQueueCard(agent: agent)
@@ -561,7 +586,101 @@ struct NotchStatusView: View {
             Spacer(minLength: 0)
             footerBar(counts: counts, queueCount: queue.count)
         }
-        .frame(width: islandWidth, height: contentHeight, alignment: .top)
+    }
+
+    private var shelfTabBar: some View {
+        HStack(spacing: 4) {
+            shelfTabButton(title: "Agents", selected: !showShelf) { showShelf = false }
+            shelfTabButton(title: "Shelf", selected: showShelf) { showShelf = true }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 22)
+    }
+
+    private func shelfTabButton(title: String, selected: Bool, action: @escaping () -> Void)
+        -> some View
+    {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 9, weight: selected ? .semibold : .medium))
+                .foregroundColor(selected ? .white : .white.opacity(0.5))
+                .padding(.horizontal, 8)
+                .frame(height: 16)
+                .background(
+                    selected ? Color.white.opacity(0.14) : Color.clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var shelfContent: some View {
+        VStack(spacing: 0) {
+            if clipboardItems.isEmpty && shelfFiles.isEmpty {
+                Text("Drop files here or copy text — it lands on the shelf.")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.4))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: IslandMetrics.rowHeight)
+            }
+            ForEach(shelfFiles) { file in
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.fill").font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.6))
+                    Text(file.name)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Button(action: { NSWorkspace.shared.open(file.url) }) {
+                        Image(systemName: "arrow.up.right").font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open file")
+                    Button(action: { shelfFiles = ShelfFiles.removing(file.url, from: shelfFiles) })
+                    {
+                        Image(systemName: "xmark").font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove")
+                }
+                .padding(.horizontal, 16)
+                .frame(height: IslandMetrics.rowHeight)
+            }
+            ForEach(clipboardItems) { item in
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.on.clipboard.fill").font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.6))
+                    Text(item.text)
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Button(action: {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(item.text, forType: .string)
+                    }) {
+                        Image(systemName: "arrow.uturn.left").font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy to clipboard")
+                }
+                .padding(.horizontal, 16)
+                .frame(height: IslandMetrics.rowHeight)
+            }
+            Spacer(minLength: 0)
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let now = Date()
+            let files = urls.map { ShelfFile(url: $0, createdAt: now) }
+            shelfFiles = ShelfFiles.adding(
+                files, to: shelfFiles,
+                limit: NotchHUDConfig.shared.clampedShelfLimit)
+            return true
+        }
     }
 
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
@@ -630,6 +749,18 @@ struct NotchStatusView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+    }
+
+    /// Watch the system pasteboard; new non-empty text lands on the shelf.
+    private func pollClipboard(at date: Date) {
+        let pb = NSPasteboard.general
+        let count = pb.changeCount
+        guard count != lastChangeCount else { return }
+        lastChangeCount = count
+        guard let text = pb.string(forType: .string) else { return }
+        clipboardItems = ClipboardHistory.merging(
+            existing: clipboardItems, newText: text, now: date,
+            limit: NotchHUDConfig.shared.clampedShelfLimit)
     }
 
     @ViewBuilder

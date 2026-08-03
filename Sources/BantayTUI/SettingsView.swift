@@ -28,6 +28,8 @@ struct SettingsView: View {
     @State private var usageBudget = Int(NotchHUDConfig.shared.usageBudgetUSD)
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
+    @State private var showShelf = NotchHUDConfig.shared.showShelfTab
+    @State private var shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
 
     var body: some View {
         Form {
@@ -81,6 +83,17 @@ struct SettingsView: View {
                 Text("Remote hook: ssh -R \(ingestPort):localhost:\(ingestPort) devbox")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.secondary)
+            }
+            Section("Shelf") {
+                Toggle("Shelf tab in expanded view", isOn: $showShelf)
+                    .help("Clipboard history + dropped files next to agents.")
+                    .onChange(of: showShelf) { _, newValue in
+                        NotchHUDConfig.shared.showShelfTab = newValue
+                    }
+                Stepper("Shelf limit: \(shelfLimit)", value: $shelfLimit, in: 1...50)
+                    .onChange(of: shelfLimit) { _, newValue in
+                        NotchHUDConfig.shared.shelfLimit = newValue
+                    }
             }
             Section("Alerts") {
                 Toggle("Alert sounds", isOn: $enableAlerts)
@@ -224,7 +237,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 700)
+        .frame(width: 460, height: 780)
     }
 }
 
