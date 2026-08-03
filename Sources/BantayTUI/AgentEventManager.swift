@@ -475,12 +475,27 @@ extension AgentEventManager {
     private func refreshRosterAndArmWaits() async {
         ensureFileWatcher()
         let herdrAgents = await herdrAdapter.listAgents()
-        let agents = mergeStandalone(
-            into: herdrAgents,
-            detected: NotchHUDConfig.shared.standaloneScanEnabled
-                ? StandaloneAgentScanner.scan() : [])
-        self.usage = UsageTracker.latestUsage(
-            home: NSHomeDirectory(), names: agents.map(\.agent))
+        let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
+        // Heavy scans (ps, transcript enumeration) run off the main actor so
+        // the island never beachballs while polling.
+        let agents = await Task.detached(priority: .userInitiated) {
+            let detected = scanStandalone ? StandaloneAgentScanner.scan() : []
+            return herdrAgents
+                + detected.filter {
+                    !Set(herdrAgents.map(\.agent)).contains($0.name)
+                }.map {
+                    HerdrAgentInfo(
+                        agent: $0.name,
+                        agentStatus: "working",
+                        paneId: nil,
+                        workspaceId: nil,
+                        terminalTitle: $0.activity
+                    )
+                }
+        }.value
+        self.usage = await Task.detached(priority: .utility) {
+            UsageTracker.latestUsage(home: NSHomeDirectory(), names: agents.map(\.agent))
+        }.value
         let result = Self.update(
             from: agents,
             lastSeenKinds: &lastSeenKinds,

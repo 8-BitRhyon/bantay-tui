@@ -152,7 +152,7 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
     }
 }
 
-struct HerdrAgentInfo: Decodable {
+struct HerdrAgentInfo: Decodable, Sendable {
     let agent: String
     let agentStatus: String?
     let paneId: String?

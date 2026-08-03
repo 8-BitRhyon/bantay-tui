@@ -134,6 +134,8 @@ enum StandaloneAgentScanner {
     }
 
     /// Live process scan via `ps`. Returns process samples for classification.
+    /// Reads the pipe concurrently with process exit to avoid the classic
+    /// pipe-fill deadlock (waitUntilExit before draining the pipe).
     static func runningProcesses() -> [ProcessSample] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -146,8 +148,8 @@ enum StandaloneAgentScanner {
         } catch {
             return []
         }
-        process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         guard let text = String(data: data, encoding: .utf8) else { return [] }
         return text.split(whereSeparator: \.isNewline).compactMap { line in
             let parts = line.split(whereSeparator: \.isWhitespace)
