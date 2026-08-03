@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var fullScreenObserver: NSObjectProtocol?
     private var fullScreenExitObserver: NSObjectProtocol?
     private var spaceChangeObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
     @MainActor private static var settleTask: Task<Void, Never>?
     private var hotkeyMonitor: Any?
     private var badgeTimer: Timer?
@@ -182,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated { AppDelegate.reposition() }
+            MainActor.assumeIsolated { AppDelegate.handleDisplayChange() }
         }
         fullScreenObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didEnterFullScreenNotification,
@@ -204,6 +205,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             queue: .main
         ) { _ in
             MainActor.assumeIsolated { AppDelegate.handleSpaceChange() }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AppDelegate.handleDisplayChange() }
+        }
+    }
+
+    /// Debounced display hot-plug / wake handler: let the WindowServer
+    /// settle, then re-anchor the island and purge ghost windows.
+    @MainActor
+    static func handleDisplayChange() {
+        settleTask?.cancel()
+        settleTask = Task { @MainActor in
+            try? await Task.sleep(
+                for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
+            guard !Task.isCancelled else { return }
+            reanchorIfGhosted()
+            reposition()
+            if window?.isVisible == true { showAtNotch() }
+        }
+    }
+
+    /// If the island is visible but its frame is off every current screen
+    /// (display disconnected, clamshell closed), move it back on-screen.
+    @MainActor
+    static func reanchorIfGhosted() {
+        guard let window else { return }
+        let screens = NSScreen.screens.map(\.frame)
+        if IslandMetrics.DisplayAnchor.needsReanchor(
+            isVisible: window.isVisible, windowFrame: window.frame, screens: screens)
+        {
+            reposition()
+            Self.dbg("display: ghost window re-anchored")
         }
     }
 

@@ -270,6 +270,25 @@ public enum IslandMetrics: Sendable {
         }
     }
 
+    // MARK: - Display hot-swap & ghost validation
+
+    /// Whether a window frame still lands on any of the given screens. A
+    /// frame on a disconnected display is a "ghost" that must be re-anchored.
+    enum DisplayAnchor {
+        static func frameIsOnScreens(frame: CGRect, screens: [CGRect]) -> Bool {
+            screens.contains { $0.intersects(frame) }
+        }
+
+        /// True when the window must be re-anchored: it is visible but its
+        /// frame is off every current screen (display disconnected, clamshell
+        /// closed, hot-plug race).
+        static func needsReanchor(
+            isVisible: Bool, windowFrame: CGRect, screens: [CGRect]
+        ) -> Bool {
+            isVisible && !frameIsOnScreens(frame: windowFrame, screens: screens)
+        }
+    }
+
     // MARK: - Full-screen & space policy
 
     /// Whether the island should be visible for the given full-screen state.

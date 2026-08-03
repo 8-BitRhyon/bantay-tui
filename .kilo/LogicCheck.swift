@@ -1476,6 +1476,35 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "avoidMenuBarIcons")
         }
 
+        // L17. Display hot-swap & ghost validation: window-frame checks
+        // against current screens.
+        let screenA = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let screenB = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let onA = CGRect(x: 600, y: 500, width: 504, height: 560)
+        let ghost = CGRect(x: 5000, y: 500, width: 504, height: 560)
+        check(
+            IslandMetrics.DisplayAnchor.frameIsOnScreens(frame: onA, screens: [screenA, screenB]),
+            "L17 frame on live screen is valid")
+        check(
+            !IslandMetrics.DisplayAnchor.frameIsOnScreens(frame: ghost, screens: [screenA]),
+            "L17 disconnected-display frame is ghost")
+        let onB = CGRect(x: 3000, y: 500, width: 504, height: 560)
+        check(
+            IslandMetrics.DisplayAnchor.frameIsOnScreens(frame: onB, screens: [screenA, screenB]),
+            "L17 frame lands on the other live screen")
+        check(
+            IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: true, windowFrame: ghost, screens: [screenA]),
+            "L17 visible ghost needs re-anchor")
+        check(
+            !IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: false, windowFrame: ghost, screens: [screenA]),
+            "L17 hidden ghost needs no re-anchor")
+        check(
+            !IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: true, windowFrame: onA, screens: [screenA]),
+            "L17 on-screen window needs no re-anchor")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
