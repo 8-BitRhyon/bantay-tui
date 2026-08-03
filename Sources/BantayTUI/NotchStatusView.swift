@@ -117,18 +117,30 @@ struct NotchStatusView: View {
     }
 
     private var islandHeight: CGFloat {
-        isExpanded
-            ? IslandMetrics.expandedSize(
+        if isExpanded {
+            return IslandMetrics.expandedSize(
                 topInset: chipTopOffset, agentCount: eventManager.agents.count,
-                queueCount: approvalQueueAgents.count
+                queueCount: approvalQueueAgents.count,
+                shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
+                overflowCount: expandedQueueSplit.overflow
             ).height
-            : IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
+        }
+        return IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
     }
 
     private var contentHeight: CGFloat {
         IslandMetrics.contentHeight(
             isExpanded: isExpanded, topInset: chipTopOffset,
-            agentCount: eventManager.agents.count, queueCount: approvalQueueAgents.count)
+            agentCount: eventManager.agents.count, queueCount: approvalQueueAgents.count,
+            shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
+            overflowCount: expandedQueueSplit.overflow)
+    }
+
+    /// Approval-queue split used for both layout height and rendering.
+    private var expandedQueueSplit: (shown: Int, overflow: Int) {
+        IslandMetrics.queueSplit(
+            blockedCount: approvalQueueAgents.count,
+            cap: NotchHUDConfig.shared.clampedExpandedQueueCap)
     }
 
     /// Content frame width: the split centered strip spans the whole window
@@ -674,9 +686,7 @@ struct NotchStatusView: View {
         let counts = IslandMetrics.agentCounts(
             kinds: eventManager.agents.map(\.kind))
         let queue = approvalQueueAgents
-        let queueSplit = IslandMetrics.queueSplit(
-            blockedCount: queue.count,
-            cap: NotchHUDConfig.shared.clampedExpandedQueueCap)
+        let queueSplit = expandedQueueSplit
         return VStack(spacing: 0) {
             headerBar(counts: counts)
 

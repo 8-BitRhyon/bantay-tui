@@ -149,6 +149,12 @@ public enum IslandMetrics: Sendable {
     public static let expandedQueueCap: Int = 3
     /// Height of one approval-queue card.
     public static let queueCardHeight: CGFloat = 42
+    /// Shelf tab bar height (Agents/Shelf switcher).
+    public static let shelfTabBarHeight: CGFloat = 22
+    /// Divider between the header/tabs and the list.
+    public static let dividerHeight: CGFloat = 1
+    /// "+N more waiting" overflow row height.
+    public static let overflowRowHeight: CGFloat = 18
     /// Footer health-bar height.
     public static let footerHeight: CGFloat = 22
     /// Group order for the expanded roster: needs input first, then working,
@@ -197,10 +203,14 @@ public enum IslandMetrics: Sendable {
     /// roster rows, and footer — capped at the island max.
     public static func expandedSize(
         topInset: CGFloat, agentCount: Int, queueCount: Int,
+        shelfTabVisible: Bool = false, overflowCount: Int = 0,
         headerHeight: CGFloat = headerHeight, rowHeight: CGFloat = rowHeight
     ) -> CGSize {
+        let chrome =
+            (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
+            + CGFloat(max(overflowCount, 0)) * overflowRowHeight
         let h =
-            topInset + headerHeight + CGFloat(queueCount) * queueCardHeight
+            topInset + headerHeight + chrome + CGFloat(queueCount) * queueCardHeight
             + CGFloat(agentCount) * rowHeight + footerHeight + contentSpacing
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
     }
@@ -516,11 +526,13 @@ public enum IslandMetrics: Sendable {
     }
 
     public static func contentHeight(
-        isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0
+        isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0,
+        shelfTabVisible: Bool = false, overflowCount: Int = 0
     ) -> CGFloat {
         if isExpanded {
             return expandedSize(
-                topInset: topInset, agentCount: agentCount, queueCount: queueCount
+                topInset: topInset, agentCount: agentCount, queueCount: queueCount,
+                shelfTabVisible: shelfTabVisible, overflowCount: overflowCount
             ).height - topInset
         }
         return pillHeight

@@ -1744,6 +1744,43 @@ struct LogicCheckMain {
         check(fit4 >= 1 && fit4 <= 3, "L23 long names shrink fit (got \(fit4))")
         check(fit4 <= fit1, "L23 longer names never fit more than short ones")
 
+        // L24. Expanded height accounts for the shelf tab bar, divider, and
+        // +N overflow rows — otherwise the bottom roster rows clip.
+        let baseSize = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
+        let withTab = IslandMetrics.expandedSize(
+            topInset: 47, agentCount: 3, shelfTabVisible: true)
+        check(
+            abs(
+                withTab.height - baseSize.height
+                    - (IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight)) < 0.01,
+            "L24 shelf tab adds tab+divider height (got \(withTab.height) vs \(baseSize.height))")
+        let withOverflow = IslandMetrics.expandedSize(
+            topInset: 47, agentCount: 3, overflowCount: 2)
+        check(
+            abs(
+                withOverflow.height - baseSize.height - 2 * IslandMetrics.overflowRowHeight)
+                < 0.01,
+            "L24 overflow rows add height (got \(withOverflow.height) vs \(baseSize.height))")
+        let both = IslandMetrics.expandedSize(
+            topInset: 47, agentCount: 3, shelfTabVisible: true, overflowCount: 1)
+        let expected =
+            baseSize.height + IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight
+            + IslandMetrics.overflowRowHeight
+        check(abs(both.height - expected) < 0.01, "L24 tab + overflow stack correctly")
+        check(
+            IslandMetrics.contentHeight(
+                isExpanded: true, topInset: 47, agentCount: 3,
+                shelfTabVisible: true) == withTab.height - 47,
+            "L24 content height excludes top inset with tab chrome")
+        check(
+            IslandMetrics.expandedSize(topInset: 47, agentCount: 3).height
+                <= IslandMetrics.maxExpandedHeight,
+            "L24 cap still applies")
+        check(
+            IslandMetrics.shelfTabBarHeight > 0 && IslandMetrics.dividerHeight > 0
+                && IslandMetrics.overflowRowHeight > 0,
+            "L24 chrome constants positive")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
