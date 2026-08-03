@@ -56,6 +56,8 @@ final class AgentEventManager: ObservableObject {
 
     @Published private(set) var currentEvent: AgentEvent?
     @Published private(set) var agents: [AgentSnapshot] = []
+    /// Aggregate token/cost usage from agent transcripts (gauge in footer).
+    @Published private(set) var usage: UsageSnapshot = .zero
     private var watchTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     private var waitProcesses: [String: Process] = [:]
@@ -477,6 +479,8 @@ extension AgentEventManager {
             into: herdrAgents,
             detected: NotchHUDConfig.shared.standaloneScanEnabled
                 ? StandaloneAgentScanner.scan() : [])
+        self.usage = UsageTracker.latestUsage(
+            home: NSHomeDirectory(), names: agents.map(\.agent))
         let result = Self.update(
             from: agents,
             lastSeenKinds: &lastSeenKinds,

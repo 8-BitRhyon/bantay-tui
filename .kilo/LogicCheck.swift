@@ -1088,6 +1088,76 @@ struct LogicCheckMain {
                 "L9 standalone info mapped")
         }
 
+        // L10. Usage gauge: transcript parsing (claude + codex shapes),
+        // aggregation, budget fraction, compact tokens, config facets.
+        let claudeLine =
+            #"{"type":"assistant","message":{"usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":300,"cache_creation_input_tokens":50},"costUSD":0.012}}"#
+        let flatLine =
+            #"{"type":"response_item","usage":{"input_tokens":500,"output_tokens":100},"costUSD":0.004}"#
+        guard let claudeUsage = UsageParser.parse(jsonLine: claudeLine) else {
+            check(false, "L10 claude usage parses")
+            fatalError()
+        }
+        check(claudeUsage.inputTokens == 1000, "L10 claude input tokens (got \(claudeUsage.inputTokens))")
+        check(claudeUsage.outputTokens == 200, "L10 claude output tokens")
+        check(claudeUsage.cacheReadTokens == 300, "L10 claude cache read")
+        check(claudeUsage.cacheCreationTokens == 50, "L10 claude cache creation")
+        check(abs(claudeUsage.costUSD - 0.012) < 0.0001, "L10 claude cost parsed")
+        guard let flatUsage = UsageParser.parse(jsonLine: flatLine) else {
+            check(false, "L10 flat usage parses")
+            fatalError()
+        }
+        check(flatUsage.inputTokens == 500, "L10 flat input tokens")
+        check(flatUsage.outputTokens == 100, "L10 flat output tokens")
+        check(abs(flatUsage.costUSD - 0.004) < 0.0001, "L10 flat cost parsed")
+        check(
+            UsageParser.parse(jsonLine: #"{"type":"assistant","message":{"content":"hi"}}"#)
+                == nil,
+            "L10 line without usage ignored")
+        let summed = UsageParser.parseAll(lines: [claudeLine, flatLine, "garbage"])
+        check(summed.inputTokens == 1500, "L10 parseAll sums input (got \(summed.inputTokens))")
+        check(summed.outputTokens == 300, "L10 parseAll sums output")
+        check(
+            abs(summed.costUSD - 0.016) < 0.0001,
+            "L10 parseAll sums cost (got \(summed.costUSD))")
+        check(
+            UsageTracker.aggregate([claudeUsage, flatUsage]).totalTokens == 2150,
+            "L10 aggregate totals (got \(UsageTracker.aggregate([claudeUsage, flatUsage]).totalTokens))")
+        check(
+            abs(UsageTracker.fractionUsed(costUSD: 5, budgetUSD: 10) - 0.5) < 0.001,
+            "L10 fraction half budget")
+        check(
+            abs(UsageTracker.fractionUsed(costUSD: 20, budgetUSD: 10) - 1) < 0.001,
+            "L10 fraction clamps at 1")
+        check(
+            abs(UsageTracker.fractionUsed(costUSD: -3, budgetUSD: 10) - 0) < 0.001,
+            "L10 fraction clamps at 0")
+        check(UsageTracker.fractionUsed(costUSD: 2, budgetUSD: 0) == 0, "L10 zero budget safe")
+        check(UsageTracker.compactTokens(1234) == "1.2k", "L10 compact k (got \(UsageTracker.compactTokens(1234)))")
+        check(UsageTracker.compactTokens(3_500_000) == "3.5m", "L10 compact m")
+        check(UsageTracker.compactTokens(42) == "42", "L10 compact small")
+
+        // L10. Config facets: gauge default on, budget clamped + persisted.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origGauge = cfg.showUsageGauge
+            let origBudget = cfg.usageBudgetUSD
+            check(cfg.showUsageGauge, "L10 usage gauge default on")
+            cfg.showUsageGauge = false
+            check(defaults.bool(forKey: "showUsageGauge") == false, "L10 gauge persisted")
+            cfg.usageBudgetUSD = 500
+            check(cfg.usageBudgetUSD == 100, "L10 budget clamps at 100 (got \(cfg.usageBudgetUSD))")
+            cfg.usageBudgetUSD = 0.5
+            check(cfg.usageBudgetUSD == 1, "L10 budget clamps at 1 (got \(cfg.usageBudgetUSD))")
+            cfg.usageBudgetUSD = 25
+            check(defaults.double(forKey: "usageBudgetUSD") == 25, "L10 budget persisted")
+            cfg.showUsageGauge = origGauge
+            cfg.usageBudgetUSD = origBudget
+            defaults.removeObject(forKey: "showUsageGauge")
+            defaults.removeObject(forKey: "usageBudgetUSD")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

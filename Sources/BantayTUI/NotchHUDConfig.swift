@@ -86,6 +86,15 @@ final class NotchHUDConfig {
     var standaloneScanEnabled = true {
         didSet { defaults.set(standaloneScanEnabled, forKey: "standaloneScanEnabled") }
     }
+    var showUsageGauge = true {
+        didSet { defaults.set(showUsageGauge, forKey: "showUsageGauge") }
+    }
+    var usageBudgetUSD: Double = 10.0 {
+        didSet {
+            usageBudgetUSD = min(max(usageBudgetUSD, 1), 100)
+            defaults.set(usageBudgetUSD, forKey: "usageBudgetUSD")
+        }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -174,6 +183,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "standaloneScanEnabled") as? Bool {
             standaloneScanEnabled = v
+        }
+        if let v = defaults.object(forKey: "showUsageGauge") as? Bool {
+            showUsageGauge = v
+        }
+        if let v = defaults.object(forKey: "usageBudgetUSD") as? NSNumber {
+            usageBudgetUSD = min(max(v.doubleValue, 1), 100)
         }
     }
 }

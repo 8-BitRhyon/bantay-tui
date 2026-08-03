@@ -24,6 +24,8 @@ struct SettingsView: View {
     @State private var showElapsed = NotchHUDConfig.shared.showElapsedTime
     @State private var menuBadge = NotchHUDConfig.shared.menuBarBadge
     @State private var standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
+    @State private var showUsage = NotchHUDConfig.shared.showUsageGauge
+    @State private var usageBudget = Int(NotchHUDConfig.shared.usageBudgetUSD)
 
     var body: some View {
         Form {
@@ -39,6 +41,16 @@ struct SettingsView: View {
                     )
                     .onChange(of: standaloneScan) { _, newValue in
                         NotchHUDConfig.shared.standaloneScanEnabled = newValue
+                    }
+                Toggle("Usage gauge in footer", isOn: $showUsage)
+                    .help("Token/cost bar from agent transcripts.")
+                    .onChange(of: showUsage) { _, newValue in
+                        NotchHUDConfig.shared.showUsageGauge = newValue
+                    }
+                Stepper("Usage budget: $\(usageBudget)", value: $usageBudget, in: 1...100)
+                    .help("Gauge turns amber at 70%, red at 90% of budget.")
+                    .onChange(of: usageBudget) { _, newValue in
+                        NotchHUDConfig.shared.usageBudgetUSD = Double(newValue)
                     }
                 Stepper(
                     "Poll interval: \(captureInterval) s",

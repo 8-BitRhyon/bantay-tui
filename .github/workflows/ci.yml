@@ -59,6 +59,7 @@ jobs:
             Sources/BantayTUI/IslandMetrics.swift \
             Sources/BantayTUI/PlexerAdapter.swift \
             Sources/BantayTUI/AgentEventManager.swift \
+            Sources/BantayTUI/UsageTracker.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check

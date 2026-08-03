@@ -730,6 +730,7 @@ struct NotchStatusView: View {
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
             }
             Spacer(minLength: 8)
+            usageGauge
             Text(adapter.kind.label)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.4))
@@ -741,6 +742,44 @@ struct NotchStatusView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: IslandMetrics.footerHeight)
+    }
+
+    /// Compact token/cost gauge: budget fraction bar + totals.
+    @ViewBuilder
+    private var usageGauge: some View {
+        let config = NotchHUDConfig.shared
+        let usage = eventManager.usage
+        if config.showUsageGauge, usage.totalTokens > 0 || usage.costUSD > 0 {
+            let fraction = UsageTracker.fractionUsed(
+                costUSD: usage.costUSD, budgetUSD: config.usageBudgetUSD)
+            let color: Color =
+                fraction >= 0.9
+                ? Color(hex: "#ff6b6b")
+                : fraction >= 0.7
+                    ? Color(hex: "#ffe066")
+                    : Color(hex: "#4ecdc4")
+            HStack(spacing: 4) {
+                if usage.costUSD > 0 {
+                    Text(String(format: "$%.2f", usage.costUSD))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.55))
+                }
+                Text(UsageTracker.compactTokens(usage.totalTokens))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.55))
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.12))
+                        Capsule().fill(color)
+                            .frame(width: geo.size.width * fraction)
+                    }
+                }
+                .frame(width: 36, height: 4)
+            }
+            .help(
+                "Tokens \(usage.totalTokens) · budget $\(String(format: "%.0f", config.usageBudgetUSD))"
+            )
+        }
     }
 
     private func agentRow(agent: AgentSnapshot) -> some View {
