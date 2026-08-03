@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var stickyTTL = Int(NotchHUDConfig.shared.stickyApprovalTTL)
     @State private var launchAtLogin = LaunchAgent.isLoaded()
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
+    @State private var showIslandWhenIdle = NotchHUDConfig.shared.showIslandWhenIdle
     @State private var muteInTerminal = NotchHUDConfig.shared.muteInTerminal
     @State private var dockSide = NotchHUDConfig.shared.islandDockSide.rawValue
     @State private var idleStyle = NotchHUDConfig.shared.idleStyle.rawValue
@@ -205,6 +206,16 @@ struct SettingsView: View {
                     )
                     .onChange(of: hideAtStartup) { _, newValue in
                         NotchHUDConfig.shared.hideAtStartup = newValue
+                    }
+                Toggle("Show island when idle", isOn: $showIslandWhenIdle)
+                    .help(
+                        "Keep the notch visible even with no agents or events — "
+                            + "so you always know where Bantay lives."
+                    )
+                    .onChange(of: showIslandWhenIdle) { _, newValue in
+                        NotchHUDConfig.shared.showIslandWhenIdle = newValue
+                        NotificationCenter.default.post(
+                            name: .notchVisibilityChanged, object: nil)
                     }
                 Picker("Idle position", selection: $dockSide) {
                     Text("Right of notch").tag("right")

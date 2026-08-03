@@ -231,6 +231,28 @@ public enum IslandMetrics: Sendable {
             height: size.height)
     }
 
+    // MARK: - Visibility policy
+
+    /// Pure island-visibility gate. The island shows when enabled, not
+    /// snoozed, not hidden-at-start, and either there is work or the user
+    /// asked to keep it visible while idle (`showWhenIdle` / `forced`).
+    enum VisibilityPolicy {
+        static func shouldShow(
+            islandEnabled: Bool,
+            snoozed: Bool,
+            hideAtStartup: Bool,
+            didShowOnce: Bool,
+            hasWork: Bool,
+            showWhenIdle: Bool,
+            forced: Bool = false
+        ) -> Bool {
+            guard islandEnabled, !snoozed else { return false }
+            let hiddenAtStart = hideAtStartup && !didShowOnce && !showWhenIdle && !forced
+            if hiddenAtStart { return false }
+            return hasWork || showWhenIdle || forced
+        }
+    }
+
     // MARK: - Menu-bar collision avoidance
 
     /// How much horizontal room the island may use on a docked side without

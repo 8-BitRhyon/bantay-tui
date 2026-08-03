@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var shared: AppDelegate?
     /// Set once the island has shown at least once; un-gates `hideAtStartup`.
     @MainActor static var didShowOnce = false
+    /// True while the user has forced the island visible via the tray menu.
+    @MainActor static var isForcedVisible = false
     /// Set at launch when the one-time welcome sheet must appear.
     @MainActor static var pendingWelcome = false
     private var statusItem: NSStatusItem?
@@ -123,10 +125,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
             Self.pendingWelcome = true
         }
-        if NotchHUDConfig.shared.hideAtStartup {
+        let config = NotchHUDConfig.shared
+        if config.hideAtStartup && !config.showIslandWhenIdle {
             Self.dbg("launch: hideAtStartup set, island stays hidden until an event")
         } else {
-            Self.dbg("launch: showing island")
+            Self.dbg(
+                "launch: showing island (hideAtStartup=\(config.hideAtStartup) idleShow=\(config.showIslandWhenIdle))"
+            )
             Self.showAtNotch()
         }
     }
@@ -476,6 +481,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         let config = NotchHUDConfig.shared
+        let showItem = NSMenuItem(
+            title: Self.isForcedVisible ? "Hide Island" : "Show Island",
+            action: #selector(toggleForcedVisible),
+            keyEquivalent: "")
+        showItem.target = self
+        menu.addItem(showItem)
         let disableItem = NSMenuItem(
             title: config.islandEnabled ? "Disable Island" : "Enable Island",
             action: #selector(toggleIslandEnabled),
@@ -593,6 +604,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let config = NotchHUDConfig.shared
         config.enableAgentAlerts.toggle()
         sender.state = config.enableAgentAlerts ? .on : .off
+    }
+
+    @MainActor
+    @objc private func toggleForcedVisible() {
+        Self.isForcedVisible.toggle()
+        if Self.isForcedVisible {
+            Self.didShowOnce = true
+            Self.showAtNotch()
+        } else {
+            Self.hide()
+        }
+        NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
     }
 
     @MainActor

@@ -41,6 +41,9 @@ final class NotchHUDConfig {
     var hideAtStartup = false {
         didSet { defaults.set(hideAtStartup, forKey: "hideAtStartup") }
     }
+    var showIslandWhenIdle = true {
+        didSet { defaults.set(showIslandWhenIdle, forKey: "showIslandWhenIdle") }
+    }
     var islandDockSide: IslandMetrics.IslandDockSide = .right {
         didSet { defaults.set(islandDockSide.rawValue, forKey: "islandDockSide") }
     }
@@ -179,6 +182,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "hideAtStartup") as? Bool {
             hideAtStartup = v
+        }
+        if let v = defaults.object(forKey: "showIslandWhenIdle") as? Bool {
+            showIslandWhenIdle = v
         }
         if let v = defaults.string(forKey: "islandDockSide"),
             let side = IslandMetrics.IslandDockSide(rawValue: v)

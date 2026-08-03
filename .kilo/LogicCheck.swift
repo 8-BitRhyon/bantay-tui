@@ -1643,6 +1643,51 @@ struct LogicCheckMain {
             ClaudeHookInstaller.mapToEventPayload(["hook_event_name": "SubagentStart"]) == nil,
             "L20 unhandled events ignored")
 
+        // L21. Visibility policy: island shows when enabled/not snoozed and
+        // (hasWork || showWhenIdle || forced); hideAtStartup only gates until
+        // first show; config persistence.
+        let v: (Bool, Bool, Bool, Bool, Bool, Bool, Bool) -> Bool = {
+            IslandMetrics.VisibilityPolicy.shouldShow(
+                islandEnabled: $0, snoozed: $1, hideAtStartup: $2, didShowOnce: $3,
+                hasWork: $4, showWhenIdle: $5, forced: $6)
+        }
+        check(
+            v(true, false, false, true, true, false, false),
+            "L21 work shows island")
+        check(
+            v(true, false, true, false, false, true, false),
+            "L21 showWhenIdle shows island at launch despite hideAtStartup")
+        check(
+            v(true, false, true, false, false, false, true),
+            "L21 forced shows island despite hideAtStartup")
+        check(
+            v(true, false, true, true, true, false, false),
+            "L21 hideAtStartup un-gates after first show")
+        check(
+            !v(false, false, false, true, true, false, false),
+            "L21 disabled island never shows")
+        check(
+            !v(true, true, false, true, true, false, false),
+            "L21 snoozed island never shows")
+        check(
+            !v(true, false, true, false, false, false, false),
+            "L21 hideAtStartup + no work + not idle-show hides")
+        check(
+            v(true, false, false, true, false, false, true),
+            "L21 forced shows even without work")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.showIslandWhenIdle
+            check(cfg.showIslandWhenIdle, "L21 idle-show default on")
+            cfg.showIslandWhenIdle = false
+            check(
+                defaults.bool(forKey: "showIslandWhenIdle") == false,
+                "L21 idle-show persisted")
+            cfg.showIslandWhenIdle = orig
+            defaults.removeObject(forKey: "showIslandWhenIdle")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
