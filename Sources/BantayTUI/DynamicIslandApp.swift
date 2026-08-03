@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var screenChangeObserver: NSObjectProtocol?
     private var hotkeyMonitor: Any?
     private var badgeTimer: Timer?
+    private var ingestServer: EventIngestServer?
 
     /// Diagnostic trace written to stderr (landld captures it in bantay.err).
     static func dbg(_ message: String) {
@@ -72,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         observeScreenChanges()
         installGlobalHotkey()
         startBadgeTimer()
+        updateIngestServer()
         Self.dbg(
             "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
@@ -256,6 +258,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             button.attributedTitle = NSAttributedString(string: "")
         }
+    }
+
+    /// Start/stop the remote event-ingest listener per config. Remote agents
+    /// tunnel into it (`ssh -R <port>:localhost:<port>`) and POST event
+    /// lines that enter the same pipeline as local events.
+    @MainActor
+    func updateIngestServer() {
+        ingestServer?.stop()
+        ingestServer = nil
+        let config = NotchHUDConfig.shared
+        guard config.ingestEnabled else { return }
+        let manager = AgentEventManager.shared
+        let server = EventIngestServer(port: IngestHTTP.clampedPort(config.ingestPort)) { line in
+            Task { @MainActor in
+                manager.ingestEventLine(line)
+            }
+        }
+        server.start()
+        ingestServer = server
+        Self.dbg(
+            "ingest: listening on 127.0.0.1:\(config.ingestPort) "
+                + "(ssh -R \(config.ingestPort):localhost:\(config.ingestPort))")
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

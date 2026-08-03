@@ -95,6 +95,15 @@ final class NotchHUDConfig {
             defaults.set(usageBudgetUSD, forKey: "usageBudgetUSD")
         }
     }
+    var ingestEnabled = false {
+        didSet { defaults.set(ingestEnabled, forKey: "ingestEnabled") }
+    }
+    var ingestPort: Int = 41817 {
+        didSet {
+            ingestPort = Int(IngestHTTP.clampedPort(ingestPort))
+            defaults.set(ingestPort, forKey: "ingestPort")
+        }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -189,6 +198,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "usageBudgetUSD") as? NSNumber {
             usageBudgetUSD = min(max(v.doubleValue, 1), 100)
+        }
+        if let v = defaults.object(forKey: "ingestEnabled") as? Bool {
+            ingestEnabled = v
+        }
+        if let v = defaults.object(forKey: "ingestPort") as? NSNumber {
+            ingestPort = Int(IngestHTTP.clampedPort(v.intValue))
         }
     }
 }

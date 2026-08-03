@@ -610,6 +610,25 @@ extension AgentEventManager {
         startedAtByPane.removeValue(forKey: pane)
     }
 
+    /// Ingest a remote event line (SSH bridge): validates the payload then
+    /// appends it to the watched events file so the file watcher surfaces it
+    /// like any local event.
+    func ingestEventLine(_ line: String) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
+            (try? JSONDecoder().decode(AgentEventPayload.self, from: data)) != nil
+        else {
+            return
+        }
+        if !FileManager.default.fileExists(atPath: eventsFileURL.path) {
+            FileManager.default.createFile(atPath: eventsFileURL.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: eventsFileURL) else { return }
+        defer { try? handle.close() }
+        try? handle.seekToEnd()
+        handle.write(Data((trimmed + "\n").utf8))
+    }
+
     /// Merge standalone-detected agents into the herdr roster without
     /// duplicating agents herdr already manages (matched by canonical name).
     func mergeStandalone(

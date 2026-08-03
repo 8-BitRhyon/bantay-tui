@@ -1158,6 +1158,69 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "usageBudgetUSD")
         }
 
+        // L11. Remote ingest (SSH bridge): HTTP parsing, payload
+        // validation, file append, port clamping, config persistence.
+        let postBody = #"{"type":"access_request","title":"remote prompt","paneId":"r1","variance":"choices","choices":["a","b"]}"#
+        let postData = Data(
+            ("POST /events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+                + "Content-Length: \(postBody.utf8.count)\r\n\r\n\(postBody)").utf8)
+        guard let request = IngestHTTP.request(from: postData) else {
+            check(false, "L11 POST request parses")
+            fatalError()
+        }
+        check(request.method == "POST", "L11 method is POST")
+        check(
+            String(data: request.body, encoding: .utf8) == postBody,
+            "L11 body extracted by content-length")
+        check(
+            IngestHTTP.request(from: Data("POST /events HTTP/1.1\r\n\r\n".utf8)) == nil,
+            "L11 missing content-length ignored")
+        check(
+            IngestHTTP.request(from: Data("GET /events HTTP/1.1\r\nContent-Length: 0\r\n\r\n".utf8))
+                == nil,
+            "L11 non-POST rejected")
+        check(
+            IngestHTTP.request(from: Data("POST /events HTTP/1.1\r\nContent-Length: 10\r\n\r\nab".utf8))
+                == nil,
+            "L11 truncated body rejected")
+        check(IngestHTTP.clampedPort(80) == 1024, "L11 port floors at 1024")
+        check(IngestHTTP.clampedPort(70000) == 65535, "L11 port caps at 65535")
+        check(IngestHTTP.clampedPort(41817) == 41817, "L11 port passthrough")
+        check(
+            !IngestHTTP.okResponse().isEmpty && !IngestHTTP.badResponse().isEmpty,
+            "L11 responses present")
+
+        // L11. Ingest appends valid payloads to the watched events file.
+        MainActor.assumeIsolated {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("lc-l11-\(UUID().uuidString).jsonl")
+            let manager = AgentEventManager(eventsFileURL: url, capture: false)
+            manager.ingestEventLine("not json at all")
+            manager.ingestEventLine(postBody)
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            check(
+                text.contains("access_request") && !text.contains("not json"),
+                "L11 only valid payloads appended")
+
+            // L11. Config: ingest off by default, port clamped + persisted.
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origEnabled = cfg.ingestEnabled
+            let origPort = cfg.ingestPort
+            check(!cfg.ingestEnabled, "L11 ingest default off (secure)")
+            check(cfg.ingestPort == 41817, "L11 default port 41817")
+            cfg.ingestEnabled = true
+            check(defaults.bool(forKey: "ingestEnabled"), "L11 ingest persisted")
+            cfg.ingestPort = 70000
+            check(cfg.ingestPort == 65535, "L11 port clamps on set (got \(cfg.ingestPort))")
+            cfg.ingestPort = 42000
+            check(defaults.integer(forKey: "ingestPort") == 42000, "L11 port persisted")
+            cfg.ingestEnabled = origEnabled
+            cfg.ingestPort = origPort
+            defaults.removeObject(forKey: "ingestEnabled")
+            defaults.removeObject(forKey: "ingestPort")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

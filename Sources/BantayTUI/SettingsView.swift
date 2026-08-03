@@ -26,6 +26,8 @@ struct SettingsView: View {
     @State private var standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
     @State private var showUsage = NotchHUDConfig.shared.showUsageGauge
     @State private var usageBudget = Int(NotchHUDConfig.shared.usageBudgetUSD)
+    @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
+    @State private var ingestPort = NotchHUDConfig.shared.ingestPort
 
     var body: some View {
         Form {
@@ -34,6 +36,13 @@ struct SettingsView: View {
                     .onChange(of: captureEnabled) { _, newValue in
                         NotchHUDConfig.shared.captureEnabled = newValue
                     }
+                Stepper(
+                    "Poll interval: \(captureInterval) s",
+                    value: $captureInterval, in: 1...60
+                )
+                .onChange(of: captureInterval) { _, newValue in
+                    NotchHUDConfig.shared.captureInterval = Double(newValue)
+                }
                 Toggle("Scan standalone agents", isOn: $standaloneScan)
                     .help(
                         "Detect Claude Code, Codex, Gemini, Cursor, and opencode "
@@ -52,13 +61,26 @@ struct SettingsView: View {
                     .onChange(of: usageBudget) { _, newValue in
                         NotchHUDConfig.shared.usageBudgetUSD = Double(newValue)
                     }
-                Stepper(
-                    "Poll interval: \(captureInterval) s",
-                    value: $captureInterval, in: 1...60
-                )
-                .onChange(of: captureInterval) { _, newValue in
-                    NotchHUDConfig.shared.captureInterval = Double(newValue)
-                }
+            }
+            Section("Remote ingest (SSH bridge)") {
+                Toggle("Listen for remote events", isOn: $ingestEnabled)
+                    .help(
+                        "Accepts event lines from remote agents over "
+                            + "`ssh -R <port>:localhost:<port>`."
+                    )
+                    .onChange(of: ingestEnabled) { _, newValue in
+                        NotchHUDConfig.shared.ingestEnabled = newValue
+                        AppDelegate.shared?.updateIngestServer()
+                    }
+                Stepper("Listen port: \(ingestPort)", value: $ingestPort, in: 1024...65535)
+                    .help("Localhost only; tunnel with SSH port forwarding.")
+                    .onChange(of: ingestPort) { _, newValue in
+                        NotchHUDConfig.shared.ingestPort = newValue
+                        AppDelegate.shared?.updateIngestServer()
+                    }
+                Text("Remote hook: ssh -R \(ingestPort):localhost:\(ingestPort) devbox")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
             }
             Section("Alerts") {
                 Toggle("Alert sounds", isOn: $enableAlerts)
