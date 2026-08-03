@@ -1,7 +1,9 @@
 import Foundation
 
-final class HerdrSocketAdapter: Sendable {
+final class HerdrSocketAdapter: Sendable, PlexerAdapter {
     private let herdrBinPath: String
+
+    var kind: PlexerKind { .herdr }
 
     init(herdrBinPath: String = "herdr") {
         self.herdrBinPath = herdrBinPath
@@ -45,8 +47,42 @@ final class HerdrSocketAdapter: Sendable {
         _ = runHerdr(["agent", "focus", paneId], timeout: 1.0)
     }
 
+    func focusPane(paneId: String) {
+        paneFocus(paneId: paneId)
+    }
+
     func agentPrompt(paneId: String, text: String) {
         _ = runHerdr(["agent", "prompt", paneId, text], timeout: 1.0)
+    }
+
+    /// Sends raw key presses to an agent's terminal. Works without focus.
+    func sendKeys(paneId: String, keys: [String]) {
+        var arguments = ["agent", "send-keys", paneId]
+        arguments.append(contentsOf: keys)
+        _ = runHerdr(arguments, timeout: 1.0)
+    }
+
+    /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter).
+    func approve(paneId: String) {
+        sendKeys(paneId: paneId, keys: ["y", "enter"])
+    }
+
+    /// Denies a yes-no "Need approval" prompt (e.g. "n" + Enter).
+    func deny(paneId: String) {
+        sendKeys(paneId: paneId, keys: ["n", "enter"])
+    }
+
+    /// Responds to a single-choice (choices) prompt by sending the 1-based
+    /// option index followed by Enter.
+    func approveChoice(paneId: String, choice: Int) {
+        sendKeys(paneId: paneId, keys: [String(choice), "enter"])
+    }
+
+    /// Responds to a multi-select prompt by sending the comma-joined,
+    /// 1-based option indices followed by Enter (e.g. "1,3" + Enter).
+    func approveMulti(paneId: String, selections: [Int]) {
+        let joined = selections.map(String.init).joined(separator: ",")
+        sendKeys(paneId: paneId, keys: [joined, "enter"])
     }
 
     func spawnAgentWait(paneId: String, statuses: [String]) -> Process? {
@@ -94,9 +130,29 @@ final class HerdrSocketAdapter: Sendable {
         }
         return raw.result?.agents ?? []
     }
+
+    // MARK: - PlexerAdapter
+
+    func captureTail(paneId: String, lines: Int) -> String {
+        runHerdr(
+            ["pane", "read", paneId, "--source", "recent", "--lines", "\(lines)"],
+            timeout: 2.0)
+    }
+
+    func sendLine(paneId: String, text: String) {
+        _ = runHerdr(["pane", "run", paneId, text], timeout: 1.0)
+    }
+
+    func stop(paneId: String) {
+        sendKeys(paneId: paneId, keys: ["ctrl+c"])
+    }
+
+    func attachPane(paneId: String) {
+        paneFocus(paneId: paneId)
+    }
 }
 
-struct HerdrAgentInfo: Decodable {
+struct HerdrAgentInfo: Decodable, Sendable {
     let agent: String
     let agentStatus: String?
     let paneId: String?

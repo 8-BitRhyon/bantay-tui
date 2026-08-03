@@ -4,15 +4,29 @@ import Foundation
 
 struct AgentEvent: Identifiable, Equatable {
     let id = UUID()
-    let source: String
+    let source: String?
     let kind: AgentEventKind
     let title: String?
     let message: String?
     let paneId: String?
     let workspaceId: String?
+    let variance: ApprovalVariance?
+    let choices: [String]?
     let playSound: Bool
     let persistent: Bool
     let createdAt = Date()
+
+    var effectiveVariance: ApprovalVariance {
+        variance ?? .yesNo
+    }
+
+    var sourceKey: String {
+        source ?? "herdr"
+    }
+
+    var identityKey: String {
+        paneId ?? source ?? "unknown"
+    }
 }
 
 struct AgentSnapshot: Identifiable, Equatable {
@@ -23,6 +37,17 @@ struct AgentSnapshot: Identifiable, Equatable {
     let message: String?
     let paneId: String?
     let workspaceId: String?
+    /// Approval-prompt shape for blocked agents, merged from the event
+    /// stream so the control plane can render yes/no, numbered choices, and
+    /// multi-select inline. Nil for agents not blocked on an approval.
+    let variance: ApprovalVariance?
+    let choices: [String]?
+    /// When this agent's current working burst began (elapsed timers).
+    let startedAt: Date?
+
+    var approval: IslandMetrics.ApprovalControls {
+        IslandMetrics.ApprovalControls(variance: variance, choices: choices)
+    }
 }
 
 @MainActor
@@ -31,6 +56,8 @@ final class AgentEventManager: ObservableObject {
 
     @Published private(set) var currentEvent: AgentEvent?
     @Published private(set) var agents: [AgentSnapshot] = []
+    /// Aggregate token/cost usage from agent transcripts (gauge in footer).
+    @Published private(set) var usage: UsageSnapshot = .zero
     private var watchTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     private var waitProcesses: [String: Process] = [:]
@@ -46,6 +73,15 @@ final class AgentEventManager: ObservableObject {
     private var lineBuffer = ""
     private var lastSeenKinds: [String: AgentEventKind] = [:]
     private var lastSoundAt: [String: Date] = [:]
+    /// When each pane's current working burst started (for elapsed timers).
+    /// Set when a pane transitions into progress/started; cleared when it
+    /// leaves working state.
+    private var startedAtByPane: [String: Date] = [:]
+    /// Latest approval prompt shape per pane, decoded from the event stream.
+    /// Merged into roster snapshots so queue cards can render yes/no,
+    /// numbered-choice, and multi-select controls inline.
+    var pendingApprovals: [String: (variance: ApprovalVariance?, choices: [String]?)] =
+        [:]
     private let eventsFileURL: URL
     private let captureEnabled: Bool
     private let herdrAdapter = HerdrSocketAdapter()
@@ -111,7 +147,7 @@ final class AgentEventManager: ObservableObject {
     }
 
     func shouldPlaySound(for event: AgentEvent) -> Bool {
-        let key = "\(event.source):\(event.kind)"
+        let key = "\(event.sourceKey):\(event.kind)"
         let now = Date()
         if let last = lastSoundAt[key],
             now.timeIntervalSince(last) < NotchHUDConfig.shared.soundCooldown
@@ -132,6 +168,8 @@ final class AgentEventManager: ObservableObject {
                     message: nil,
                     paneId: nil,
                     workspaceId: nil,
+                    variance: .yesNo,
+                    choices: nil,
                     playSound: true,
                     persistent: true
                 ))
@@ -174,6 +212,22 @@ final class AgentEventManager: ObservableObject {
     }
 
     private func showEvent(_ event: AgentEvent) {
+        let key = event.identityKey
+        if event.kind == .accessRequest || event.kind == .waiting {
+            pendingApprovals[key] = (variance: event.variance, choices: event.choices)
+        } else if event.kind != .progress && event.kind != .started {
+            pendingApprovals.removeValue(forKey: key)
+        }
+        if event.kind == .progress || event.kind == .started {
+            if startedAtByPane[key] == nil {
+                startedAtByPane[key] = event.createdAt
+            }
+        } else if event.kind == .completed || event.kind == .failed
+            || event.kind == .cancelled || event.kind == .clear
+        {
+            startedAtByPane.removeValue(forKey: key)
+        }
+
         if event.kind == .clear {
             currentEvent = nil
             clearTask?.cancel()
@@ -197,7 +251,7 @@ final class AgentEventManager: ObservableObject {
         let ttl: TimeInterval
 
         if event.kind == .accessRequest
-            && config.stickyApprovalSources.contains(event.source.lowercased())
+            && config.stickyApprovalSources.contains(event.sourceKey.lowercased())
         {
             ttl = config.stickyApprovalTTL
         } else if event.kind == .accessRequest {
@@ -228,6 +282,8 @@ final class AgentEventManager: ObservableObject {
             message: payload.message,
             paneId: payload.paneId,
             workspaceId: payload.workspaceId,
+            variance: payload.variance,
+            choices: payload.choices,
             playSound: true,
             persistent: false
         )
@@ -268,7 +324,10 @@ extension AgentEventManager {
             title: agent.terminalTitle,
             message: agent.agentStatus,
             paneId: agent.paneId,
-            workspaceId: agent.workspaceId
+            workspaceId: agent.workspaceId,
+            variance: nil,
+            choices: nil,
+            startedAt: nil
         )
     }
 
@@ -292,6 +351,8 @@ extension AgentEventManager {
                     message: agent.agentStatus,
                     paneId: agent.paneId,
                     workspaceId: agent.workspaceId,
+                    variance: nil,
+                    choices: nil,
                     playSound: true,
                     persistent: kind.isOngoing
                 ))
@@ -304,7 +365,7 @@ extension AgentEventManager {
 
         var events: [AgentEvent] = []
         for event in best {
-            let key = event.paneId ?? event.source
+            let key = event.identityKey
             let prev = lastSeenKinds[key]
             lastSeenKinds[key] = event.kind
             if prev != event.kind {
@@ -312,8 +373,10 @@ extension AgentEventManager {
             }
         }
 
+        // Keep lastSeenKinds sticky: a pane that vanishes and re-enters with the
+        // same kind must re-show silently (no new event), per the silent-reshow
+        // invariant. No purge here.
         let liveKeys = Set(best.map { $0.paneId ?? $0.source })
-        lastSeenKinds = lastSeenKinds.filter { liveKeys.contains($0.key) }
 
         if let current, current.persistent, !liveKeys.contains(current.paneId ?? current.source) {
             events.append(
@@ -324,6 +387,8 @@ extension AgentEventManager {
                     message: nil,
                     paneId: current.paneId,
                     workspaceId: current.workspaceId,
+                    variance: nil,
+                    choices: nil,
                     playSound: false,
                     persistent: false
                 ))
@@ -348,7 +413,7 @@ extension AgentEventManager {
 
         if effective == nil,
             let top = best.first,
-            lastSeenKinds[top.paneId ?? top.source] == top.kind,
+            lastSeenKinds[top.identityKey] == top.kind,
             !events.contains(where: { $0.paneId ?? $0.source == top.paneId ?? top.source })
         {
             events.append(
@@ -359,6 +424,8 @@ extension AgentEventManager {
                     message: top.message,
                     paneId: top.paneId,
                     workspaceId: top.workspaceId,
+                    variance: nil,
+                    choices: nil,
                     playSound: false,
                     persistent: top.persistent
                 ))
@@ -407,12 +474,40 @@ extension AgentEventManager {
 
     private func refreshRosterAndArmWaits() async {
         ensureFileWatcher()
-        let agents = await herdrAdapter.listAgents()
+        let herdrAgents = await herdrAdapter.listAgents()
+        let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
+        // Heavy scans (ps, transcript enumeration) run off the main actor so
+        // the island never beachballs while polling.
+        let agents = await Task.detached(priority: .userInitiated) {
+            let detected = scanStandalone ? StandaloneAgentScanner.scan() : []
+            return herdrAgents
+                + detected.filter {
+                    !Set(herdrAgents.map(\.agent)).contains($0.name)
+                }.map {
+                    HerdrAgentInfo(
+                        agent: $0.name,
+                        agentStatus: "working",
+                        paneId: nil,
+                        workspaceId: nil,
+                        terminalTitle: $0.activity
+                    )
+                }
+        }.value
+        self.usage = await Task.detached(priority: .utility) {
+            UsageTracker.latestUsage(home: NSHomeDirectory(), names: agents.map(\.agent))
+        }.value
+        let liveStatuses: [String: String] = Dictionary(
+            uniqueKeysWithValues: agents.compactMap {
+                (agent: HerdrAgentInfo) -> (String, String)? in
+                guard let key = agent.paneId ?? agent.agent as String? else { return nil }
+                return (key, agent.agentStatus ?? "")
+            })
+        heartbeatVerify(liveStatuses: liveStatuses)
         let result = Self.update(
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
-        self.agents = result.roster
+        self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)
         }
@@ -491,10 +586,119 @@ extension AgentEventManager {
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
-        self.agents = result.roster
+        self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)
         }
+    }
+
+    /// Attach the latest decoded approval prompt (variance/choices) and the
+    /// working-burst start time to roster rows so the control plane renders
+    /// the full interactive surface and elapsed timers.
+    func mergeApprovals(into roster: [AgentSnapshot]) -> [AgentSnapshot] {
+        roster.map { agent in
+            let key = agent.paneId ?? agent.source
+            var variance = agent.variance
+            var choices = agent.choices
+            if agent.kind == .accessRequest || agent.kind == .waiting,
+                let pending = pendingApprovals[key]
+            {
+                variance = pending.variance
+                choices = pending.choices
+            }
+            let startedAt = startedAtByPane[key]
+            return AgentSnapshot(
+                id: agent.id,
+                source: agent.source,
+                kind: agent.kind,
+                title: agent.title,
+                message: agent.message,
+                paneId: agent.paneId,
+                workspaceId: agent.workspaceId,
+                variance: variance,
+                choices: choices,
+                startedAt: startedAt
+            )
+        }
+    }
+
+    /// Test seam: record a working-burst start time (mirrors showEvent).
+    func recordStartForTesting(pane: String, at date: Date) {
+        startedAtByPane[pane] = date
+    }
+
+    /// Test seam: clear a working-burst start time (mirrors showEvent).
+    func clearStartForTesting(pane: String) {
+        startedAtByPane.removeValue(forKey: pane)
+    }
+
+    /// Test seam: inject an event like the pipeline would.
+    func publishEventForTesting(_ event: AgentEvent) {
+        showEvent(event)
+    }
+
+    /// Test seam: current event readout for harness assertions.
+    var currentEventForTesting: AgentEvent? { currentEvent }
+
+    /// Heartbeat: every roster poll re-verifies pinned approvals against live
+    /// agent state. Panes that are no longer blocked (or vanished) drop their
+    /// pending prompts — killing phantom prompts from dropped hooks. Missing
+    /// live data keeps the prompt pinned (never phantom-clear on unknowns).
+    func heartbeatVerify(liveStatuses: [String: String]) {
+        let stale = Set(pendingApprovals.keys).subtracting(
+            IslandMetrics.ApprovalHeartbeat.verifyPendingKeys(
+                Array(pendingApprovals.keys), liveStatuses: liveStatuses))
+        for key in stale {
+            pendingApprovals.removeValue(forKey: key)
+        }
+        if let current = currentEvent,
+            current.kind == .accessRequest || current.kind == .waiting,
+            let status = liveStatuses[current.identityKey],
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: current.kind, liveStatus: status)
+        {
+            currentEvent = nil
+            clearTask?.cancel()
+        }
+    }
+
+    /// Ingest a remote event line (SSH bridge): validates the payload then
+    /// appends it to the watched events file so the file watcher surfaces it
+    /// like any local event.
+    func ingestEventLine(_ line: String) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
+            (try? JSONDecoder().decode(AgentEventPayload.self, from: data)) != nil
+        else {
+            return
+        }
+        if !FileManager.default.fileExists(atPath: eventsFileURL.path) {
+            FileManager.default.createFile(atPath: eventsFileURL.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: eventsFileURL) else { return }
+        defer { try? handle.close() }
+        if let end = try? handle.seekToEnd() {
+            _ = end
+        }
+        handle.write(Data((trimmed + "\n").utf8))
+    }
+
+    /// Merge standalone-detected agents into the herdr roster without
+    /// duplicating agents herdr already manages (matched by canonical name).
+    func mergeStandalone(
+        into herdr: [HerdrAgentInfo], detected: [DetectedAgent]
+    ) -> [HerdrAgentInfo] {
+        let herdrNames = Set(herdr.map(\.agent))
+        let extras = detected.filter { !herdrNames.contains($0.name) }.map {
+            HerdrAgentInfo(
+                agent: $0.name,
+                agentStatus: "working",
+                paneId: nil,
+                workspaceId: nil,
+                terminalTitle: $0.activity
+            )
+        }
+        return herdr + extras
     }
 }
 
@@ -505,4 +709,6 @@ private struct AgentEventPayload: Decodable {
     let message: String?
     let paneId: String?
     let workspaceId: String?
+    let variance: ApprovalVariance?
+    let choices: [String]?
 }

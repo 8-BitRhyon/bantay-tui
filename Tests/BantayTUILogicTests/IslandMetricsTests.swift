@@ -17,7 +17,7 @@ struct IslandMetricsGeometryTests {
     func constants() {
         #expect(IslandMetrics.expandedWidth == 456)
         #expect(IslandMetrics.maxExpandedHeight == 560)
-        #expect(IslandMetrics.hoverCooldown == 0.15)
+        #expect(IslandMetrics.hoverCooldown == 0.22)
         #expect(IslandMetrics.notchlessFallbackWidth == 211)
         #expect(IslandMetrics.cornerRadius(expanded: true) == 24)
         #expect(IslandMetrics.cornerRadius(expanded: false) == 8)
@@ -78,6 +78,17 @@ struct IslandMetricsGeometryTests {
         #expect(IslandMetrics.shouldExpand(hovering: true, hasAgents: true))
         #expect(IslandMetrics.shouldCollapse(isExpanded: true, hasAgents: false))
         #expect(!IslandMetrics.shouldCollapse(isExpanded: false, hasAgents: false))
+    }
+
+    @Test("hover-out collapse and approval")
+    func hoverOutCollapseAndApproval() {
+        #expect(!IslandMetrics.shouldCollapseOnHoverExit(isExpanded: false, isComposing: false))
+        #expect(IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: false))
+        #expect(!IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: true))
+        #expect(IslandMetrics.requiresApproval("accessRequest"))
+        #expect(IslandMetrics.requiresApproval("access_request"))
+        #expect(!IslandMetrics.requiresApproval("progress"))
+        #expect(!IslandMetrics.requiresApproval("idle"))
     }
 
     @Test("morph style")

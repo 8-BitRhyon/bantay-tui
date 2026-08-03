@@ -1,5 +1,19 @@
 import Foundation
 
+enum ApprovalVariance: String, Decodable, Equatable {
+    case yesNo = "yes-no"
+    case choices
+    case multi
+
+    var label: String {
+        switch self {
+        case .yesNo: return "Yes/No"
+        case .choices: return "Choice"
+        case .multi: return "Multi-select"
+        }
+    }
+}
+
 enum AgentEventKind: String, Decodable, CaseIterable {
     case accessRequest = "access_request"
     case clear = "clear"

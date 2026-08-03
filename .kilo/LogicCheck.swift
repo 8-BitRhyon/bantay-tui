@@ -107,6 +107,8 @@ struct LogicCheckMain {
             message: nil,
             paneId: "w3:p3",
             workspaceId: "w3",
+            variance: nil,
+            choices: nil,
             playSound: true,
             persistent: true)
         let empty = AgentEventManager.update(from: [], lastSeenKinds: &seen8, current: shown)
@@ -182,15 +184,15 @@ struct LogicCheckMain {
 
         let eventA = AgentEvent(
             source: "kilo", kind: .progress, title: "t", message: nil, paneId: nil,
-            workspaceId: nil, playSound: true, persistent: true)
+            workspaceId: nil, variance: nil, choices: nil, playSound: true, persistent: true)
         let eventB = AgentEvent(
             source: "kilo", kind: .progress, title: "t2", message: nil, paneId: nil,
-            workspaceId: nil, playSound: true, persistent: true)
+            workspaceId: nil, variance: nil, choices: nil, playSound: true, persistent: true)
         check(manager.shouldPlaySound(for: eventA), "first sound plays")
         check(!manager.shouldPlaySound(for: eventB), "second sound within cooldown suppressed")
         let eventC = AgentEvent(
             source: "freebuff", kind: .progress, title: "t", message: nil, paneId: nil,
-            workspaceId: nil, playSound: true, persistent: true)
+            workspaceId: nil, variance: nil, choices: nil, playSound: true, persistent: true)
         check(manager.shouldPlaySound(for: eventC), "different source not suppressed")
 
         var seenWorst: [String: AgentEventKind] = [:]
@@ -224,7 +226,7 @@ struct LogicCheckMain {
 
         check(IslandMetrics.expandedWidth == 456, "expandedWidth 456")
         check(IslandMetrics.maxExpandedHeight == 560, "maxExpandedHeight 560")
-        check(IslandMetrics.hoverCooldown == 0.15, "hoverCooldown 0.15")
+        check(IslandMetrics.hoverCooldown == 0.22, "hoverCooldown 0.22")
         check(IslandMetrics.notchlessFallbackWidth == 211, "notchlessFallbackWidth 211")
         check(IslandMetrics.cornerRadius(expanded: true) == 24, "expanded cornerRadius 24")
         check(IslandMetrics.cornerRadius(expanded: false) == 8, "closed cornerRadius 8")
@@ -308,6 +310,48 @@ struct LogicCheckMain {
             IslandMetrics.shouldCollapse(isExpanded: true, hasAgents: false),
             "collapse when agents empty (invariant 9)")
 
+        // -- Hover-out collapse + approval (invariant 15-16)
+
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(isExpanded: false, isComposing: false),
+            "no collapse on hover-out when already closed")
+        check(
+            IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: false),
+            "collapse on hover-out when expanded")
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: true),
+            "keep expanded while composing prompt")
+        check(IslandMetrics.requiresApproval("accessRequest"), "accessRequest requires approval")
+        check(IslandMetrics.requiresApproval("access_request"), "access_request requires approval")
+        check(!IslandMetrics.requiresApproval("progress"), "progress does not require approval")
+        check(!IslandMetrics.requiresApproval("idle"), "idle does not require approval")
+
+        // -- Approval variance
+
+        check(
+            ApprovalVariance(rawValue: "yes-no") == .yesNo,
+            "variance yes-no decodes")
+        check(
+            ApprovalVariance(rawValue: "choices") == .choices,
+            "variance choices decodes")
+        check(
+            ApprovalVariance(rawValue: "multi") == .multi,
+            "variance multi decodes")
+        let noVariance = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: nil, workspaceId: nil, variance: nil, choices: nil,
+            playSound: true, persistent: true)
+        check(
+            noVariance.effectiveVariance == .yesNo,
+            "nil variance defaults to yes-no")
+        let multiEvent = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: "w3:p3", workspaceId: "w3", variance: .multi,
+            choices: ["a", "b"], playSound: true, persistent: true)
+        check(
+            multiEvent.effectiveVariance == .multi && multiEvent.choices?.count == 2,
+            "multi variance carries choices")
+
         // -- Hover state machine (invariant 10-11)
 
         check(
@@ -347,6 +391,1166 @@ struct LogicCheckMain {
         check(
             abs(fracW.midX - 1367 / 2) <= midXTol,
             "fractional screen centered (midX diff=\(abs(fracW.midX - 1367/2)))")
+
+        // MARK: - Adversarial (spec-driven: try to break)
+
+        // A1. Status pollution: whitespace/case is not a known status -> no event, no crash.
+        var advSeen: [String: AgentEventKind] = [:]
+        let weirdStatus = AgentEventManager.update(
+            from: [agent("kilo", "Working ", pane: "ad:p1")],
+            lastSeenKinds: &advSeen,
+            current: nil)
+        check(
+            weirdStatus.events.isEmpty && weirdStatus.roster.isEmpty,
+            "A1 status 'Working ' treated unknown (no event, no crash)")
+
+        // A2. Storm: 100 alternating working/blocked flips emit exactly one per round.
+        var storm: [String: AgentEventKind] = [:]
+        var stormCurrent: AgentEvent?
+        var stormFlips = 0
+        for i in 0..<100 {
+            let status = (i % 2 == 0) ? "working" : "blocked"
+            let out = AgentEventManager.update(
+                from: [agent("storm", status, pane: "w3:p3")],
+                lastSeenKinds: &storm,
+                current: stormCurrent)
+            let mine = out.events.filter { $0.paneId == "w3:p3" }
+            check(mine.count <= 1, "storm \(i): at most one event per flip (got \(mine.count))")
+            if let event = mine.first {
+                stormCurrent = event
+                stormFlips += 1
+            }
+        }
+        check(stormFlips == 100, "A2 storm: one emission per flip (got \(stormFlips))")
+        check(stormCurrent?.kind == .accessRequest, "A2 storm ends on blocked")
+        check(stormCurrent?.playSound == true, "A2 storm blocked plays sound")
+
+        // A3. Sharded source (same agent name, two panes); one pane vanishes.
+        var advShard: [String: AgentEventKind] = [:]
+        _ = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "p1"),
+                agent("kilo", "working", pane: "p2"),
+            ],
+            lastSeenKinds: &advShard,
+            current: nil)
+        let partial = AgentEventManager.update(
+            from: [agent("kilo", "working", pane: "p2")],
+            lastSeenKinds: &advShard,
+            current: nil)
+        check(
+            !partial.roster.contains { $0.paneId == "p1" },
+            "A3 dead pane vanishes from roster: \(partial.roster.map(\.paneId))")
+        let revival = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "p1"),
+                agent("kilo", "working", pane: "p2"),
+            ],
+            lastSeenKinds: &advShard,
+            current: nil)
+        check(
+            revival.events.allSatisfy { $0.playSound == false },
+            "A3 resurrected pane re-appears silently (no ding)")
+        check(
+            !revival.events.contains(where: { $0.kind == .accessRequest }),
+            "A3 resurrected pane never escalates to approval")
+
+        // A4. Degenerate geometry.
+        check(
+            IslandMetrics.topInset(safeTop: -5, menuBarHeight: 32) == 32,
+            "A4 negative safe top falls back to menu bar height")
+        let tiny = IslandMetrics.windowFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 400, height: 300), size: ws, scale: 1)
+        check(
+            tiny.minX >= 0 && tiny.minY >= 0,
+            "A4 400x300 screen: window origin non-negative (min=\(tiny.minX),\(tiny.minY))")
+        let pixelScale: CGFloat = 8
+        let dbgGrid = IslandMetrics.windowFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 1536, height: 960), size: ws, scale: pixelScale)
+        check(
+            (dbgGrid.minX * pixelScale).rounded() == dbgGrid.minX * pixelScale
+                && (dbgGrid.minY * pixelScale).rounded() == dbgGrid.minY * pixelScale,
+            "A4 grid aligned at scale 8")
+        let overwideNotch = IslandMetrics.notchWidth(
+            screenWidth: 400, auxLeft: 300, auxRight: 300, safeTop: 0)
+        check(
+            overwideNotch <= IslandMetrics.expandedWidth,
+            "A4 aux-headed notch clamps below expandedWidth (got \(overwideNotch))")
+
+        // A5. Choices variance without a choices array must not crash or hang.
+        let hungryVariance = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: nil, message: nil,
+            paneId: "p9", workspaceId: "w9", variance: .choices, choices: nil,
+            playSound: true, persistent: true)
+        check(
+            hungryVariance.effectiveVariance == .choices
+                || hungryVariance.effectiveVariance == .yesNo,
+            "A5 choices variance w/o options decodes safely")
+
+        // L1. Lifecycle controls (plan 001): islandEnabled + snooze persistence.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            check(cfg.islandEnabled, "L1 default: island enabled")
+            check(!cfg.isSnoozed, "L1 default: not snoozed")
+            cfg.islandEnabled = false
+            cfg.snoozedUntil = Date().addingTimeInterval(600)
+            check(!cfg.islandEnabled, "L1: island can be disabled")
+            check(cfg.isSnoozed, "L1: snooze within window is active")
+            check(
+                defaults.object(forKey: "islandEnabled") as? Bool == false,
+                "L1: islandEnabled persisted to defaults")
+            cfg.snoozedUntil = Date().addingTimeInterval(-10)
+            check(!cfg.isSnoozed, "L1: expired snooze is inactive")
+            cfg.snoozedUntil = Date().addingTimeInterval(-10)
+            check(!cfg.isSnoozed, "L1: expired snooze is inactive")
+            let origHidden = cfg.hideAtStartup
+            check(cfg.hideAtStartup == false, "L1/L2 default: island not hidden at startup")
+            cfg.hideAtStartup = true
+            check(
+                defaults.object(forKey: "hideAtStartup") as? Bool == true,
+                "L2: hideAtStartup persisted")
+            cfg.hideAtStartup = origHidden
+            cfg.islandEnabled = true
+            cfg.snoozedUntil = nil
+            defaults.removeObject(forKey: "islandEnabled")
+            defaults.removeObject(forKey: "snoozedUntil")
+            defaults.removeObject(forKey: "hideAtStartup")
+        }
+
+        // L2. LaunchAgent (plan 002): plist detection + launchctl status seam.
+        let oldPath = LaunchAgent.plistPath
+        let oldRunner = LaunchAgent.processRunner
+        let stubPlist = NSTemporaryDirectory() + "/bantay-l2-\(UUID().uuidString).plist"
+        LaunchAgent.plistPath = stubPlist
+        check(!LaunchAgent.isInstalled, "L2 uninstalled plist not detected")
+        FileManager.default.createFile(atPath: stubPlist, contents: Data(), attributes: nil)
+        check(LaunchAgent.isInstalled, "L2 installed plist detected")
+        LaunchAgent.processRunner = { _ in 0 }
+        check(LaunchAgent.isLoaded(), "L2 launchctl exit 0 = loaded")
+        LaunchAgent.processRunner = { _ in 1 }
+        check(!LaunchAgent.isLoaded(), "L2 launchctl exit 1 = not loaded")
+        LaunchAgent.processRunner = { _ in 113 }
+        check(!LaunchAgent.isLoaded(), "L2 launchctl exit 113 = not loaded")
+        try? FileManager.default.removeItem(atPath: stubPlist)
+        check(!LaunchAgent.isInstalled, "L2 removed plist not detected")
+        LaunchAgent.plistPath = oldPath
+        LaunchAgent.processRunner = oldRunner
+
+        // L3. Idle dock placement (UX fix): side-of-notch geometry + persistence.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.islandDockSide
+            check(
+                cfg.islandDockSide == .right || cfg.islandDockSide == .center,
+                "L3 dock default is a valid side or center (got \(cfg.islandDockSide.rawValue))")
+            cfg.islandDockSide = .left
+            check(
+                defaults.string(forKey: "islandDockSide") == "left",
+                "L3 dock side persisted")
+            cfg.islandDockSide = orig
+            defaults.removeObject(forKey: "islandDockSide")
+        }
+        check(
+            IslandMetrics.idleChipWidth > 0
+                && IslandMetrics.idleChipWidth < IslandMetrics.expandedWidth,
+            "L3 idle chip is compact (got \(IslandMetrics.idleChipWidth))")
+        check(
+            IslandMetrics.hoverCooldown >= 0.2,
+            "L3 hover cooldown long enough to cut accidental expansion (got \(IslandMetrics.hoverCooldown))"
+        )
+        let shift = IslandMetrics.dockOffset(side: .right, notchWidth: 190, chipWidth: 120)
+        check(
+            abs(shift - (190 / 2 + IslandMetrics.dockGap + 120 / 2)) < 0.001,
+            "L3 right-dock shift math (got \(shift))")
+        check(
+            abs(IslandMetrics.dockOffset(side: .left, notchWidth: 190, chipWidth: 120)) == shift,
+            "L3 left/right dock symmetric")
+        let dockedShownBounds = 252 + shift + 120 / 2
+        check(
+            dockedShownBounds <= IslandMetrics.windowSize().width,
+            "L3 idle chip stays on-window when docked (right edge \(dockedShownBounds))")
+
+        // L4. Idle chip sits IN the notch row (flush at the top edge), not below
+        // the menu bar — matches the BoringNotch look. Only expansion or the
+        // center mode drop under the notch.
+        check(
+            IslandMetrics.dockGap == 0,
+            "L4 idle chip is flush against the notch side (got gap \(IslandMetrics.dockGap))")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .right, isExpanded: false, topInset: 47) == 0,
+            "L4 right-dock idle chip sits at the notch level (top inset 0)")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .left, isExpanded: false, topInset: 47) == 0,
+            "L4 left-dock idle chip sits at the notch level (top inset 0)")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .center, isExpanded: false, topInset: 47) == 47,
+            "L4 center idle mode keeps dropping under the notch")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .right, isExpanded: true, topInset: 47) == 47,
+            "L4 expanded panel keeps dropping under the menu bar")
+
+        // L5. Idle agent strip: live work facets beside the notch — style,
+        // truncation, width clamps, and config persistence.
+        check(
+            IslandMetrics.idleDefaultMaxChips == 3,
+            "L5 default max chips is 3 (got \(IslandMetrics.idleDefaultMaxChips))")
+        check(
+            IslandMetrics.idleShownChips(agentCount: 2, maxChips: 3) == 2,
+            "L5 fewer agents than cap shows all")
+        check(
+            IslandMetrics.idleShownChips(agentCount: 7, maxChips: 3) == 3,
+            "L5 more agents than cap truncates to cap")
+        check(
+            IslandMetrics.idleShownChips(agentCount: 0, maxChips: 3) == 0,
+            "L5 empty roster shows nothing")
+        let single = IslandMetrics.idleNameChipWidth(nameLength: 4)
+        let nine = IslandMetrics.idleNameChipWidth(nameLength: 40)
+        check(nine > single, "L5 longer names widen chips")
+        check(
+            abs(nine - IslandMetrics.idleNameChipWidth(nameLength: 1000)) < 40,
+            "L5 name width is clamped (got \(nine))")
+        let s3 = IslandMetrics.idleStripWidth(
+            style: .names, agentCount: 3, maxChips: 3,
+            nameLengths: [4, 4, 4])
+        let s5 = IslandMetrics.idleStripWidth(
+            style: .names, agentCount: 5, maxChips: 3,
+            nameLengths: [4, 4, 4, 4, 4])
+        check(s5 > s3, "L5 overflow adds width for +N (got \(s5) vs \(s3))")
+        let dots1 = IslandMetrics.idleStripWidth(
+            style: .dots, agentCount: 1, maxChips: 3, nameLengths: [])
+        let dotsCapped = IslandMetrics.idleStripWidth(
+            style: .dots, agentCount: 12, maxChips: 6, nameLengths: [])
+        check(dotsCapped >= dots1, "L5 dots style width grows with agents")
+        check(
+            dotsCapped <= IslandMetrics.idleDotsChipWidth(dotCount: 6) + 1,
+            "L5 dots capped at 6 dots")
+        let sumW = IslandMetrics.idleStripWidth(
+            style: .summary, agentCount: 9, maxChips: 6, nameLengths: [])
+        check(sumW > 0 && sumW < IslandMetrics.expandedWidth, "L5 summary width sane")
+        let closedNames = IslandMetrics.idleClosedWidth(
+            style: .names, agentCount: 8, maxChips: 6,
+            nameLengths: Array(repeating: 4, count: 8), notchWidth: 190)
+        check(closedNames >= IslandMetrics.idleChipWidth, "L5 closed idle never narrower than pill")
+        check(
+            closedNames <= IslandMetrics.expandedWidth && closedNames <= 190,
+            "L5 closed idle clamps to notch width (\(closedNames))")
+        let closedEmpty = IslandMetrics.idleClosedWidth(
+            style: .names, agentCount: 0, maxChips: 3, nameLengths: [], notchWidth: 190)
+        check(closedEmpty >= IslandMetrics.idleChipWidth, "L5 empty roster uses pill min width")
+
+        // L5. Idle facets persist and clamp.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origStyle = cfg.idleStyle
+            let origChips = cfg.idleMaxChips
+            check(
+                cfg.clampedIdleMaxChips >= 1 && cfg.clampedIdleMaxChips <= 6,
+                "L5 clamped max chips in range (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleStyle = .dots
+            check(
+                defaults.string(forKey: "idleStyle") == "dots",
+                "L5 idle style persisted")
+            cfg.idleMaxChips = 7
+            check(
+                cfg.clampedIdleMaxChips == 6,
+                "L5 max chips clamped at 6 (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleMaxChips = 0
+            check(
+                cfg.clampedIdleMaxChips == 1,
+                "L5 max chips clamped at 1 (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleMaxChips = 4
+            check(
+                defaults.integer(forKey: "idleMaxChips") == 4,
+                "L5 max chips persisted after clamp rewrites")
+            cfg.idleStyle = origStyle
+            cfg.idleMaxChips = origChips
+            defaults.removeObject(forKey: "idleStyle")
+            defaults.removeObject(forKey: "idleMaxChips")
+        }
+
+        // L6. Expanded control plane: counts, queue split, group order,
+        // queue-aware height, multiplexer detection + adapter verbs.
+        let mixedKinds: [AgentEventKind] = [
+            .progress, .accessRequest, .completed, .waiting, .failed, .idle, .started,
+        ]
+        let counts = IslandMetrics.agentCounts(kinds: mixedKinds)
+        check(counts.needsInput == 2, "L6 needs-input count (got \(counts.needsInput))")
+        check(counts.working == 2, "L6 working count (got \(counts.working))")
+        check(counts.done == 1, "L6 done count (got \(counts.done))")
+        check(counts.error == 1, "L6 error count (got \(counts.error))")
+        check(counts.idle == 1, "L6 idle count (got \(counts.idle))")
+        check(counts.total == 7, "L6 total counts (got \(counts.total))")
+        check(
+            IslandMetrics.agentCounts(kinds: []).total == 0,
+            "L6 empty roster counts zero")
+        let split = IslandMetrics.queueSplit(blockedCount: 7, cap: 3)
+        check(split.shown == 3 && split.overflow == 4, "L6 queue split 3+4 (got \(split))")
+        let splitSmall = IslandMetrics.queueSplit(blockedCount: 2, cap: 3)
+        check(
+            splitSmall.shown == 2 && splitSmall.overflow == 0,
+            "L6 queue split shows all when under cap (got \(splitSmall))")
+        check(
+            IslandMetrics.queueSplit(blockedCount: 9, cap: 0).shown == 1,
+            "L6 queue cap floors at 1")
+        check(
+            IslandMetrics.expandedGroupRank(.accessRequest) == 0
+                && IslandMetrics.expandedGroupRank(.waiting) == 0,
+            "L6 needs-input ranks first")
+        check(
+            IslandMetrics.expandedGroupRank(.progress) < IslandMetrics.expandedGroupRank(.completed),
+            "L6 working before done")
+        check(
+            IslandMetrics.expandedGroupRank(.failed) < IslandMetrics.expandedGroupRank(.idle),
+            "L6 failed before idle")
+        let hNoQueue = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
+        let hQueue = IslandMetrics.expandedSize(topInset: 47, agentCount: 3, queueCount: 2)
+        check(hQueue.height > hNoQueue.height, "L6 queue adds height (got \(hQueue.height) vs \(hNoQueue.height))")
+        check(
+            hQueue.height <= IslandMetrics.maxExpandedHeight,
+            "L6 queue-aware height capped (got \(hQueue.height))")
+        let contentQueue = IslandMetrics.contentHeight(
+            isExpanded: true, topInset: 47, agentCount: 3, queueCount: 2)
+        check(
+            abs(contentQueue - (hQueue.height - 47)) < 0.01,
+            "L6 content height excludes top inset")
+        check(
+            IslandMetrics.expandedGroupRank(.cancelled) == 4
+                && IslandMetrics.expandedGroupRank(.clear) == 4,
+            "L6 cancelled/clear idle-ish")
+
+        // L6. Multiplexer detection (pure, env-injected).
+        check(
+            PlexerDetection.detect(env: ["HERDR_ENV": "1"]) == .herdr,
+            "L6 HERDR_ENV detects herdr")
+        check(
+            PlexerDetection.detect(env: [:], herdrSocketExists: true) == .herdr,
+            "L6 herdr socket detects herdr")
+        check(
+            PlexerDetection.detect(env: ["TMUX": "/private/tmp/tmux-501/default,1,0"]) == .tmux,
+            "L6 TMUX env detects tmux")
+        check(
+            PlexerDetection.detect(env: [:], tmuxSocketExists: true) == .tmux,
+            "L6 tmux socket detects tmux")
+        check(
+            PlexerDetection.detect(env: ["ZELLIJ": "1"]) == .zellij,
+            "L6 ZELLIJ env detects zellij")
+        check(
+            PlexerDetection.detect(env: [:]) == nil,
+            "L6 no multiplexer detected")
+        check(
+            PlexerDetection.detect(env: ["HERDR_ENV": "0"], herdrBinaryExists: false) == nil,
+            "L6 herdr socket without binary is ignored")
+        check(PlexerKind.herdr.label == "herdr", "L6 herdr label")
+        check(PlexerKind.tmux.label == "tmux", "L6 tmux label")
+        check(PlexerKind.zellij.label == "zellij", "L6 zellij label")
+
+        // L6. Expanded facets persist + clamp.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origCap = cfg.expandedQueueCap
+            let origShow = cfg.expandedShowQueue
+            let origGroup = cfg.expandedGroupByState
+            check(
+                cfg.clampedExpandedQueueCap >= 1 && cfg.clampedExpandedQueueCap <= 5,
+                "L6 queue cap clamped in range (got \(cfg.clampedExpandedQueueCap))")
+            cfg.expandedQueueCap = 9
+            check(
+                cfg.clampedExpandedQueueCap == 5,
+                "L6 queue cap clamps at 5 (got \(cfg.clampedExpandedQueueCap))")
+            cfg.expandedQueueCap = 2
+            check(
+                defaults.integer(forKey: "expandedQueueCap") == 2,
+                "L6 queue cap persisted")
+            cfg.expandedShowQueue = false
+            check(
+                defaults.bool(forKey: "expandedShowQueue") == false,
+                "L6 queue toggle persisted")
+            cfg.expandedGroupByState = false
+            check(
+                defaults.bool(forKey: "expandedGroupByState") == false,
+                "L6 grouping toggle persisted")
+            cfg.expandedQueueCap = origCap
+            cfg.expandedShowQueue = origShow
+            cfg.expandedGroupByState = origGroup
+            defaults.removeObject(forKey: "expandedQueueCap")
+            defaults.removeObject(forKey: "expandedShowQueue")
+            defaults.removeObject(forKey: "expandedGroupByState")
+        }
+
+        // L7. In-UI approvals: ApprovalControls model + snapshot merge.
+        let yesNo = IslandMetrics.ApprovalControls.make(variance: nil, choices: nil)
+        check(yesNo.isYesNo, "L7 nil variance defaults to yes/no")
+        check(
+            IslandMetrics.ApprovalControls.make(variance: .yesNo, choices: ["a", "b"]).isYesNo,
+            "L7 explicit yes-no ignores choices")
+        check(yesNo.optionLabels.isEmpty, "L7 yes-no has no option buttons")
+        let singleChoice = IslandMetrics.ApprovalControls.make(
+            variance: .choices, choices: ["Build", "Test", "Skip"])
+        check(!singleChoice.isYesNo && !singleChoice.isMulti, "L7 choices is neither yes-no nor multi")
+        check(
+            singleChoice.optionLabels == ["1", "2", "3"],
+            "L7 choices renders numbered options (got \(singleChoice.optionLabels))")
+        check(
+            IslandMetrics.ApprovalControls.optionNumber(forIndex: 2) == 3,
+            "L7 option number is 1-based")
+        let multi = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: ["a", "b", "c"])
+        check(multi.isMulti, "L7 multi variance detected")
+        check(
+            multi.optionLabels.count == 3,
+            "L7 multi renders numbered options (got \(multi.optionLabels))")
+        check(multi.submitLabel == "Submit", "L7 multi submit label")
+        let toggled1 = IslandMetrics.ApprovalControls.toggling([], index: 0)
+        check(toggled1 == [1], "L7 toggling adds option 1 (got \(toggled1))")
+        let toggled2 = IslandMetrics.ApprovalControls.toggling(toggled1, index: 2)
+        check(toggled2 == [1, 3], "L7 toggling adds option 3 (got \(toggled2))")
+        let toggled3 = IslandMetrics.ApprovalControls.toggling(toggled2, index: 0)
+        check(toggled3 == [3], "L7 toggling removes option 1 (got \(toggled3))")
+        check(
+            IslandMetrics.ApprovalControls.selectionNumbers([3, 1, 2]) == [1, 2, 3],
+            "L7 selection numbers sorted 1-based")
+        check(
+            IslandMetrics.ApprovalControls.selectionNumbers([]).isEmpty,
+            "L7 empty selection sends nothing")
+        let emptyChoices = IslandMetrics.ApprovalControls.make(variance: .choices, choices: nil)
+        check(
+            emptyChoices.isYesNo,
+            "L7 choices with no options falls back to yes/no")
+
+        // L7. Snapshot approval merge: blocked agents carry variance/choices.
+        MainActor.assumeIsolated {
+            let info = HerdrAgentInfo(
+                agent: "kilo", agentStatus: "blocked", paneId: "1-1",
+                workspaceId: "1", terminalTitle: "Need approval: run tests?")
+            guard let snapshot = AgentEventManager.snapshot(for: info) else {
+                check(false, "L7 blocked snapshot builds")
+                return
+            }
+            check(snapshot.kind == .accessRequest, "L7 blocked maps to accessRequest")
+            check(snapshot.variance == nil, "L7 raw snapshot has no variance yet")
+            check(snapshot.approval.isYesNo, "L7 raw snapshot defaults to yes/no")
+
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l7-\(UUID().uuidString).jsonl"),
+                capture: false)
+            manager.pendingApprovals["1-1"] = (
+                variance: .multi, choices: ["lint", "test", "deploy"]
+            )
+            let merged = manager.mergeApprovals(into: [snapshot])
+            guard let m = merged.first else {
+                check(false, "L7 merged roster non-empty")
+                return
+            }
+            check(m.variance == .multi, "L7 merge attaches multi variance")
+            check(m.choices == ["lint", "test", "deploy"], "L7 merge attaches choices")
+            check(m.approval.isMulti, "L7 merged snapshot is multi")
+            check(
+                m.approval.optionLabels == ["1", "2", "3"],
+                "L7 merged snapshot renders numbered options")
+            let plain = HerdrAgentInfo(
+                agent: "shell", agentStatus: "idle", paneId: "1-2",
+                workspaceId: "1", terminalTitle: nil)
+            let plainSnapshot = AgentEventManager.snapshot(for: plain)!
+            let unmerged = manager.mergeApprovals(into: [plainSnapshot])
+            check(
+                unmerged[0].variance == nil && unmerged[0].choices == nil,
+                "L7 idle agents never carry approval data")
+        }
+
+        // L8. Speed & peripheral-vision snacks: elapsed labels, shortcut
+        // keys, startedAt merge, snooze-until-restart, new config facets.
+        let base = Date(timeIntervalSince1970: 1_000_000)
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(14)) == "14s",
+            "L8 elapsed under a minute in seconds (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(14))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(125)) == "2m",
+            "L8 elapsed in minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(125))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(3600)) == "1h",
+            "L8 elapsed exactly one hour (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(3600))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(4500))
+                == "1h15m",
+            "L8 elapsed hours+minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(4500))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(-5)) == "0s",
+            "L8 negative elapsed clamps to 0s")
+        check(
+            IslandMetrics.shortcutKey(for: "y") == .approve,
+            "L8 y maps to approve")
+        check(
+            IslandMetrics.shortcutKey(for: "N") == .deny,
+            "L8 N maps to deny")
+        check(
+            IslandMetrics.shortcutKey(for: "3") == .option(3),
+            "L8 digit maps to option")
+        check(
+            IslandMetrics.shortcutKey(for: "x") == nil,
+            "L8 unknown key ignored")
+        check(IslandMetrics.glowBlockedColor == "#ffe066", "L8 glow amber constant")
+        check(IslandMetrics.glowUrgentColor == "#ff6b6b", "L8 glow red constant")
+
+        // L8. startedAt merge: working agents carry burst start, done do not.
+        MainActor.assumeIsolated {
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l8-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let working = AgentSnapshot(
+                id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
+                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let done = AgentSnapshot(
+                id: "p2", source: "codex", kind: .completed, title: nil, message: nil,
+                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let start = Date(timeIntervalSince1970: 500_000)
+            manager.pendingApprovals["1-1"] = (variance: nil, choices: nil)
+            let merged = manager.mergeApprovals(into: [working, done])
+            check(
+                merged[0].startedAt == nil,
+                "L8 no start time yet (merged \(String(describing: merged[0].startedAt)))")
+
+            // Simulate the showEvent tracking by recording burst start.
+            manager.recordStartForTesting(pane: "1-1", at: start)
+            let merged2 = manager.mergeApprovals(into: [working, done])
+            check(
+                merged2[0].startedAt == start,
+                "L8 working agent carries burst start")
+            check(
+                merged2[1].startedAt == nil,
+                "L8 done agent never carries start time")
+            manager.clearStartForTesting(pane: "1-1")
+            let merged3 = manager.mergeApprovals(into: [working])
+            check(
+                merged3[0].startedAt == nil,
+                "L8 cleared burst drops start time")
+        }
+
+        // L8. New facets persist; snooze-until-restart counts as snoozed.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = (
+                cfg.globalHotkeyEnabled, cfg.keyboardShortcuts, cfg.edgeGlowEnabled,
+                cfg.showElapsedTime, cfg.menuBarBadge, cfg.snoozeUntilRestart
+            )
+            check(cfg.globalHotkeyEnabled, "L8 hotkey default on")
+            check(cfg.keyboardShortcuts, "L8 keyboard shortcuts default on")
+            check(cfg.edgeGlowEnabled, "L8 edge glow default on")
+            check(cfg.showElapsedTime, "L8 elapsed default on")
+            check(cfg.menuBarBadge, "L8 menu badge default on")
+            cfg.globalHotkeyEnabled = false
+            check(
+                defaults.bool(forKey: "globalHotkeyEnabled") == false,
+                "L8 hotkey persisted")
+            cfg.snoozeUntilRestart = true
+            check(cfg.isSnoozed, "L8 snooze-until-restart is snoozed")
+            cfg.snoozeUntilRestart = false
+            cfg.snoozedUntil = nil
+            check(!cfg.isSnoozed, "L8 cleared snooze is not snoozed")
+            cfg.globalHotkeyEnabled = orig.0
+            cfg.keyboardShortcuts = orig.1
+            cfg.edgeGlowEnabled = orig.2
+            cfg.showElapsedTime = orig.3
+            cfg.menuBarBadge = orig.4
+            cfg.snoozeUntilRestart = orig.5
+            defaults.removeObject(forKey: "globalHotkeyEnabled")
+            defaults.removeObject(forKey: "keyboardShortcuts")
+            defaults.removeObject(forKey: "edgeGlowEnabled")
+            defaults.removeObject(forKey: "showElapsedTime")
+            defaults.removeObject(forKey: "menuBarBadge")
+            defaults.removeObject(forKey: "snoozeUntilRestart")
+        }
+
+        // L9. Standalone agent detection: classification, herdr filtering,
+        // transcript tailing, and scanner merging.
+        check(
+            AgentDetector.canonicalName(forProcess: "claude") == "claude",
+            "L9 claude classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "codex") == "codex",
+            "L9 codex classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "cursor-agent") == "cursor",
+            "L9 cursor-agent classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "gemini-cli") == "gemini",
+            "L9 gemini-cli classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "opencode") == "opencode",
+            "L9 opencode classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "bash") == nil,
+            "L9 shell not an agent")
+        check(
+            AgentDetector.canonicalName(forProcess: "Claude") == "claude",
+            "L9 classification case-insensitive")
+        check(
+            AgentDetector.isHerdrManaged(environmentLines: ["HERDR_ENV=1", "PATH=/usr/bin"]),
+            "L9 herdr env detected")
+        check(
+            !AgentDetector.isHerdrManaged(environmentLines: ["PATH=/usr/bin"]),
+            "L9 plain env not herdr")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/tmp/x", name: "claude").first
+                == "/tmp/x/.claude/projects",
+            "L9 claude transcript path")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/tmp/x", name: "codex").first
+                == "/tmp/x/.codex/sessions",
+            "L9 codex transcript path")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/tmp/x", name: "unknown").isEmpty,
+            "L9 unknown agent has no transcript path")
+
+        // L9. Transcript tailing picks the newest jsonl line.
+        let transcriptDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l9-\(UUID().uuidString)")
+        let projects = transcriptDir.appendingPathComponent(".claude/projects")
+        try? FileManager.default.createDirectory(
+            at: projects, withIntermediateDirectories: true)
+        let old = projects.appendingPathComponent("old.jsonl")
+        let new = projects.appendingPathComponent("new.jsonl")
+        try? """
+            {"type":"assistant","message":{"content":"first step"}}
+            {"type":"assistant","message":{"content":"second step"}}
+            """.write(to: old, atomically: true, encoding: .utf8)
+        try? """
+            {"type":"assistant","message":{"content":"latest activity line"}}
+            """.write(to: new, atomically: true, encoding: .utf8)
+        let activity = AgentDetector.latestActivity(root: projects.path)
+        check(
+            activity?.contains("latest activity") == true,
+            "L9 latest transcript line surfaced (got \(String(describing: activity)))")
+
+        // L9. Scanner: classifies samples, skips herdr-managed + shells.
+        let samples = [
+            ProcessSample(
+                pid: 101, name: "claude", command: "claude", environmentLines: []),
+            ProcessSample(
+                pid: 202, name: "codex", command: "codex",
+                environmentLines: ["HERDR_ENV=1"]),
+            ProcessSample(pid: 303, name: "zsh", command: "zsh", environmentLines: []),
+        ]
+        let detected = StandaloneAgentScanner.detect(samples: samples, home: transcriptDir.path)
+        check(detected.count == 1, "L9 scanner keeps standalone claude only (got \(detected.map(\.name)))")
+        check(detected.first?.name == "claude", "L9 detected agent name")
+        check(detected.first?.pid == 101, "L9 detected agent pid")
+        check(
+            detected.first?.activity?.contains("latest activity") == true,
+            "L9 detected agent carries activity")
+        check(
+            StandaloneAgentScanner.detect(samples: [], home: transcriptDir.path).isEmpty,
+            "L9 empty scan yields nothing")
+
+        // L9. Roster merge: herdr-managed agents are not duplicated; config
+        // toggle persists.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.standaloneScanEnabled
+            check(cfg.standaloneScanEnabled, "L9 standalone scan default on")
+            cfg.standaloneScanEnabled = false
+            check(
+                defaults.bool(forKey: "standaloneScanEnabled") == false,
+                "L9 standalone toggle persisted")
+            cfg.standaloneScanEnabled = orig
+            defaults.removeObject(forKey: "standaloneScanEnabled")
+
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l9m-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let herdr = [
+                HerdrAgentInfo(
+                    agent: "claude", agentStatus: "working", paneId: "1-1",
+                    workspaceId: "1", terminalTitle: "refactor")
+            ]
+            let merged = manager.mergeStandalone(into: herdr, detected: detected)
+            check(
+                merged.count == 1 && merged[0].paneId == "1-1",
+                "L9 herdr claude not duplicated by standalone scan (got \(merged.count))")
+            let noHerdr = manager.mergeStandalone(into: [], detected: detected)
+            check(
+                noHerdr.count == 1 && noHerdr[0].agent == "claude",
+                "L9 standalone agent surfaces when herdr has none (got \(noHerdr.map(\.agent)))")
+            check(
+                noHerdr[0].agentStatus == "working" && noHerdr[0].paneId == nil,
+                "L9 standalone info mapped")
+        }
+
+        // L10. Usage gauge: transcript parsing (claude + codex shapes),
+        // aggregation, budget fraction, compact tokens, config facets.
+        let claudeLine =
+            #"{"type":"assistant","message":{"usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":300,"cache_creation_input_tokens":50},"costUSD":0.012}}"#
+        let flatLine =
+            #"{"type":"response_item","usage":{"input_tokens":500,"output_tokens":100},"costUSD":0.004}"#
+        guard let claudeUsage = UsageParser.parse(jsonLine: claudeLine) else {
+            check(false, "L10 claude usage parses")
+            fatalError()
+        }
+        check(claudeUsage.inputTokens == 1000, "L10 claude input tokens (got \(claudeUsage.inputTokens))")
+        check(claudeUsage.outputTokens == 200, "L10 claude output tokens")
+        check(claudeUsage.cacheReadTokens == 300, "L10 claude cache read")
+        check(claudeUsage.cacheCreationTokens == 50, "L10 claude cache creation")
+        check(abs(claudeUsage.costUSD - 0.012) < 0.0001, "L10 claude cost parsed")
+        guard let flatUsage = UsageParser.parse(jsonLine: flatLine) else {
+            check(false, "L10 flat usage parses")
+            fatalError()
+        }
+        check(flatUsage.inputTokens == 500, "L10 flat input tokens")
+        check(flatUsage.outputTokens == 100, "L10 flat output tokens")
+        check(abs(flatUsage.costUSD - 0.004) < 0.0001, "L10 flat cost parsed")
+        check(
+            UsageParser.parse(jsonLine: #"{"type":"assistant","message":{"content":"hi"}}"#)
+                == nil,
+            "L10 line without usage ignored")
+        let summed = UsageParser.parseAll(lines: [claudeLine, flatLine, "garbage"])
+        check(summed.inputTokens == 1500, "L10 parseAll sums input (got \(summed.inputTokens))")
+        check(summed.outputTokens == 300, "L10 parseAll sums output")
+        check(
+            abs(summed.costUSD - 0.016) < 0.0001,
+            "L10 parseAll sums cost (got \(summed.costUSD))")
+        check(
+            UsageTracker.aggregate([claudeUsage, flatUsage]).totalTokens == 2150,
+            "L10 aggregate totals (got \(UsageTracker.aggregate([claudeUsage, flatUsage]).totalTokens))")
+        check(
+            abs(UsageTracker.fractionUsed(costUSD: 5, budgetUSD: 10) - 0.5) < 0.001,
+            "L10 fraction half budget")
+        check(
+            abs(UsageTracker.fractionUsed(costUSD: 20, budgetUSD: 10) - 1) < 0.001,
+            "L10 fraction clamps at 1")
+        check(
+            abs(UsageTracker.fractionUsed(costUSD: -3, budgetUSD: 10) - 0) < 0.001,
+            "L10 fraction clamps at 0")
+        check(UsageTracker.fractionUsed(costUSD: 2, budgetUSD: 0) == 0, "L10 zero budget safe")
+        check(UsageTracker.compactTokens(1234) == "1.2k", "L10 compact k (got \(UsageTracker.compactTokens(1234)))")
+        check(UsageTracker.compactTokens(3_500_000) == "3.5m", "L10 compact m")
+        check(UsageTracker.compactTokens(42) == "42", "L10 compact small")
+
+        // L10. Config facets: gauge default on, budget clamped + persisted.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origGauge = cfg.showUsageGauge
+            let origBudget = cfg.usageBudgetUSD
+            check(cfg.showUsageGauge, "L10 usage gauge default on")
+            cfg.showUsageGauge = false
+            check(defaults.bool(forKey: "showUsageGauge") == false, "L10 gauge persisted")
+            cfg.usageBudgetUSD = 500
+            check(cfg.usageBudgetUSD == 100, "L10 budget clamps at 100 (got \(cfg.usageBudgetUSD))")
+            cfg.usageBudgetUSD = 0.5
+            check(cfg.usageBudgetUSD == 1, "L10 budget clamps at 1 (got \(cfg.usageBudgetUSD))")
+            cfg.usageBudgetUSD = 25
+            check(defaults.double(forKey: "usageBudgetUSD") == 25, "L10 budget persisted")
+            cfg.showUsageGauge = origGauge
+            cfg.usageBudgetUSD = origBudget
+            defaults.removeObject(forKey: "showUsageGauge")
+            defaults.removeObject(forKey: "usageBudgetUSD")
+        }
+
+        // L11. Remote ingest (SSH bridge): HTTP parsing, payload
+        // validation, file append, port clamping, config persistence.
+        let postBody = #"{"type":"access_request","title":"remote prompt","paneId":"r1","variance":"choices","choices":["a","b"]}"#
+        let postData = Data(
+            ("POST /events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+                + "Content-Length: \(postBody.utf8.count)\r\n\r\n\(postBody)").utf8)
+        guard let request = IngestHTTP.request(from: postData) else {
+            check(false, "L11 POST request parses")
+            fatalError()
+        }
+        check(request.method == "POST", "L11 method is POST")
+        check(
+            String(data: request.body, encoding: .utf8) == postBody,
+            "L11 body extracted by content-length")
+        check(
+            IngestHTTP.request(from: Data("POST /events HTTP/1.1\r\n\r\n".utf8)) == nil,
+            "L11 missing content-length ignored")
+        check(
+            IngestHTTP.request(from: Data("GET /events HTTP/1.1\r\nContent-Length: 0\r\n\r\n".utf8))
+                == nil,
+            "L11 non-POST rejected")
+        check(
+            IngestHTTP.request(from: Data("POST /events HTTP/1.1\r\nContent-Length: 10\r\n\r\nab".utf8))
+                == nil,
+            "L11 truncated body rejected")
+        check(IngestHTTP.clampedPort(80) == 1024, "L11 port floors at 1024")
+        check(IngestHTTP.clampedPort(70000) == 65535, "L11 port caps at 65535")
+        check(IngestHTTP.clampedPort(41817) == 41817, "L11 port passthrough")
+        check(
+            !IngestHTTP.okResponse().isEmpty && !IngestHTTP.badResponse().isEmpty,
+            "L11 responses present")
+
+        // L11. Ingest appends valid payloads to the watched events file.
+        MainActor.assumeIsolated {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("lc-l11-\(UUID().uuidString).jsonl")
+            let manager = AgentEventManager(eventsFileURL: url, capture: false)
+            manager.ingestEventLine("not json at all")
+            manager.ingestEventLine(postBody)
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            check(
+                text.contains("access_request") && !text.contains("not json"),
+                "L11 only valid payloads appended")
+
+            // L11. Config: ingest off by default, port clamped + persisted.
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origEnabled = cfg.ingestEnabled
+            let origPort = cfg.ingestPort
+            check(!cfg.ingestEnabled, "L11 ingest default off (secure)")
+            check(cfg.ingestPort == 41817, "L11 default port 41817")
+            cfg.ingestEnabled = true
+            check(defaults.bool(forKey: "ingestEnabled"), "L11 ingest persisted")
+            cfg.ingestPort = 70000
+            check(cfg.ingestPort == 65535, "L11 port clamps on set (got \(cfg.ingestPort))")
+            cfg.ingestPort = 42000
+            check(defaults.integer(forKey: "ingestPort") == 42000, "L11 port persisted")
+            cfg.ingestEnabled = origEnabled
+            cfg.ingestPort = origPort
+            defaults.removeObject(forKey: "ingestEnabled")
+            defaults.removeObject(forKey: "ingestPort")
+        }
+
+        // L13. Shelf: clipboard history + file drops (dedup, ordering, limits)
+        // and config facets.
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let emptyClip = ClipboardHistory.merging(existing: [], newText: "   ", now: t0, limit: 5)
+        check(emptyClip.isEmpty, "L13 whitespace clipboard ignored")
+        let c1 = ClipboardHistory.merging(existing: [], newText: "hello", now: t0, limit: 5)
+        check(c1.count == 1 && c1[0].text == "hello", "L13 first clip added")
+        let c2 = ClipboardHistory.merging(existing: c1, newText: "world", now: t0.addingTimeInterval(5), limit: 5)
+        check(c2.count == 2 && c2[0].text == "world", "L13 newest first")
+        let c3 = ClipboardHistory.merging(existing: c2, newText: "hello", now: t0.addingTimeInterval(10), limit: 5)
+        check(c3.count == 2 && c3[0].text == "hello", "L13 re-copy moves to front (got \(c3.map(\.text)))")
+        var capped = [ClipboardItem]()
+        for i in 0..<10 {
+            capped = ClipboardHistory.merging(
+                existing: capped, newText: "item\(i)", now: t0.addingTimeInterval(Double(i)), limit: 3)
+        }
+        check(capped.count == 3, "L13 clipboard capped at limit (got \(capped.count))")
+        check(capped[0].text == "item9", "L13 cap keeps newest (got \(capped.map(\.text)))")
+        let f0 = ShelfFile(url: URL(fileURLWithPath: "/tmp/a.txt"), createdAt: t0)
+        let f1 = ShelfFile(url: URL(fileURLWithPath: "/tmp/b.txt"), createdAt: t0.addingTimeInterval(1))
+        let shelf1 = ShelfFiles.adding([f0, f1], to: [], limit: 5)
+        check(shelf1.count == 2 && shelf1[0].url == f1.url, "L13 files newest first")
+        let shelfDup = ShelfFiles.adding([f0], to: shelf1, limit: 5)
+        check(shelfDup.count == 2 && shelfDup[0].url == f0.url, "L13 re-drop dedupes to front")
+        let shelfRemoved = ShelfFiles.removing(f0.url, from: shelfDup)
+        check(shelfRemoved.count == 1 && shelfRemoved[0].url == f1.url, "L13 file removed")
+        var filesCapped = [ShelfFile]()
+        for i in 0..<8 {
+            filesCapped = ShelfFiles.adding(
+                [ShelfFile(url: URL(fileURLWithPath: "/tmp/f\(i)"), createdAt: t0.addingTimeInterval(Double(i)))],
+                to: filesCapped, limit: 4)
+        }
+        check(filesCapped.count == 4, "L13 files capped (got \(filesCapped.count))")
+
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origShow = cfg.showShelfTab
+            let origLimit = cfg.shelfLimit
+            check(cfg.showShelfTab, "L13 shelf tab default on")
+            check(cfg.clampedShelfLimit == 20, "L13 default shelf limit 20")
+            cfg.showShelfTab = false
+            check(defaults.bool(forKey: "showShelfTab") == false, "L13 shelf tab persisted")
+            cfg.shelfLimit = 500
+            check(cfg.clampedShelfLimit == 50, "L13 shelf limit clamps at 50")
+            cfg.shelfLimit = 0
+            check(cfg.clampedShelfLimit == 1, "L13 shelf limit clamps at 1")
+            cfg.shelfLimit = 12
+            check(defaults.integer(forKey: "shelfLimit") == 12, "L13 shelf limit persisted")
+            cfg.showShelfTab = origShow
+            cfg.shelfLimit = origLimit
+            defaults.removeObject(forKey: "showShelfTab")
+            defaults.removeObject(forKey: "shelfLimit")
+        }
+
+        // L12. Multi-monitor: screen selection (mouse/notch preference) and
+        // floating-pill geometry, plus config persistence.
+        let notchMain = IslandMetrics.ScreenInfo(
+            frame: CGRect(x: 0, y: 0, width: 1512, height: 982), hasNotch: true,
+            containsMouse: true)
+        let extNoNotch = IslandMetrics.ScreenInfo(
+            frame: CGRect(x: 1512, y: 0, width: 2560, height: 1440), hasNotch: false,
+            containsMouse: false)
+        let mouseNoNotch = IslandMetrics.ScreenInfo(
+            frame: CGRect(x: 4072, y: 0, width: 1920, height: 1080), hasNotch: false,
+            containsMouse: true)
+        check(
+            IslandMetrics.islandScreen(screens: [notchMain, extNoNotch], preferMouseScreen: true)
+                == notchMain,
+            "L12 mouse notch screen preferred")
+        check(
+            IslandMetrics.islandScreen(
+                screens: [extNoNotch, mouseNoNotch], preferMouseScreen: true) == mouseNoNotch,
+            "L12 no notch screens: mouse wins")
+        check(
+            IslandMetrics.islandScreen(screens: [mouseNoNotch], preferMouseScreen: true)
+                == mouseNoNotch,
+            "L12 mouse screen fallback (floating)")
+        check(
+            IslandMetrics.islandScreen(
+                screens: [extNoNotch, mouseNoNotch], preferMouseScreen: false) == mouseNoNotch,
+            "L12 no-follow falls back to mouse without notch")
+        check(
+            IslandMetrics.islandScreen(screens: [mouseNoNotch], preferMouseScreen: false)
+                == mouseNoNotch,
+            "L12 no-follow falls back to mouse")
+        check(
+            IslandMetrics.islandScreen(screens: [], preferMouseScreen: true) == nil,
+            "L12 empty screens nil")
+        check(
+            IslandMetrics.floatingTopInset(menuBarHeight: 24) == 30,
+            "L12 floating inset below menu bar")
+        let pill = IslandMetrics.floatingPillFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+            size: CGSize(width: 456, height: 560), menuBarHeight: 24)
+        check(
+            abs(pill.midX - 1280) < 0.01,
+            "L12 floating pill centered horizontally (got \(pill.midX))")
+        check(
+            abs(pill.maxY - (1440 - 30)) < 0.01,
+            "L12 floating pill sits below menu bar (got \(pill.maxY))")
+
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let origFollow = cfg.followMouseScreen
+            let origFloat = cfg.floatingPillOnNoNotch
+            check(cfg.followMouseScreen, "L12 follow mouse default on")
+            check(cfg.floatingPillOnNoNotch, "L12 floating pill default on")
+            cfg.followMouseScreen = false
+            check(defaults.bool(forKey: "followMouseScreen") == false, "L12 follow persisted")
+            cfg.floatingPillOnNoNotch = false
+            check(defaults.bool(forKey: "floatingPillOnNoNotch") == false, "L12 float persisted")
+            cfg.followMouseScreen = origFollow
+            cfg.floatingPillOnNoNotch = origFloat
+            defaults.removeObject(forKey: "followMouseScreen")
+            defaults.removeObject(forKey: "floatingPillOnNoNotch")
+        }
+
+        // L14. Approval heartbeat: phantom-prompt protection — pinned
+        // prompts verify live agent state every poll and self-clear when the
+        // agent moved on; missing data never phantom-clears.
+        check(
+            IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "blocked"),
+            "L14 blocked keeps prompt pinned")
+        check(
+            IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .waiting, liveStatus: nil),
+            "L14 unknown status keeps pinned (no phantom clear)")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "working"),
+            "L14 working clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "done"),
+            "L14 done clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "idle"),
+            "L14 idle clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "failed"),
+            "L14 failed clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .progress, liveStatus: "blocked"),
+            "L14 non-approval kinds never pin")
+        let kept = IslandMetrics.ApprovalHeartbeat.verifyPendingKeys(
+            ["1-1", "1-2", "1-3"],
+            liveStatuses: ["1-1": "blocked", "1-2": "working", "1-4": "done"])
+        check(
+            kept == ["1-1", "1-3"],
+            "L14 verify prunes moved-on panes, keeps unknown (got \(kept))")
+
+        // L14. Manager heartbeat: pending map + current event self-clear.
+        MainActor.assumeIsolated {
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l14-\(UUID().uuidString).jsonl"),
+                capture: false)
+            manager.pendingApprovals["1-1"] = (variance: .yesNo, choices: nil)
+            manager.pendingApprovals["1-2"] = (variance: .multi, choices: ["a", "b"])
+            manager.heartbeatVerify(liveStatuses: ["1-1": "blocked", "1-2": "done"])
+            check(
+                manager.pendingApprovals["1-1"] != nil && manager.pendingApprovals["1-2"] == nil,
+                "L14 manager prunes only moved-on panes")
+            let prompt = AgentEvent(
+                source: "kilo", kind: .accessRequest, title: "run tests?",
+                message: nil, paneId: "2-1", workspaceId: nil,
+                variance: .yesNo, choices: nil, playSound: true, persistent: true)
+            manager.publishEventForTesting(prompt)
+            manager.heartbeatVerify(liveStatuses: ["2-1": "blocked"])
+            check(
+                manager.currentEventForTesting?.paneId == "2-1",
+                "L14 still-blocked prompt survives heartbeat")
+            manager.heartbeatVerify(liveStatuses: ["2-1": "working"])
+            check(
+                manager.currentEventForTesting == nil,
+                "L14 moved-on prompt self-clears (phantom kill)")
+        }
+
+        // L15. Full-screen & space policy: pure visibility policy and
+        // transition settle delay, plus config persistence.
+        check(
+            IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: false, showInFullScreen: true),
+            "L15 normal desktop shows island")
+        check(
+            IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: true, showInFullScreen: true),
+            "L15 full screen with override shows island")
+        check(
+            !IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: true, showInFullScreen: false),
+            "L15 full screen without override hides island")
+        check(
+            IslandMetrics.FullScreenPolicy.transitionSettleDelay > 0,
+            "L15 settle delay positive")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.showInFullScreen
+            check(cfg.showInFullScreen, "L15 full-screen default on")
+            cfg.showInFullScreen = false
+            check(
+                defaults.bool(forKey: "showInFullScreen") == false,
+                "L15 full-screen toggle persisted")
+            cfg.showInFullScreen = orig
+            defaults.removeObject(forKey: "showInFullScreen")
+        }
+
+        // L16. Menu-bar collision avoidance: clearance geometry, collision
+        // detection, config persistence.
+        let clear = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .right, notchWidth: 200, screenWidth: 1512,
+            auxLeft: 300, auxRight: 400)
+        check(abs(clear - 400) < 0.01, "L16 right clearance uses aux right (got \(clear))")
+        let clearLeft = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .left, notchWidth: 200, screenWidth: 1512,
+            auxLeft: 300, auxRight: 400)
+        check(abs(clearLeft - 300) < 0.01, "L16 left clearance uses aux left")
+        let clearFallback = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .right, notchWidth: 200, screenWidth: 1512, auxLeft: 0, auxRight: 0)
+        check(
+            abs(clearFallback - (1512 - 200)) < 0.01,
+            "L16 fallback clearance = screen minus notch (got \(clearFallback))")
+        let clearCenter = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: .center, notchWidth: 200, screenWidth: 1512, auxLeft: 300, auxRight: 400)
+        check(abs(clearCenter - 1312) < 0.01, "L16 center clearance spans both sides")
+        check(
+            IslandMetrics.MenuBarClearance.collides(
+                side: .right, stripWidth: 500, notchWidth: 200, screenWidth: 1512,
+                auxLeft: 300, auxRight: 400),
+            "L16 wide strip collides with icons")
+        check(
+            !IslandMetrics.MenuBarClearance.collides(
+                side: .right, stripWidth: 300, notchWidth: 200, screenWidth: 1512,
+                auxLeft: 300, auxRight: 400),
+            "L16 narrow strip clears icons")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.avoidMenuBarIcons
+            check(cfg.avoidMenuBarIcons, "L16 avoid-icons default on")
+            cfg.avoidMenuBarIcons = false
+            check(
+                defaults.bool(forKey: "avoidMenuBarIcons") == false,
+                "L16 avoid-icons persisted")
+            cfg.avoidMenuBarIcons = orig
+            defaults.removeObject(forKey: "avoidMenuBarIcons")
+        }
+
+        // L17. Display hot-swap & ghost validation: window-frame checks
+        // against current screens.
+        let screenA = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let screenB = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let onA = CGRect(x: 600, y: 500, width: 504, height: 560)
+        let ghost = CGRect(x: 5000, y: 500, width: 504, height: 560)
+        check(
+            IslandMetrics.DisplayAnchor.frameIsOnScreens(frame: onA, screens: [screenA, screenB]),
+            "L17 frame on live screen is valid")
+        check(
+            !IslandMetrics.DisplayAnchor.frameIsOnScreens(frame: ghost, screens: [screenA]),
+            "L17 disconnected-display frame is ghost")
+        let onB = CGRect(x: 3000, y: 500, width: 504, height: 560)
+        check(
+            IslandMetrics.DisplayAnchor.frameIsOnScreens(frame: onB, screens: [screenA, screenB]),
+            "L17 frame lands on the other live screen")
+        check(
+            IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: true, windowFrame: ghost, screens: [screenA]),
+            "L17 visible ghost needs re-anchor")
+        check(
+            !IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: false, windowFrame: ghost, screens: [screenA]),
+            "L17 hidden ghost needs no re-anchor")
+        check(
+            !IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: true, windowFrame: onA, screens: [screenA]),
+            "L17 on-screen window needs no re-anchor")
+
+        // L18. Terminal-agnostic focus: bundle-ID registry resolution and
+        // config persistence.
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["com.googlecode.iterm2"]) == "com.googlecode.iterm2",
+            "L18 iTerm2 detected")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["dev.warp.Warp-Stable", "com.apple.Terminal"])
+                == "dev.warp.Warp-Stable",
+            "L18 Warp preferred over Terminal by registry order")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["com.apple.Terminal"]) == "com.apple.Terminal",
+            "L18 Terminal fallback")
+        check(
+            TerminalRegistry.runningTerminal(runningBundleIDs: ["com.foo.Bar"]) == nil,
+            "L18 unknown apps ignored")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["io.alacritty", "com.googlecode.iterm2"],
+                preferred: "com.googlecode.iterm2") == "com.googlecode.iterm2",
+            "L18 explicit preference wins")
+        check(
+            TerminalRegistry.runningTerminal(
+                runningBundleIDs: ["io.alacritty"], preferred: "com.googlecode.iterm2")
+                == "io.alacritty",
+            "L18 unavailable preference falls back to running terminal")
+        check(
+            TerminalRegistry.preferredBundleIDs.contains("com.ghostty.app"),
+            "L18 Ghostty in registry")
+        check(
+            TerminalRegistry.preferredBundleIDs.contains("org.wezfurlong.wezterm"),
+            "L18 WezTerm in registry")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.preferredTerminalBundleID
+            check(cfg.preferredTerminalBundleID == nil, "L18 no terminal preference by default")
+            cfg.preferredTerminalBundleID = "com.ghostty.app"
+            check(
+                defaults.string(forKey: "preferredTerminalBundleID") == "com.ghostty.app",
+                "L18 terminal preference persisted")
+            cfg.preferredTerminalBundleID = orig
+            defaults.removeObject(forKey: "preferredTerminalBundleID")
+        }
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

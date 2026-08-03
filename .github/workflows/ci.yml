@@ -53,10 +53,17 @@ jobs:
         run: |
           swiftc -o /tmp/logic-check \
             Sources/BantayTUI/AgentEventKind.swift \
+            Sources/BantayTUI/AgentDetector.swift \
             Sources/BantayTUI/NotchHUDConfig.swift \
             Sources/BantayTUI/HerdrSocketAdapter.swift \
             Sources/BantayTUI/IslandMetrics.swift \
+            Sources/BantayTUI/PlexerAdapter.swift \
             Sources/BantayTUI/AgentEventManager.swift \
+            Sources/BantayTUI/UsageTracker.swift \
+            Sources/BantayTUI/EventIngestServer.swift \
+            Sources/BantayTUI/ShelfModel.swift \
+            Sources/BantayTUI/TerminalFocusser.swift \
+            Sources/BantayTUI/LaunchAgent.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check
 
