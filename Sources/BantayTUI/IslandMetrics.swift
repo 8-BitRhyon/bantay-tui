@@ -241,6 +241,45 @@ public enum IslandMetrics: Sendable {
         }
     }
 
+    // MARK: - Peripheral-vision & speed snacks
+
+    /// Pulsing approval edge-glow color (amber, blocked state).
+    public static let glowBlockedColor = "#ffe066"
+    /// Steady edge-glow for urgent (accessRequest) states.
+    public static let glowUrgentColor = "#ff6b6b"
+
+    /// Human-readable elapsed time since `startedAt`, e.g. "14s", "2m", "1h".
+    public static func elapsedLabel(since startedAt: Date, now: Date) -> String {
+        let elapsed = max(now.timeIntervalSince(startedAt), 0)
+        if elapsed < 60 {
+            return "\(Int(elapsed))s"
+        }
+        let minutes = Int(elapsed / 60)
+        if minutes < 60 {
+            return "\(minutes)m"
+        }
+        let hours = Int(elapsed / 3600)
+        let remMinutes = minutes % 60
+        return remMinutes > 0 ? "\(hours)h\(remMinutes)m" : "\(hours)h"
+    }
+
+    /// Whether the roster should react to single-key shortcuts (Y/N/digits).
+    /// Requires the island window to be key (clicked/global hotkey focus).
+    public static func shortcutKey(for char: Character) -> ApprovalShortcut? {
+        switch char.lowercased() {
+        case "y": return .approve
+        case "n": return .deny
+        case "0"..."9": return .option(Int(String(char)) ?? 0)
+        default: return nil
+        }
+    }
+
+    public enum ApprovalShortcut: Equatable {
+        case approve
+        case deny
+        case option(Int)
+    }
+
     public static func cornerRadius(expanded: Bool) -> CGFloat {
         expanded ? expandedCornerRadius : closedCornerRadius
     }

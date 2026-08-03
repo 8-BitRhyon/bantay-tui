@@ -3,6 +3,7 @@ import SwiftUI
 
 extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
+    static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
 }
 
 @main
@@ -22,12 +23,16 @@ final class KeyablePanel: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var window: NSWindow?
+    /// The live app-delegate instance, for non-main-actor callbacks.
+    @MainActor static weak var shared: AppDelegate?
     /// Set once the island has shown at least once; un-gates `hideAtStartup`.
     @MainActor static var didShowOnce = false
     /// Set at launch when the one-time welcome sheet must appear.
     @MainActor static var pendingWelcome = false
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
+    private var hotkeyMonitor: Any?
+    private var badgeTimer: Timer?
 
     /// Diagnostic trace written to stderr (landld captures it in bantay.err).
     static func dbg(_ message: String) {
@@ -61,9 +66,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        Self.shared = self
         makeIslandWindow()
         installMenuBar()
         observeScreenChanges()
+        installGlobalHotkey()
+        startBadgeTimer()
         Self.dbg(
             "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
@@ -186,9 +194,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = item
     }
 
+    /// Global ⌥Space toggle: show/hide the island from anywhere. Uses a
+    /// key-down monitor so no Accessibility permission is required.
+    @MainActor
+    private func installGlobalHotkey() {
+        guard NotchHUDConfig.shared.globalHotkeyEnabled else { return }
+        let handler: @Sendable (NSEvent) -> Void = { event in
+            guard event.modifierFlags.contains(.option),
+                !event.modifierFlags.contains(.shift),
+                event.keyCode == 49  // Space
+            else {
+                return
+            }
+            Task { @MainActor in
+                AppDelegate.handleHotkeyToggle()
+            }
+        }
+        hotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
+    }
+
+    @MainActor
+    static func handleHotkeyToggle() {
+        if window?.isVisible == true {
+            hide()
+        } else {
+            showAtNotch()
+            NotificationCenter.default.post(name: .notchHotkeyPressed, object: nil)
+        }
+    }
+
+    /// Menu-bar badge: a small amber dot + pending count when approvals wait.
+    @MainActor
+    private func startBadgeTimer() {
+        updateBadge()
+        let handler: @Sendable (Timer) -> Void = { _ in
+            Task { @MainActor in
+                AppDelegate.shared?.updateBadge()
+            }
+        }
+        badgeTimer = Timer.scheduledTimer(
+            withTimeInterval: 3.0, repeats: true, block: handler)
+    }
+
+    @MainActor
+    private func updateBadge() {
+        guard let button = statusItem?.button else { return }
+        let config = NotchHUDConfig.shared
+        let needsInput = IslandMetrics.agentCounts(
+            kinds: AgentEventManager.shared.agents.map(\.kind)
+        ).needsInput
+        if config.menuBarBadge && needsInput > 0 {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.systemOrange,
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold),
+                .paragraphStyle: paragraph,
+            ]
+            button.attributedTitle = NSAttributedString(
+                string: " •\(needsInput)", attributes: attrs)
+        } else {
+            button.attributedTitle = NSAttributedString(string: "")
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-
         let titleItem = NSMenuItem(title: "Bantay-TUI", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
         menu.addItem(titleItem)
@@ -239,12 +310,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         disableItem.target = self
         menu.addItem(disableItem)
 
+        let snoozeMenu = NSMenu()
         let snoozeItem = NSMenuItem(
-            title: config.isSnoozed ? "Snooze active" : "Snooze 10 minutes",
-            action: #selector(snoozeIsland),
+            title: config.isSnoozed ? "Snooze active" : "Snooze…",
+            action: nil,
             keyEquivalent: "")
-        snoozeItem.target = self
+        snoozeItem.submenu = snoozeMenu
         snoozeItem.state = config.isSnoozed ? .on : .off
+        let presets: [(String, TimeInterval)] = [
+            ("15 minutes", 900),
+            ("1 hour", 3600),
+            ("4 hours", 14400),
+        ]
+        for (label, seconds) in presets {
+            let item = NSMenuItem(
+                title: label, action: #selector(snoozePreset(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = seconds
+            snoozeMenu.addItem(item)
+        }
+        let untilRestart = NSMenuItem(
+            title: "Until next restart",
+            action: #selector(snoozeUntilRestartToggle),
+            keyEquivalent: "")
+        untilRestart.target = self
+        untilRestart.state = config.snoozeUntilRestart ? .on : .off
+        snoozeMenu.addItem(untilRestart)
+        snoozeMenu.addItem(.separator())
+        let cancelSnooze = NSMenuItem(
+            title: "Cancel snooze", action: #selector(cancelSnooze), keyEquivalent: "")
+        cancelSnooze.target = self
+        cancelSnooze.isEnabled = config.isSnoozed
+        snoozeMenu.addItem(cancelSnooze)
         menu.addItem(snoozeItem)
 
         let restartItem = NSMenuItem(
@@ -333,13 +430,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @MainActor
-    @objc private func snoozeIsland() {
+    @objc private func snoozePreset(_ sender: NSMenuItem) {
         let config = NotchHUDConfig.shared
-        if config.isSnoozed {
+        guard let seconds = sender.representedObject as? TimeInterval else { return }
+        config.snoozeUntilRestart = false
+        config.snoozedUntil = Date().addingTimeInterval(seconds)
+        NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+    }
+
+    @MainActor
+    @objc private func snoozeUntilRestartToggle() {
+        let config = NotchHUDConfig.shared
+        config.snoozeUntilRestart.toggle()
+        if config.snoozeUntilRestart {
             config.snoozedUntil = nil
-        } else {
-            config.snoozedUntil = Date().addingTimeInterval(600)
         }
+        NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+    }
+
+    @MainActor
+    @objc private func cancelSnooze() {
+        let config = NotchHUDConfig.shared
+        config.snoozeUntilRestart = false
+        config.snoozedUntil = nil
         NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
     }
 

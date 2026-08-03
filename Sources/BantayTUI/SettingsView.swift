@@ -18,6 +18,11 @@ struct SettingsView: View {
     @State private var expandedQueueCap = NotchHUDConfig.shared.clampedExpandedQueueCap
     @State private var expandedShowQueue = NotchHUDConfig.shared.expandedShowQueue
     @State private var expandedGroupByState = NotchHUDConfig.shared.expandedGroupByState
+    @State private var hotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
+    @State private var keyboardShortcuts = NotchHUDConfig.shared.keyboardShortcuts
+    @State private var edgeGlow = NotchHUDConfig.shared.edgeGlowEnabled
+    @State private var showElapsed = NotchHUDConfig.shared.showElapsedTime
+    @State private var menuBadge = NotchHUDConfig.shared.menuBarBadge
 
     var body: some View {
         Form {
@@ -50,6 +55,13 @@ struct SettingsView: View {
                     .onChange(of: muteInTerminal) { _, newValue in
                         NotchHUDConfig.shared.muteInTerminal = newValue
                     }
+                Button("Play alert sound preview") {
+                    let names = ["Ping", "Glass", "Submarine"]
+                    let name = names[Int.random(in: 0..<names.count)]
+                    let sound = NSSound(named: name)
+                    sound?.volume = NotchHUDConfig.shared.soundVolume
+                    sound?.play()
+                }
                 #if DEBUG
                     Button("Send test notification") {
                         AgentEventManager.shared.publishForTesting()
@@ -135,6 +147,32 @@ struct SettingsView: View {
                 .onChange(of: expandedQueueCap) { _, newValue in
                     NotchHUDConfig.shared.expandedQueueCap = newValue
                 }
+            }
+            Section("Quick actions") {
+                Toggle("Global shortcut ⌥Space", isOn: $hotkeyEnabled)
+                    .help("Show/hide the island from any app.")
+                    .onChange(of: hotkeyEnabled) { _, newValue in
+                        NotchHUDConfig.shared.globalHotkeyEnabled = newValue
+                    }
+                Toggle("Keyboard shortcuts in roster", isOn: $keyboardShortcuts)
+                    .help("With the island focused: Y approve, N deny, 1-9 choose.")
+                    .onChange(of: keyboardShortcuts) { _, newValue in
+                        NotchHUDConfig.shared.keyboardShortcuts = newValue
+                    }
+                Toggle("Edge glow on pending approvals", isOn: $edgeGlow)
+                    .help("Pulsing amber border when agents need you.")
+                    .onChange(of: edgeGlow) { _, newValue in
+                        NotchHUDConfig.shared.edgeGlowEnabled = newValue
+                    }
+                Toggle("Elapsed time on working agents", isOn: $showElapsed)
+                    .onChange(of: showElapsed) { _, newValue in
+                        NotchHUDConfig.shared.showElapsedTime = newValue
+                    }
+                Toggle("Menu-bar badge", isOn: $menuBadge)
+                    .help("Amber dot + pending count in the menu bar.")
+                    .onChange(of: menuBadge) { _, newValue in
+                        NotchHUDConfig.shared.menuBarBadge = newValue
+                    }
             }
             Section {
                 Button("Show Welcome…") {

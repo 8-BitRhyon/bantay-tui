@@ -42,6 +42,8 @@ struct AgentSnapshot: Identifiable, Equatable {
     /// multi-select inline. Nil for agents not blocked on an approval.
     let variance: ApprovalVariance?
     let choices: [String]?
+    /// When this agent's current working burst began (elapsed timers).
+    let startedAt: Date?
 
     var approval: IslandMetrics.ApprovalControls {
         IslandMetrics.ApprovalControls(variance: variance, choices: choices)
@@ -69,6 +71,10 @@ final class AgentEventManager: ObservableObject {
     private var lineBuffer = ""
     private var lastSeenKinds: [String: AgentEventKind] = [:]
     private var lastSoundAt: [String: Date] = [:]
+    /// When each pane's current working burst started (for elapsed timers).
+    /// Set when a pane transitions into progress/started; cleared when it
+    /// leaves working state.
+    private var startedAtByPane: [String: Date] = [:]
     /// Latest approval prompt shape per pane, decoded from the event stream.
     /// Merged into roster snapshots so queue cards can render yes/no,
     /// numbered-choice, and multi-select controls inline.
@@ -210,6 +216,15 @@ final class AgentEventManager: ObservableObject {
         } else if event.kind != .progress && event.kind != .started {
             pendingApprovals.removeValue(forKey: key)
         }
+        if event.kind == .progress || event.kind == .started {
+            if startedAtByPane[key] == nil {
+                startedAtByPane[key] = event.createdAt
+            }
+        } else if event.kind == .completed || event.kind == .failed
+            || event.kind == .cancelled || event.kind == .clear
+        {
+            startedAtByPane.removeValue(forKey: key)
+        }
 
         if event.kind == .clear {
             currentEvent = nil
@@ -309,7 +324,8 @@ extension AgentEventManager {
             paneId: agent.paneId,
             workspaceId: agent.workspaceId,
             variance: nil,
-            choices: nil
+            choices: nil,
+            startedAt: nil
         )
     }
 
@@ -546,16 +562,21 @@ extension AgentEventManager {
         }
     }
 
-    /// Attach the latest decoded approval prompt (variance/choices) to blocked
-    /// roster rows so queue cards render the full interactive surface.
+    /// Attach the latest decoded approval prompt (variance/choices) and the
+    /// working-burst start time to roster rows so the control plane renders
+    /// the full interactive surface and elapsed timers.
     func mergeApprovals(into roster: [AgentSnapshot]) -> [AgentSnapshot] {
         roster.map { agent in
-            guard agent.kind == .accessRequest || agent.kind == .waiting,
-                let key = agent.paneId ?? agent.source as String?,
+            let key = agent.paneId ?? agent.source
+            var variance = agent.variance
+            var choices = agent.choices
+            if agent.kind == .accessRequest || agent.kind == .waiting,
                 let pending = pendingApprovals[key]
-            else {
-                return agent
+            {
+                variance = pending.variance
+                choices = pending.choices
             }
+            let startedAt = startedAtByPane[key]
             return AgentSnapshot(
                 id: agent.id,
                 source: agent.source,
@@ -564,10 +585,21 @@ extension AgentEventManager {
                 message: agent.message,
                 paneId: agent.paneId,
                 workspaceId: agent.workspaceId,
-                variance: pending.variance,
-                choices: pending.choices
+                variance: variance,
+                choices: choices,
+                startedAt: startedAt
             )
         }
+    }
+
+    /// Test seam: record a working-burst start time (mirrors showEvent).
+    func recordStartForTesting(pane: String, at date: Date) {
+        startedAtByPane[pane] = date
+    }
+
+    /// Test seam: clear a working-burst start time (mirrors showEvent).
+    func clearStartForTesting(pane: String) {
+        startedAtByPane.removeValue(forKey: pane)
     }
 }
 

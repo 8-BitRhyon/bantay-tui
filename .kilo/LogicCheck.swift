@@ -866,6 +866,111 @@ struct LogicCheckMain {
                 "L7 idle agents never carry approval data")
         }
 
+        // L8. Speed & peripheral-vision snacks: elapsed labels, shortcut
+        // keys, startedAt merge, snooze-until-restart, new config facets.
+        let base = Date(timeIntervalSince1970: 1_000_000)
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(14)) == "14s",
+            "L8 elapsed under a minute in seconds (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(14))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(125)) == "2m",
+            "L8 elapsed in minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(125))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(3600)) == "1h",
+            "L8 elapsed exactly one hour (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(3600))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(4500))
+                == "1h15m",
+            "L8 elapsed hours+minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(4500))))")
+        check(
+            IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(-5)) == "0s",
+            "L8 negative elapsed clamps to 0s")
+        check(
+            IslandMetrics.shortcutKey(for: "y") == .approve,
+            "L8 y maps to approve")
+        check(
+            IslandMetrics.shortcutKey(for: "N") == .deny,
+            "L8 N maps to deny")
+        check(
+            IslandMetrics.shortcutKey(for: "3") == .option(3),
+            "L8 digit maps to option")
+        check(
+            IslandMetrics.shortcutKey(for: "x") == nil,
+            "L8 unknown key ignored")
+        check(IslandMetrics.glowBlockedColor == "#ffe066", "L8 glow amber constant")
+        check(IslandMetrics.glowUrgentColor == "#ff6b6b", "L8 glow red constant")
+
+        // L8. startedAt merge: working agents carry burst start, done do not.
+        MainActor.assumeIsolated {
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l8-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let working = AgentSnapshot(
+                id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
+                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let done = AgentSnapshot(
+                id: "p2", source: "codex", kind: .completed, title: nil, message: nil,
+                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let start = Date(timeIntervalSince1970: 500_000)
+            manager.pendingApprovals["1-1"] = (variance: nil, choices: nil)
+            let merged = manager.mergeApprovals(into: [working, done])
+            check(
+                merged[0].startedAt == nil,
+                "L8 no start time yet (merged \(String(describing: merged[0].startedAt)))")
+
+            // Simulate the showEvent tracking by recording burst start.
+            manager.recordStartForTesting(pane: "1-1", at: start)
+            let merged2 = manager.mergeApprovals(into: [working, done])
+            check(
+                merged2[0].startedAt == start,
+                "L8 working agent carries burst start")
+            check(
+                merged2[1].startedAt == nil,
+                "L8 done agent never carries start time")
+            manager.clearStartForTesting(pane: "1-1")
+            let merged3 = manager.mergeApprovals(into: [working])
+            check(
+                merged3[0].startedAt == nil,
+                "L8 cleared burst drops start time")
+        }
+
+        // L8. New facets persist; snooze-until-restart counts as snoozed.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = (
+                cfg.globalHotkeyEnabled, cfg.keyboardShortcuts, cfg.edgeGlowEnabled,
+                cfg.showElapsedTime, cfg.menuBarBadge, cfg.snoozeUntilRestart
+            )
+            check(cfg.globalHotkeyEnabled, "L8 hotkey default on")
+            check(cfg.keyboardShortcuts, "L8 keyboard shortcuts default on")
+            check(cfg.edgeGlowEnabled, "L8 edge glow default on")
+            check(cfg.showElapsedTime, "L8 elapsed default on")
+            check(cfg.menuBarBadge, "L8 menu badge default on")
+            cfg.globalHotkeyEnabled = false
+            check(
+                defaults.bool(forKey: "globalHotkeyEnabled") == false,
+                "L8 hotkey persisted")
+            cfg.snoozeUntilRestart = true
+            check(cfg.isSnoozed, "L8 snooze-until-restart is snoozed")
+            cfg.snoozeUntilRestart = false
+            cfg.snoozedUntil = nil
+            check(!cfg.isSnoozed, "L8 cleared snooze is not snoozed")
+            cfg.globalHotkeyEnabled = orig.0
+            cfg.keyboardShortcuts = orig.1
+            cfg.edgeGlowEnabled = orig.2
+            cfg.showElapsedTime = orig.3
+            cfg.menuBarBadge = orig.4
+            cfg.snoozeUntilRestart = orig.5
+            defaults.removeObject(forKey: "globalHotkeyEnabled")
+            defaults.removeObject(forKey: "keyboardShortcuts")
+            defaults.removeObject(forKey: "edgeGlowEnabled")
+            defaults.removeObject(forKey: "showElapsedTime")
+            defaults.removeObject(forKey: "menuBarBadge")
+            defaults.removeObject(forKey: "snoozeUntilRestart")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

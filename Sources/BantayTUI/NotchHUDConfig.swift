@@ -65,8 +65,27 @@ final class NotchHUDConfig {
     var expandedGroupByState = true {
         didSet { defaults.set(expandedGroupByState, forKey: "expandedGroupByState") }
     }
+    var globalHotkeyEnabled = true {
+        didSet { defaults.set(globalHotkeyEnabled, forKey: "globalHotkeyEnabled") }
+    }
+    var keyboardShortcuts = true {
+        didSet { defaults.set(keyboardShortcuts, forKey: "keyboardShortcuts") }
+    }
+    var edgeGlowEnabled = true {
+        didSet { defaults.set(edgeGlowEnabled, forKey: "edgeGlowEnabled") }
+    }
+    var showElapsedTime = true {
+        didSet { defaults.set(showElapsedTime, forKey: "showElapsedTime") }
+    }
+    var menuBarBadge = true {
+        didSet { defaults.set(menuBarBadge, forKey: "menuBarBadge") }
+    }
+    var snoozeUntilRestart = false {
+        didSet { defaults.set(snoozeUntilRestart, forKey: "snoozeUntilRestart") }
+    }
 
     var isSnoozed: Bool {
+        if snoozeUntilRestart { return true }
         guard let snoozedUntil else { return false }
         return snoozedUntil.timeIntervalSinceNow > 0
     }
@@ -131,6 +150,24 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "expandedGroupByState") as? Bool {
             expandedGroupByState = v
+        }
+        if let v = defaults.object(forKey: "globalHotkeyEnabled") as? Bool {
+            globalHotkeyEnabled = v
+        }
+        if let v = defaults.object(forKey: "keyboardShortcuts") as? Bool {
+            keyboardShortcuts = v
+        }
+        if let v = defaults.object(forKey: "edgeGlowEnabled") as? Bool {
+            edgeGlowEnabled = v
+        }
+        if let v = defaults.object(forKey: "showElapsedTime") as? Bool {
+            showElapsedTime = v
+        }
+        if let v = defaults.object(forKey: "menuBarBadge") as? Bool {
+            menuBarBadge = v
+        }
+        if let v = defaults.object(forKey: "snoozeUntilRestart") as? Bool {
+            snoozeUntilRestart = v
         }
     }
 }

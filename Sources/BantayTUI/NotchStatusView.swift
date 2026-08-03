@@ -15,6 +15,8 @@ struct NotchStatusView: View {
     @State private var selectedChoices: Set<Int> = []
     @State private var queueSelections: [String: Set<Int>] = [:]
     @State private var showWelcome = false
+    @State private var glowPulse = false
+    @State private var now = Date()
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -104,6 +106,7 @@ struct NotchStatusView: View {
                 .frame(width: islandWidth, height: contentHeight, alignment: .top)
                 .offset(y: chipTopOffset)
         }
+        .overlay(edgeGlow)
         .scaleEffect(activeHoverScale, anchor: .top)
         .frame(width: islandWidth + cornerRad * 2, height: islandHeight, alignment: .top)
         .onHover { hovering in
@@ -133,11 +136,86 @@ struct NotchStatusView: View {
         ) { _ in
             updateIslandVisibility()
         }
+        .onReceive(
+            Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+        ) { date in
+            now = date
+        }
         .onChange(of: hasSeenOnboarding) { _, seen in
             if !seen { showWelcome = true }
         }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress { press in
+            guard let char = press.characters.first,
+                let shortcut = IslandMetrics.shortcutKey(for: char)
+            else {
+                return .ignored
+            }
+            handleShortcut(shortcut)
+            return .handled
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchHotkeyPressed)
+        ) { _ in
+            if isExpanded {
+                expandTo(false)
+            } else if !eventManager.agents.isEmpty {
+                expandTo(true)
+            }
+        }
         .sheet(isPresented: $showWelcome) {
             WelcomeView()
+        }
+    }
+
+    /// Peripheral-vision cue: pulsing amber/red border when agents are
+    /// blocked on an approval. Respects reduced motion (steady glow).
+    @ViewBuilder
+    private var edgeGlow: some View {
+        let blocked = !approvalQueueAgents.isEmpty
+        let config = NotchHUDConfig.shared
+        if config.edgeGlowEnabled && blocked && !isExpanded {
+            RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
+                .strokeBorder(
+                    Color(hex: IslandMetrics.glowBlockedColor).opacity(glowPulse ? 0.95 : 0.25),
+                    lineWidth: 2
+                )
+                .frame(width: islandWidth, height: islandHeight)
+                .allowsHitTesting(false)
+                .onAppear {
+                    if reduceMotion {
+                        glowPulse = true
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                            glowPulse = true
+                        }
+                    }
+                }
+        }
+    }
+
+    /// Single-key roster shortcuts (Y/N/digits) when the island is key and
+    /// shortcuts are enabled. Applies to the top pending approval.
+    private func handleShortcut(_ shortcut: IslandMetrics.ApprovalShortcut) {
+        guard NotchHUDConfig.shared.keyboardShortcuts,
+            let agent = approvalQueueAgents.first,
+            let paneId = agent.paneId
+        else {
+            return
+        }
+        switch shortcut {
+        case .approve:
+            adapter.approve(paneId: paneId)
+        case .deny:
+            adapter.deny(paneId: paneId)
+        case .option(let number):
+            if agent.approval.isMulti {
+                queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
+                    queueSelections[paneId] ?? [], index: number - 1)
+            } else {
+                adapter.approveChoice(paneId: paneId, choice: number)
+            }
         }
     }
 
@@ -538,6 +616,20 @@ struct NotchStatusView: View {
         .padding(.horizontal, 16)
         .frame(height: IslandMetrics.queueCardHeight)
         .background(Color.white.opacity(0.05))
+        .contextMenu {
+            if let title = agent.title {
+                Button("Copy prompt") { copyToClipboard(title) }
+            }
+            if let message = agent.message {
+                Button("Copy message") { copyToClipboard(message) }
+            }
+        }
+    }
+
+    private func copyToClipboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     @ViewBuilder
@@ -692,6 +784,14 @@ struct NotchStatusView: View {
                         Text(agent.kind.label)
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.secondary).lineLimit(1)
+                        if NotchHUDConfig.shared.showElapsedTime,
+                            let startedAt = agent.startedAt,
+                            agent.kind.isOngoing
+                        {
+                            Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.5))
+                        }
                         Spacer(minLength: 8)
                         if let title = agent.title {
                             Text(title)
