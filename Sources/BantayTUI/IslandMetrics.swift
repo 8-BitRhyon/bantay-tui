@@ -84,6 +84,29 @@ public enum IslandMetrics: Sendable {
         min(max(agentCount, 0), max(maxChips, 0))
     }
 
+    /// The largest chip count whose total strip width fits `availableWidth`
+    /// (used when menu-bar clearance shrinks the strip). Never exceeds
+    /// `maxChips`; floors at 1 when any room exists.
+    public static func idleFitChips(
+        agentCount: Int, maxChips: Int, nameLengths: [Int], availableWidth: CGFloat
+    ) -> Int {
+        let count = max(agentCount, 0)
+        guard count > 0, availableWidth > 0 else { return 0 }
+        let cap = min(count, max(maxChips, 0))
+        guard cap > 0 else { return 0 }
+        var width: CGFloat = 0
+        var shown = 0
+        for i in 0..<cap {
+            let len = nameLengths.isEmpty ? 6 : nameLengths[min(i, nameLengths.count - 1)]
+            let chip = idleNameChipWidth(nameLength: len)
+            let gap = shown > 0 ? idleChipGap : 0
+            guard width + chip + gap <= availableWidth else { break }
+            width += chip + gap
+            shown += 1
+        }
+        return shown
+    }
+
     /// Total closed idle strip width for `style`.
     public static func idleStripWidth(
         style: IdleStyle, agentCount: Int, maxChips: Int, nameLengths: [Int]
@@ -576,12 +599,22 @@ public enum IslandMetrics: Sendable {
     }
 
     /// How far down (from the window's top edge) the island content sits.
-    /// Docked idle chips sit flush in the notch row (0); the expanded panel and
-    /// the "center" idle mode drop under the menu bar, like BoringNotch.
+    /// Docked idle chips sit flush in the notch row (0); the expanded panel
+    /// drops under the menu bar. Centered idle spans the notch itself, so it
+    /// also sits in the notch row.
     public static func effectiveTopOffset(
         side: IslandDockSide, isExpanded: Bool, topInset: CGFloat
     ) -> CGFloat {
-        isExpanded ? topInset : (side == .center ? topInset : 0)
+        isExpanded ? topInset : 0
+    }
+
+    /// Centered idle: the pill spans the notch width (black bar "behind" the
+    /// notch), and details split to both sides. Each side gets half of the
+    /// remaining window width.
+    public static func centeredSideWidth(
+        windowWidth: CGFloat, notchWidth: CGFloat
+    ) -> CGFloat {
+        max((windowWidth - notchWidth) / 2 - contentSpacing, 0)
     }
 
     /// Collapse on hover-exit unless the user is mid-prompt (composing).

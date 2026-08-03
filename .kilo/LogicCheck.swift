@@ -588,8 +588,8 @@ struct LogicCheckMain {
             "L4 left-dock idle chip sits at the notch level (top inset 0)")
         check(
             IslandMetrics.effectiveTopOffset(
-                side: .center, isExpanded: false, topInset: 47) == 47,
-            "L4 center idle mode keeps dropping under the notch")
+                side: .center, isExpanded: false, topInset: 47) == 0,
+            "L4 center idle mode sits in the notch row (behind the notch)")
         check(
             IslandMetrics.effectiveTopOffset(
                 side: .right, isExpanded: true, topInset: 47) == 47,
@@ -1711,6 +1711,38 @@ struct LogicCheckMain {
         check(
             small.displayedLabels(cap: 2).count == 2 && small.overflowCount(cap: 2) == 8,
             "L22 custom cap respected")
+
+        // L23. Centered idle split + fit-aware chips.
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .center, isExpanded: false, topInset: 47) == 0,
+            "L23 centered idle sits in the notch row")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .center, isExpanded: true, topInset: 47) == 47,
+            "L23 centered expanded still drops under the menu bar")
+        let side = IslandMetrics.centeredSideWidth(windowWidth: 504, notchWidth: 200)
+        check(abs(side - 142) < 0.01, "L23 centered side width (got \(side))")
+        check(
+            IslandMetrics.centeredSideWidth(windowWidth: 200, notchWidth: 200) == 0,
+            "L23 no room for sides when window == notch")
+        let fit1 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 3, nameLengths: [4, 4, 4], availableWidth: 200)
+        check(fit1 == 3, "L23 wide clearance fits all three (got \(fit1))")
+        let fit2 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 3, nameLengths: [4, 4, 4], availableWidth: 90)
+        check(fit2 >= 1 && fit2 < 3, "L23 tight clearance truncates (got \(fit2))")
+        let fit3 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 2, nameLengths: [4, 4, 4], availableWidth: 500)
+        check(fit3 == 2, "L23 fit never exceeds maxChips (got \(fit3))")
+        check(
+            IslandMetrics.idleFitChips(
+                agentCount: 0, maxChips: 3, nameLengths: [], availableWidth: 200) == 0,
+            "L23 empty roster fits nothing")
+        let fit4 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 3, nameLengths: [30, 30, 30], availableWidth: 200)
+        check(fit4 >= 1 && fit4 <= 3, "L23 long names shrink fit (got \(fit4))")
+        check(fit4 <= fit1, "L23 longer names never fit more than short ones")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

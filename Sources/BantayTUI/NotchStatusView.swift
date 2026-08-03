@@ -36,10 +36,20 @@ struct NotchStatusView: View {
 
     private var hasTransientEvent: Bool { eventManager.currentEvent != nil }
 
+    /// True in centered idle: the pill spans the notch (black bar behind it)
+    /// and details split to both sides.
+    private var isCenteredIdle: Bool {
+        !isExpanded && !hasTransientEvent
+            && NotchHUDConfig.shared.islandDockSide == .center
+    }
+
     private var closedPillWidth: CGFloat {
         let full = min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
         guard !hasTransientEvent else { return full }
         let config = NotchHUDConfig.shared
+        if isCenteredIdle {
+            return full
+        }
         var width = IslandMetrics.idleClosedWidth(
             style: config.idleStyle,
             agentCount: eventManager.agents.count,
@@ -52,15 +62,48 @@ struct NotchStatusView: View {
                 screenWidth: AppDelegate.islandScreen()?.frame.width
                     ?? AppDelegate.notchWidth,
                 auxLeft: AppDelegate.auxLeftWidth, auxRight: AppDelegate.auxRightWidth)
+            let fit = IslandMetrics.idleFitChips(
+                agentCount: eventManager.agents.count,
+                maxChips: config.clampedIdleMaxChips,
+                nameLengths: eventManager.agents.map(\.source.count),
+                availableWidth: max(clearance - IslandMetrics.idleOverflowPad, 0))
+            width = IslandMetrics.idleStripWidth(
+                style: config.idleStyle,
+                agentCount: min(eventManager.agents.count, max(fit, 1)),
+                maxChips: max(fit, 1),
+                nameLengths: eventManager.agents.map(\.source.count))
             width = min(width, max(clearance, IslandMetrics.idleChipWidth))
         }
         return width
     }
 
+    /// Chips actually shown in the idle strip: respects the menu-bar
+    /// clearance fit (fallback to the configured cap).
+    private var idleShownCount: Int {
+        let config = NotchHUDConfig.shared
+        let count = eventManager.agents.count
+        guard !isCenteredIdle, config.avoidMenuBarIcons else {
+            return IslandMetrics.idleShownChips(
+                agentCount: count, maxChips: config.clampedIdleMaxChips)
+        }
+        let clearance = IslandMetrics.MenuBarClearance.maxIdleWidth(
+            side: config.islandDockSide, notchWidth: AppDelegate.notchWidth,
+            screenWidth: AppDelegate.islandScreen()?.frame.width ?? AppDelegate.notchWidth,
+            auxLeft: AppDelegate.auxLeftWidth, auxRight: AppDelegate.auxRightWidth)
+        return IslandMetrics.idleFitChips(
+            agentCount: count, maxChips: config.clampedIdleMaxChips,
+            nameLengths: eventManager.agents.map(\.source.count),
+            availableWidth: max(clearance - IslandMetrics.idleOverflowPad, 0))
+    }
+
     private var islandWidth: CGFloat {
-        isExpanded
-            ? IslandMetrics.expandedWidth
-            : closedPillWidth
+        if isExpanded {
+            return IslandMetrics.expandedWidth
+        }
+        if isCenteredIdle {
+            return min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
+        }
+        return closedPillWidth
     }
 
     /// Idle placement: slide the closed chip beside the notch (left/right) or
@@ -86,6 +129,13 @@ struct NotchStatusView: View {
         IslandMetrics.contentHeight(
             isExpanded: isExpanded, topInset: chipTopOffset,
             agentCount: eventManager.agents.count, queueCount: approvalQueueAgents.count)
+    }
+
+    /// Content frame width: the split centered strip spans the whole window
+    /// so details leak on both sides of the notch; everything else is the
+    /// island width.
+    private var contentFrameWidth: CGFloat {
+        isCenteredIdle ? IslandMetrics.windowSize().width : islandWidth
     }
 
     /// Agents currently blocked on an approval — pinned at the top of the
@@ -117,7 +167,7 @@ struct NotchStatusView: View {
         ZStack(alignment: .top) {
             islandBackground
             content
-                .frame(width: islandWidth, height: contentHeight, alignment: .top)
+                .frame(width: contentFrameWidth, height: contentHeight, alignment: .top)
                 .offset(y: chipTopOffset)
                 .clipped()
         }
@@ -312,8 +362,13 @@ struct NotchStatusView: View {
                 }
             }
         } else if !eventManager.agents.isEmpty {
-            agentStrip
-                .onTapGesture { expandTo(true) }
+            if isCenteredIdle {
+                centerIdleStrip
+                    .onTapGesture { expandTo(true) }
+            } else {
+                agentStrip
+                    .onTapGesture { expandTo(true) }
+            }
         } else if isExpanded {
             expandedList
         } else {
@@ -367,8 +422,7 @@ struct NotchStatusView: View {
     @ViewBuilder
     private var agentStrip: some View {
         let agents = eventManager.agents
-        let maxChips = NotchHUDConfig.shared.clampedIdleMaxChips
-        let shown = IslandMetrics.idleShownChips(agentCount: agents.count, maxChips: maxChips)
+        let shown = idleShownCount
         let overflow = max(agents.count - shown, 0)
         ZStack {
             switch NotchHUDConfig.shared.idleStyle {
@@ -423,6 +477,87 @@ struct NotchStatusView: View {
             }
         }
         .frame(width: islandWidth, height: IslandMetrics.pillHeight)
+        .contentShape(Rectangle())
+    }
+
+    /// Centered idle: the pill spans the notch (black bar behind it) and
+    /// important details split to both sides — counts/usage on the left,
+    /// live agent chips on the right.
+    private var centerIdleStrip: some View {
+        let agents = eventManager.agents
+        let counts = IslandMetrics.agentCounts(kinds: agents.map(\.kind))
+        let sideWidth = IslandMetrics.centeredSideWidth(
+            windowWidth: IslandMetrics.windowSize().width,
+            notchWidth: AppDelegate.notchWidth)
+        let shown = IslandMetrics.idleShownChips(
+            agentCount: agents.count,
+            maxChips: NotchHUDConfig.shared.clampedIdleMaxChips)
+        let overflow = max(agents.count - shown, 0)
+        return HStack(spacing: 0) {
+            HStack(spacing: 6) {
+                if counts.needsInput > 0 {
+                    Circle()
+                        .fill(Color(hex: AgentEventKind.accessRequest.color))
+                        .frame(width: 6, height: 6)
+                } else {
+                    Circle()
+                        .fill(Color(hex: AgentEventKind.progress.color))
+                        .frame(width: 6, height: 6)
+                }
+                Text("\(agents.count) agent\(agents.count == 1 ? "" : "s")")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                if counts.needsInput > 0 {
+                    Text("· \(counts.needsInput) need you")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.yellow)
+                        .lineLimit(1)
+                }
+                if NotchHUDConfig.shared.showUsageGauge,
+                    eventManager.usage.totalTokens > 0
+                {
+                    Text(UsageTracker.compactTokens(eventManager.usage.totalTokens))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: sideWidth, alignment: .trailing)
+            .lineLimit(1)
+            .allowsHitTesting(false)
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: IslandMetrics.idleChipGap) {
+                ForEach(Array(agents.prefix(shown).enumerated()), id: \.offset) { _, agent in
+                    HStack(spacing: IslandMetrics.idleChipDotGap) {
+                        Circle()
+                            .fill(Color(hex: agent.kind.color))
+                            .frame(
+                                width: IslandMetrics.idleDotSize,
+                                height: IslandMetrics.idleDotSize)
+                        Text(agent.source)
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, IslandMetrics.idleChipHPad)
+                    .frame(height: 20)
+                    .background(Color.white.opacity(0.10), in: Capsule())
+                }
+                if overflow > 0 {
+                    Text("+\(overflow)")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            }
+            .frame(width: sideWidth, alignment: .leading)
+        }
+        .frame(
+            width: IslandMetrics.windowSize().width, height: IslandMetrics.pillHeight,
+            alignment: .center
+        )
         .contentShape(Rectangle())
     }
 
