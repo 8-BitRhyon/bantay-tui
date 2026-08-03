@@ -1405,6 +1405,36 @@ struct LogicCheckMain {
                 "L14 moved-on prompt self-clears (phantom kill)")
         }
 
+        // L15. Full-screen & space policy: pure visibility policy and
+        // transition settle delay, plus config persistence.
+        check(
+            IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: false, showInFullScreen: true),
+            "L15 normal desktop shows island")
+        check(
+            IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: true, showInFullScreen: true),
+            "L15 full screen with override shows island")
+        check(
+            !IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: true, showInFullScreen: false),
+            "L15 full screen without override hides island")
+        check(
+            IslandMetrics.FullScreenPolicy.transitionSettleDelay > 0,
+            "L15 settle delay positive")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.showInFullScreen
+            check(cfg.showInFullScreen, "L15 full-screen default on")
+            cfg.showInFullScreen = false
+            check(
+                defaults.bool(forKey: "showInFullScreen") == false,
+                "L15 full-screen toggle persisted")
+            cfg.showInFullScreen = orig
+            defaults.removeObject(forKey: "showInFullScreen")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

@@ -31,6 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static var pendingWelcome = false
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
+    private var fullScreenObserver: NSObjectProtocol?
+    private var fullScreenExitObserver: NSObjectProtocol?
+    private var spaceChangeObserver: NSObjectProtocol?
+    @MainActor private static var settleTask: Task<Void, Never>?
     private var hotkeyMonitor: Any?
     private var badgeTimer: Timer?
     private var ingestServer: EventIngestServer?
@@ -165,6 +169,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             queue: .main
         ) { _ in
             MainActor.assumeIsolated { AppDelegate.reposition() }
+        }
+        fullScreenObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEnterFullScreenNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition() }
+        }
+        fullScreenExitObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didExitFullScreenNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition() }
+        }
+        spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AppDelegate.handleSpaceChange() }
+        }
+    }
+
+    /// Re-evaluate island visibility after a full-screen transition and
+    /// re-anchor once the WindowServer settles the new frame.
+    @MainActor
+    static func handleFullScreenTransition() {
+        settleTask?.cancel()
+        if IslandMetrics.FullScreenPolicy.shouldShow(
+            inFullScreen: true, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
+        {
+            showAtNotch()
+        } else {
+            hide()
+        }
+        settleTask = Task { @MainActor in
+            try? await Task.sleep(
+                for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
+            guard !Task.isCancelled else { return }
+            if IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: true, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
+            {
+                showAtNotch()
+            } else {
+                hide()
+            }
+        }
+    }
+
+    /// Re-anchor after a space switch (spaces can move/scale the island).
+    @MainActor
+    static func handleSpaceChange() {
+        settleTask?.cancel()
+        settleTask = Task { @MainActor in
+            try? await Task.sleep(
+                for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
+            guard !Task.isCancelled else { return }
+            reposition()
+            if window?.isVisible == true { showAtNotch() }
         }
     }
 

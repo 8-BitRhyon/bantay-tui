@@ -122,6 +122,9 @@ final class NotchHUDConfig {
     var floatingPillOnNoNotch = true {
         didSet { defaults.set(floatingPillOnNoNotch, forKey: "floatingPillOnNoNotch") }
     }
+    var showInFullScreen = true {
+        didSet { defaults.set(showInFullScreen, forKey: "showInFullScreen") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -234,6 +237,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "floatingPillOnNoNotch") as? Bool {
             floatingPillOnNoNotch = v
+        }
+        if let v = defaults.object(forKey: "showInFullScreen") as? Bool {
+            showInFullScreen = v
         }
     }
 }

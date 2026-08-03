@@ -32,6 +32,7 @@ struct SettingsView: View {
     @State private var shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
     @State private var followMouse = NotchHUDConfig.shared.followMouseScreen
     @State private var floatingPill = NotchHUDConfig.shared.floatingPillOnNoNotch
+    @State private var showInFullScreen = NotchHUDConfig.shared.showInFullScreen
 
     var body: some View {
         Form {
@@ -107,6 +108,11 @@ struct SettingsView: View {
                     .help("External displays/clamshell get a centered pill below the menu bar.")
                     .onChange(of: floatingPill) { _, newValue in
                         NotchHUDConfig.shared.floatingPillOnNoNotch = newValue
+                    }
+                Toggle("Keep island in full screen", isOn: $showInFullScreen)
+                    .help("Stay visible over full-screen apps; re-anchors after transitions.")
+                    .onChange(of: showInFullScreen) { _, newValue in
+                        NotchHUDConfig.shared.showInFullScreen = newValue
                     }
             }
             Section("Alerts") {

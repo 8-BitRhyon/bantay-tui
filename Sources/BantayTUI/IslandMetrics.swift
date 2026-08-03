@@ -231,6 +231,22 @@ public enum IslandMetrics: Sendable {
             height: size.height)
     }
 
+    // MARK: - Full-screen & space policy
+
+    /// Whether the island should be visible for the given full-screen state.
+    /// Kept in pure form so the policy is testable without AppKit.
+    enum FullScreenPolicy {
+        static func shouldShow(
+            inFullScreen: Bool, showInFullScreen: Bool
+        ) -> Bool {
+            !inFullScreen || showInFullScreen
+        }
+
+        /// Delay (seconds) before re-anchoring after a full-screen or space
+        /// transition — lets the WindowServer settle the new frame.
+        static let transitionSettleDelay: TimeInterval = 0.35
+    }
+
     // MARK: - Approval heartbeat (phantom-prompt protection)
 
     /// Live-state verification for pinned approvals. A prompt card stays
