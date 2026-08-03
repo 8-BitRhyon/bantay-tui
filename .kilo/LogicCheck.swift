@@ -971,6 +971,123 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "snoozeUntilRestart")
         }
 
+        // L9. Standalone agent detection: classification, herdr filtering,
+        // transcript tailing, and scanner merging.
+        check(
+            AgentDetector.canonicalName(forProcess: "claude") == "claude",
+            "L9 claude classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "codex") == "codex",
+            "L9 codex classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "cursor-agent") == "cursor",
+            "L9 cursor-agent classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "gemini-cli") == "gemini",
+            "L9 gemini-cli classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "opencode") == "opencode",
+            "L9 opencode classified")
+        check(
+            AgentDetector.canonicalName(forProcess: "bash") == nil,
+            "L9 shell not an agent")
+        check(
+            AgentDetector.canonicalName(forProcess: "Claude") == "claude",
+            "L9 classification case-insensitive")
+        check(
+            AgentDetector.isHerdrManaged(environmentLines: ["HERDR_ENV=1", "PATH=/usr/bin"]),
+            "L9 herdr env detected")
+        check(
+            !AgentDetector.isHerdrManaged(environmentLines: ["PATH=/usr/bin"]),
+            "L9 plain env not herdr")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/tmp/x", name: "claude").first
+                == "/tmp/x/.claude/projects",
+            "L9 claude transcript path")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/tmp/x", name: "codex").first
+                == "/tmp/x/.codex/sessions",
+            "L9 codex transcript path")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/tmp/x", name: "unknown").isEmpty,
+            "L9 unknown agent has no transcript path")
+
+        // L9. Transcript tailing picks the newest jsonl line.
+        let transcriptDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l9-\(UUID().uuidString)")
+        let projects = transcriptDir.appendingPathComponent(".claude/projects")
+        try? FileManager.default.createDirectory(
+            at: projects, withIntermediateDirectories: true)
+        let old = projects.appendingPathComponent("old.jsonl")
+        let new = projects.appendingPathComponent("new.jsonl")
+        try? """
+            {"type":"assistant","message":{"content":"first step"}}
+            {"type":"assistant","message":{"content":"second step"}}
+            """.write(to: old, atomically: true, encoding: .utf8)
+        try? """
+            {"type":"assistant","message":{"content":"latest activity line"}}
+            """.write(to: new, atomically: true, encoding: .utf8)
+        let activity = AgentDetector.latestActivity(root: projects.path)
+        check(
+            activity?.contains("latest activity") == true,
+            "L9 latest transcript line surfaced (got \(String(describing: activity)))")
+
+        // L9. Scanner: classifies samples, skips herdr-managed + shells.
+        let samples = [
+            ProcessSample(
+                pid: 101, name: "claude", command: "claude", environmentLines: []),
+            ProcessSample(
+                pid: 202, name: "codex", command: "codex",
+                environmentLines: ["HERDR_ENV=1"]),
+            ProcessSample(pid: 303, name: "zsh", command: "zsh", environmentLines: []),
+        ]
+        let detected = StandaloneAgentScanner.detect(samples: samples, home: transcriptDir.path)
+        check(detected.count == 1, "L9 scanner keeps standalone claude only (got \(detected.map(\.name)))")
+        check(detected.first?.name == "claude", "L9 detected agent name")
+        check(detected.first?.pid == 101, "L9 detected agent pid")
+        check(
+            detected.first?.activity?.contains("latest activity") == true,
+            "L9 detected agent carries activity")
+        check(
+            StandaloneAgentScanner.detect(samples: [], home: transcriptDir.path).isEmpty,
+            "L9 empty scan yields nothing")
+
+        // L9. Roster merge: herdr-managed agents are not duplicated; config
+        // toggle persists.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.standaloneScanEnabled
+            check(cfg.standaloneScanEnabled, "L9 standalone scan default on")
+            cfg.standaloneScanEnabled = false
+            check(
+                defaults.bool(forKey: "standaloneScanEnabled") == false,
+                "L9 standalone toggle persisted")
+            cfg.standaloneScanEnabled = orig
+            defaults.removeObject(forKey: "standaloneScanEnabled")
+
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l9m-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let herdr = [
+                HerdrAgentInfo(
+                    agent: "claude", agentStatus: "working", paneId: "1-1",
+                    workspaceId: "1", terminalTitle: "refactor")
+            ]
+            let merged = manager.mergeStandalone(into: herdr, detected: detected)
+            check(
+                merged.count == 1 && merged[0].paneId == "1-1",
+                "L9 herdr claude not duplicated by standalone scan (got \(merged.count))")
+            let noHerdr = manager.mergeStandalone(into: [], detected: detected)
+            check(
+                noHerdr.count == 1 && noHerdr[0].agent == "claude",
+                "L9 standalone agent surfaces when herdr has none (got \(noHerdr.map(\.agent)))")
+            check(
+                noHerdr[0].agentStatus == "working" && noHerdr[0].paneId == nil,
+                "L9 standalone info mapped")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

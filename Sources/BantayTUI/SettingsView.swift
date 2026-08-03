@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var edgeGlow = NotchHUDConfig.shared.edgeGlowEnabled
     @State private var showElapsed = NotchHUDConfig.shared.showElapsedTime
     @State private var menuBadge = NotchHUDConfig.shared.menuBarBadge
+    @State private var standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
 
     var body: some View {
         Form {
@@ -30,6 +31,14 @@ struct SettingsView: View {
                 Toggle("Poll agents", isOn: $captureEnabled)
                     .onChange(of: captureEnabled) { _, newValue in
                         NotchHUDConfig.shared.captureEnabled = newValue
+                    }
+                Toggle("Scan standalone agents", isOn: $standaloneScan)
+                    .help(
+                        "Detect Claude Code, Codex, Gemini, Cursor, and opencode "
+                            + "running outside any multiplexer."
+                    )
+                    .onChange(of: standaloneScan) { _, newValue in
+                        NotchHUDConfig.shared.standaloneScanEnabled = newValue
                     }
                 Stepper(
                     "Poll interval: \(captureInterval) s",

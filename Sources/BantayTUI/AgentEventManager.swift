@@ -472,7 +472,11 @@ extension AgentEventManager {
 
     private func refreshRosterAndArmWaits() async {
         ensureFileWatcher()
-        let agents = await herdrAdapter.listAgents()
+        let herdrAgents = await herdrAdapter.listAgents()
+        let agents = mergeStandalone(
+            into: herdrAgents,
+            detected: NotchHUDConfig.shared.standaloneScanEnabled
+                ? StandaloneAgentScanner.scan() : [])
         let result = Self.update(
             from: agents,
             lastSeenKinds: &lastSeenKinds,
@@ -600,6 +604,24 @@ extension AgentEventManager {
     /// Test seam: clear a working-burst start time (mirrors showEvent).
     func clearStartForTesting(pane: String) {
         startedAtByPane.removeValue(forKey: pane)
+    }
+
+    /// Merge standalone-detected agents into the herdr roster without
+    /// duplicating agents herdr already manages (matched by canonical name).
+    func mergeStandalone(
+        into herdr: [HerdrAgentInfo], detected: [DetectedAgent]
+    ) -> [HerdrAgentInfo] {
+        let herdrNames = Set(herdr.map(\.agent))
+        let extras = detected.filter { !herdrNames.contains($0.name) }.map {
+            HerdrAgentInfo(
+                agent: $0.name,
+                agentStatus: "working",
+                paneId: nil,
+                workspaceId: nil,
+                terminalTitle: $0.activity
+            )
+        }
+        return herdr + extras
     }
 }
 

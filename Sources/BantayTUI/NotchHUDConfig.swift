@@ -83,6 +83,9 @@ final class NotchHUDConfig {
     var snoozeUntilRestart = false {
         didSet { defaults.set(snoozeUntilRestart, forKey: "snoozeUntilRestart") }
     }
+    var standaloneScanEnabled = true {
+        didSet { defaults.set(standaloneScanEnabled, forKey: "standaloneScanEnabled") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -168,6 +171,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "snoozeUntilRestart") as? Bool {
             snoozeUntilRestart = v
+        }
+        if let v = defaults.object(forKey: "standaloneScanEnabled") as? Bool {
+            standaloneScanEnabled = v
         }
     }
 }

@@ -53,6 +53,7 @@ jobs:
         run: |
           swiftc -o /tmp/logic-check \
             Sources/BantayTUI/AgentEventKind.swift \
+            Sources/BantayTUI/AgentDetector.swift \
             Sources/BantayTUI/NotchHUDConfig.swift \
             Sources/BantayTUI/HerdrSocketAdapter.swift \
             Sources/BantayTUI/IslandMetrics.swift \
