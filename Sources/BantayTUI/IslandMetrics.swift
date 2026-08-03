@@ -394,6 +394,19 @@ public enum IslandMetrics: Sendable {
             return (1...choices.count).map { "\($0)" }
         }
 
+        /// Max option buttons rendered per queue card before `+N` overflow.
+        static let maxDisplayedOptions = 6
+
+        /// Option labels capped for display; the rest collapse into `+N`.
+        func displayedLabels(cap: Int = ApprovalControls.maxDisplayedOptions) -> [String] {
+            Array(optionLabels.prefix(max(cap, 1)))
+        }
+
+        /// How many options are hidden behind the `+N` overflow.
+        func overflowCount(cap: Int = ApprovalControls.maxDisplayedOptions) -> Int {
+            max(optionLabels.count - max(cap, 1), 0)
+        }
+
         var submitLabel: String {
             isMulti ? "Submit" : "Approve"
         }

@@ -119,10 +119,12 @@ struct NotchStatusView: View {
             content
                 .frame(width: islandWidth, height: contentHeight, alignment: .top)
                 .offset(y: chipTopOffset)
+                .clipped()
         }
         .overlay(edgeGlow)
         .scaleEffect(activeHoverScale, anchor: .top)
         .frame(width: islandWidth + cornerRad * 2, height: islandHeight, alignment: .top)
+        .clipped()
         .onHover { hovering in
             eventManager.setActive(hovering)
             handleHover(hovering)
@@ -640,13 +642,17 @@ struct NotchStatusView: View {
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(.white)
                         .lineLimit(1)
-                    Spacer(minLength: 8)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(0)
+                    Spacer(minLength: 4)
                     Button(action: { NSWorkspace.shared.open(file.url) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.6))
                     }
                     .buttonStyle(.plain)
                     .help("Open file")
+                    .layoutPriority(1)
                     Button(action: { shelfFiles = ShelfFiles.removing(file.url, from: shelfFiles) })
                     {
                         Image(systemName: "xmark").font(.system(size: 9))
@@ -654,6 +660,7 @@ struct NotchStatusView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Remove")
+                    .layoutPriority(1)
                 }
                 .padding(.horizontal, 16)
                 .frame(height: IslandMetrics.rowHeight)
@@ -666,7 +673,10 @@ struct NotchStatusView: View {
                         .font(.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundColor(.white)
                         .lineLimit(1)
-                    Spacer(minLength: 8)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(0)
+                    Spacer(minLength: 4)
                     Button(action: {
                         let pb = NSPasteboard.general
                         pb.clearContents()
@@ -677,6 +687,7 @@ struct NotchStatusView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Copy to clipboard")
+                    .layoutPriority(1)
                 }
                 .padding(.horizontal, 16)
                 .frame(height: IslandMetrics.rowHeight)
@@ -717,6 +728,8 @@ struct NotchStatusView: View {
                     .font(.system(size: 9, weight: .regular))
                     .foregroundColor(.white.opacity(0.45))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 200, alignment: .trailing)
             }
         }
         .padding(.horizontal, 16)
@@ -732,14 +745,19 @@ struct NotchStatusView: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Text(agent.title ?? agent.message ?? agent.kind.label)
                     .font(.system(size: 9, weight: .regular))
                     .foregroundColor(.white.opacity(0.55))
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(0)
+            Spacer(minLength: 4)
             if let paneId = agent.paneId {
                 queueCardActions(controls: controls, paneId: paneId, agentID: agent.id)
+                    .layoutPriority(1)
                 approvalActionButton(
                     systemName: "terminal.fill", color: .white.opacity(0.55),
                     help: "Force focus terminal"
@@ -748,12 +766,14 @@ struct NotchStatusView: View {
                     _ = TerminalFocusser.focus(
                         preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
                 }
+                .layoutPriority(1)
                 approvalActionButton(
                     systemName: "arrow.clockwise", color: .white.opacity(0.55),
                     help: "Retry / re-check agent"
                 ) {
                     Task { await eventManager.pollHerdrAgents() }
                 }
+                .layoutPriority(1)
             }
         }
         .padding(.horizontal, 16)
@@ -801,7 +821,9 @@ struct NotchStatusView: View {
                 adapter.deny(paneId: paneId)
             }
         } else if controls.isMulti {
-            ForEach(Array(controls.optionLabels.enumerated()), id: \.offset) { index, label in
+            let labels = controls.displayedLabels()
+            let overflow = controls.overflowCount()
+            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
                 approvalActionButton(
                     label: Text(label),
                     color: queueSelections[agentID]?.contains(
@@ -813,6 +835,11 @@ struct NotchStatusView: View {
                         queueSelections[agentID] ?? [], index: index)
                 }
             }
+            if overflow > 0 {
+                Text("+\(overflow)")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
+            }
             approvalActionButton(
                 systemName: "checkmark.circle.fill", color: .green, help: "Submit"
             ) {
@@ -822,7 +849,9 @@ struct NotchStatusView: View {
                 queueSelections.removeValue(forKey: agentID)
             }
         } else {
-            ForEach(Array(controls.optionLabels.enumerated()), id: \.offset) { index, label in
+            let labels = controls.displayedLabels()
+            let overflow = controls.overflowCount()
+            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
                 approvalActionButton(
                     label: Text(label),
                     color: .white,
@@ -832,6 +861,11 @@ struct NotchStatusView: View {
                         paneId: paneId,
                         choice: IslandMetrics.ApprovalControls.optionNumber(forIndex: index))
                 }
+            }
+            if overflow > 0 {
+                Text("+\(overflow)")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
             }
             if controls.optionLabels.isEmpty {
                 approvalActionButton(
@@ -886,13 +920,16 @@ struct NotchStatusView: View {
             }
             Spacer(minLength: 8)
             usageGauge
+                .layoutPriority(1)
             Text(adapter.kind.label)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.4))
+                .layoutPriority(1)
             if queueCount > 0 {
                 Text("\(queueCount) pending")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundColor(.yellow)
+                    .layoutPriority(1)
             }
         }
         .padding(.horizontal, 16)
@@ -956,25 +993,29 @@ struct NotchStatusView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 20)
                     .background(
-                        RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08)))
+                        RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08))
+                    )
+                    .layoutPriority(0)
                 Button(action: submitPrompt) {
                     Image(systemName: "paperplane.fill").font(.system(size: 9))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
                 .help("Send prompt (Return)")
+                .layoutPriority(1)
                 Button(action: cancelComposing) {
                     Image(systemName: "xmark").font(.system(size: 9)).foregroundColor(
                         .white.opacity(0.6))
                 }
                 .buttonStyle(.plain)
                 .help("Cancel (Esc)")
+                .layoutPriority(1)
             } else {
                 Button(action: { beginComposing(agent) }) {
                     HStack(spacing: 8) {
                         Text(agent.source)
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white).lineLimit(1)
+                            .foregroundColor(.white).lineLimit(1).truncationMode(.middle)
                         Text(agent.kind.label)
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.secondary).lineLimit(1)
@@ -986,17 +1027,20 @@ struct NotchStatusView: View {
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(.white.opacity(0.5))
                         }
-                        Spacer(minLength: 8)
+                        Spacer(minLength: 4)
                         if let title = agent.title {
                             Text(title)
                                 .font(.system(size: 9, weight: .regular))
                                 .foregroundColor(.white.opacity(0.45))
                                 .lineLimit(1)
+                                .truncationMode(.tail)
                         }
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(0)
                 if let paneId = agent.paneId {
                     Button(action: { adapter.focusPane(paneId: paneId) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
@@ -1004,12 +1048,14 @@ struct NotchStatusView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Focus pane")
+                    .layoutPriority(1)
                     Button(action: { adapter.stop(paneId: paneId) }) {
                         Image(systemName: "stop.fill").font(.system(size: 9))
                             .foregroundColor(.red.opacity(0.8))
                     }
                     .buttonStyle(.plain)
                     .help("Stop (Ctrl-C)")
+                    .layoutPriority(1)
                 }
             }
         }

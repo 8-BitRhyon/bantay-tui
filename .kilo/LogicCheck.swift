@@ -1688,6 +1688,30 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "showIslandWhenIdle")
         }
 
+        // L22. Queue-card display cap: many-choice prompts collapse to
+        // maxDisplayedOptions buttons + `+N` overflow (keyboard 1-9 still
+        // covers all options), so cards never overflow the panel width.
+        let tenChoices = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: Array(repeating: "x", count: 10))
+        check(
+            tenChoices.displayedLabels().count == IslandMetrics.ApprovalControls.maxDisplayedOptions,
+            "L22 ten choices collapse to \(IslandMetrics.ApprovalControls.maxDisplayedOptions) buttons")
+        check(tenChoices.overflowCount() == 4, "L22 overflow shows +4 (got \(tenChoices.overflowCount()))")
+        let three = IslandMetrics.ApprovalControls.make(
+            variance: .choices, choices: ["a", "b", "c"])
+        check(three.displayedLabels().count == 3 && three.overflowCount() == 0, "L22 under-cap shows all")
+        let exact = IslandMetrics.ApprovalControls.make(
+            variance: .choices, choices: Array(repeating: "x", count: 6))
+        check(exact.overflowCount() == 0, "L22 exactly-cap has no overflow")
+        check(
+            IslandMetrics.ApprovalControls.maxDisplayedOptions >= 4
+                && IslandMetrics.ApprovalControls.maxDisplayedOptions <= 8,
+            "L22 cap stays in sane range")
+        let small = IslandMetrics.ApprovalControls.make(variance: .multi, choices: Array(repeating: "x", count: 10))
+        check(
+            small.displayedLabels(cap: 2).count == 2 && small.overflowCount(cap: 2) == 8,
+            "L22 custom cap respected")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
