@@ -35,6 +35,7 @@ struct SettingsView: View {
     @State private var showInFullScreen = NotchHUDConfig.shared.showInFullScreen
     @State private var avoidMenuBar = NotchHUDConfig.shared.avoidMenuBarIcons
     @State private var preferredTerminal = NotchHUDConfig.shared.preferredTerminalBundleID ?? ""
+    @State private var claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
 
     var body: some View {
         Form {
@@ -88,6 +89,16 @@ struct SettingsView: View {
                 Text("Remote hook: ssh -R \(ingestPort):localhost:\(ingestPort) devbox")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.secondary)
+            }
+            Section("Claude Code hook") {
+                Toggle("Install Claude Code hook", isOn: $claudeHookInstalled)
+                    .help(
+                        "Adds PermissionPrompt/Stop hooks to ~/.claude/settings.json "
+                            + "that stream approvals to the island — no herdr needed."
+                    )
+                    .onChange(of: claudeHookInstalled) { _, newValue in
+                        installClaudeHook(newValue)
+                    }
             }
             Section("Shelf") {
                 Toggle("Shelf tab in expanded view", isOn: $showShelf)
@@ -295,6 +306,38 @@ struct SettingsView: View {
         case "com.jetbrains.intellij": return "IntelliJ IDEA"
         default: return bundleID
         }
+    }
+
+    /// Install or remove the Claude Code hooks in ~/.claude/settings.json.
+    private func installClaudeHook(_ enabled: Bool) {
+        let home = NSHomeDirectory()
+        let settingsPath = home + "/.claude/settings.json"
+        var settings: [String: Any] = [:]
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: settingsPath)),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            settings = obj
+        }
+        if enabled {
+            let merged = ClaudeHookInstaller.mergedSettings(
+                existing: settings, port: NotchHUDConfig.shared.ingestPort)
+            if let data = try? JSONSerialization.data(
+                withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
+            {
+                try? data.write(to: URL(fileURLWithPath: settingsPath))
+            }
+            NotchHUDConfig.shared.ingestEnabled = true
+            AppDelegate.shared?.updateIngestServer()
+        } else {
+            settings.removeValue(forKey: "hooks")
+            if let data = try? JSONSerialization.data(
+                withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+            {
+                try? data.write(to: URL(fileURLWithPath: settingsPath))
+            }
+        }
+        NotchHUDConfig.shared.claudeHookInstalled = enabled
+        claudeHookInstalled = enabled
     }
 }
 

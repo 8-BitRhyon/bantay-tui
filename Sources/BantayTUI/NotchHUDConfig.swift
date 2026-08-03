@@ -131,6 +131,9 @@ final class NotchHUDConfig {
     var preferredTerminalBundleID: String? {
         didSet { defaults.set(preferredTerminalBundleID, forKey: "preferredTerminalBundleID") }
     }
+    var claudeHookInstalled = false {
+        didSet { defaults.set(claudeHookInstalled, forKey: "claudeHookInstalled") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -252,6 +255,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.string(forKey: "preferredTerminalBundleID") {
             preferredTerminalBundleID = v
+        }
+        if let v = defaults.object(forKey: "claudeHookInstalled") as? Bool {
+            claudeHookInstalled = v
         }
     }
 }

@@ -54,8 +54,10 @@ jobs:
           swiftc -o /tmp/logic-check \
             Sources/BantayTUI/AgentEventKind.swift \
             Sources/BantayTUI/AgentDetector.swift \
+            Sources/BantayTUI/ClaudeHookInstaller.swift \
             Sources/BantayTUI/NotchHUDConfig.swift \
             Sources/BantayTUI/HerdrSocketAdapter.swift \
+            Sources/BantayTUI/HerdrSocketClient.swift \
             Sources/BantayTUI/IslandMetrics.swift \
             Sources/BantayTUI/PlexerAdapter.swift \
             Sources/BantayTUI/AgentEventManager.swift \

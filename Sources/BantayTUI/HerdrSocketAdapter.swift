@@ -119,6 +119,9 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
     }
 
     nonisolated func listAgents() async -> [HerdrAgentInfo] {
+        if let viaSocket = await listAgentsViaSocket() {
+            return viaSocket
+        }
         let output = runHerdr(["agent", "list"])
         guard !output.isEmpty else { return [] }
 
@@ -129,6 +132,26 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
             return []
         }
         return raw.result?.agents ?? []
+    }
+
+    /// Socket-first path: one NDJSON `agent.list` call. Returns nil so the
+    /// caller falls back to the CLI when the socket is unavailable.
+    nonisolated func listAgentsViaSocket() async -> [HerdrAgentInfo]? {
+        let path = HerdrSocketProtocol.socketPath(
+            env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        let client = HerdrSocketClient(socketURL: URL(fileURLWithPath: path))
+        guard let response = await client.call(method: "agent.list"),
+            let resultJSON = response.result,
+            let data = resultJSON.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let agentsJSON = obj["agents"]
+        else {
+            return nil
+        }
+        let agentsData = (try? JSONSerialization.data(withJSONObject: agentsJSON)) ?? Data()
+        let decoder = JSONDecoder()
+        return try? decoder.decode([HerdrAgentInfo].self, from: agentsData)
     }
 
     // MARK: - PlexerAdapter

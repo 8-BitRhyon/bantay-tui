@@ -662,13 +662,24 @@ extension AgentEventManager {
         }
     }
 
-    /// Ingest a remote event line (SSH bridge): validates the payload then
+    /// Ingest a remote event line (SSH bridge or Claude Code hook): validates
+    /// the payload — mapping Claude hook payloads to Bantay events — then
     /// appends it to the watched events file so the file watcher surfaces it
     /// like any local event.
     func ingestEventLine(_ line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
-            (try? JSONDecoder().decode(AgentEventPayload.self, from: data)) != nil
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return }
+
+        var payloadData = data
+        if (try? JSONDecoder().decode(AgentEventPayload.self, from: data)) == nil,
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let mapped = ClaudeHookInstaller.mapToEventPayload(obj),
+            let mappedData = try? JSONSerialization.data(withJSONObject: mapped)
+        {
+            payloadData = mappedData
+        }
+        guard let payloadText = String(data: payloadData, encoding: .utf8),
+            (try? JSONDecoder().decode(AgentEventPayload.self, from: payloadData)) != nil
         else {
             return
         }
@@ -680,7 +691,7 @@ extension AgentEventManager {
         if let end = try? handle.seekToEnd() {
             _ = end
         }
-        handle.write(Data((trimmed + "\n").utf8))
+        handle.write(Data((payloadText + "\n").utf8))
     }
 
     /// Merge standalone-detected agents into the herdr roster without

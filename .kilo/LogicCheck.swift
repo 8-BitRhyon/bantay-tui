@@ -1552,6 +1552,97 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "preferredTerminalBundleID")
         }
 
+        // L19. Herdr direct socket protocol: NDJSON framing, request lines,
+        // response/error parsing, socket path resolution.
+        let sockRequest = HerdrSocketProtocol.requestLine(
+            id: "req_1", method: "agent.list")
+        check(
+            sockRequest == #"{"id":"req_1","method":"agent.list","params":{}}"#,
+            "L19 request line shape (got \(sockRequest))")
+        let requestParams = HerdrSocketProtocol.requestLine(
+            id: "req_2", method: "pane.send_keys",
+            paramsJSON: #"{"pane_id":"w1:p1","keys":["y","enter"]}"#)
+        check(
+            requestParams.contains("pane.send_keys") && requestParams.contains("w1:p1"),
+            "L19 params embedded in request")
+        let okLine = #"{"id":"req_1","result":{"type":"pong"}}"#
+        guard let ok = HerdrSocketProtocol.parseResponseLine(okLine) else {
+            check(false, "L19 success response parses")
+            fatalError()
+        }
+        check(ok.id == "req_1" && !ok.isError, "L19 success id + no error")
+        check(
+            ok.result?.contains("pong") == true,
+            "L19 result JSON preserved (got \(String(describing: ok.result)))")
+        let errLine = #"{"id":"req_9","error":{"code":"not_found","message":"pane not found"}}"#
+        guard let err = HerdrSocketProtocol.parseResponseLine(errLine) else {
+            check(false, "L19 error response parses")
+            fatalError()
+        }
+        check(err.isError && err.errorCode == "not_found", "L19 error code parsed")
+        check(
+            err.errorMessage == "pane not found",
+            "L19 error message parsed (got \(String(describing: err.errorMessage)))")
+        check(
+            HerdrSocketProtocol.parseResponseLine("not json") == nil,
+            "L19 garbage line ignored")
+        check(
+            HerdrSocketProtocol.parseResponseLine(#"{"result":{"type":"pong"}}"#) == nil,
+            "L19 missing id ignored")
+        let lines = HerdrSocketProtocol.extractLines(
+            from: Data("\(okLine)\n\(errLine)\n".utf8))
+        check(lines.count == 2, "L19 NDJSON split into lines (got \(lines.count))")
+        check(
+            HerdrSocketProtocol.socketPath(
+                env: ["HERDR_SOCKET_PATH": "/tmp/custom.sock"], home: "/Users/x")
+                == "/tmp/custom.sock",
+            "L19 env socket path wins")
+        check(
+            HerdrSocketProtocol.socketPath(env: [:], home: "/Users/x")
+                == "/Users/x/.config/herdr/herdr.sock",
+            "L19 default socket path")
+
+        // L20. Claude Code hook installer: settings merge (preserves existing
+        // keys/hooks), hook command, payload mapping.
+        let command = ClaudeHookInstaller.hookCommand(port: 41817)
+        check(
+            command.contains("127.0.0.1:41817/events") && command.contains("curl"),
+            "L20 hook command posts to ingest (got \(command))")
+        let merged = ClaudeHookInstaller.mergedSettings(
+            existing: ["model": "opus", "hooks": ["PreToolUse": [["matcher": ""]]]],
+            port: 41817)
+        check(merged["model"] as? String == "opus", "L20 unrelated settings preserved")
+        let hooks = merged["hooks"] as? [String: Any]
+        check(
+            hooks?["PreToolUse"] != nil && hooks?["PermissionPrompt"] != nil
+                && hooks?["Stop"] != nil,
+            "L20 existing hooks preserved + bantay hooks added")
+        let permission = ClaudeHookInstaller.mapToEventPayload([
+            "hook_event_name": "PermissionPrompt",
+            "tool_name": "Bash",
+            "tool_input": ["command": "rm -rf build"],
+            "permission_prompt_mode": "default",
+        ])
+        check(
+            permission?["type"] as? String == "access_request",
+            "L20 PermissionPrompt maps to access_request")
+        check(
+            permission?["title"] as? String == "rm -rf build",
+            "L20 tool_input command becomes title")
+        check(
+            permission?["variance"] as? String == "yes_no",
+            "L20 prompt defaults to yes_no")
+        let stop = ClaudeHookInstaller.mapToEventPayload([
+            "hook_event_name": "Stop",
+            "tool_name": "Bash",
+        ])
+        check(
+            stop?["type"] as? String == "completed",
+            "L20 Stop maps to completed")
+        check(
+            ClaudeHookInstaller.mapToEventPayload(["hook_event_name": "SubagentStart"]) == nil,
+            "L20 unhandled events ignored")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
