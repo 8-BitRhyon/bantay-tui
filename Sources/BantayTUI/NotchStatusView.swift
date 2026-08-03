@@ -13,6 +13,7 @@ struct NotchStatusView: View {
     @State private var promptText = ""
     @State private var pulse = false
     @State private var selectedChoices: Set<Int> = []
+    @State private var queueSelections: [String: Set<Int>] = [:]
     @State private var showWelcome = false
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
@@ -516,7 +517,8 @@ struct NotchStatusView: View {
     }
 
     private func approvalQueueCard(agent: AgentSnapshot) -> some View {
-        HStack(spacing: 8) {
+        let controls = agent.approval
+        return HStack(spacing: 8) {
             Circle().fill(Color(hex: agent.kind.color)).frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 1) {
                 Text(agent.source)
@@ -530,19 +532,68 @@ struct NotchStatusView: View {
             }
             Spacer(minLength: 8)
             if let paneId = agent.paneId {
-                approvalActionButton(
-                    systemName: "checkmark.circle.fill", color: .green, help: "Approve"
-                ) {
-                    adapter.approve(paneId: paneId)
-                }
-                approvalActionButton(systemName: "xmark.circle.fill", color: .red, help: "Deny") {
-                    adapter.deny(paneId: paneId)
-                }
+                queueCardActions(controls: controls, paneId: paneId, agentID: agent.id)
             }
         }
         .padding(.horizontal, 16)
         .frame(height: IslandMetrics.queueCardHeight)
         .background(Color.white.opacity(0.05))
+    }
+
+    @ViewBuilder
+    private func queueCardActions(
+        controls: IslandMetrics.ApprovalControls, paneId: String, agentID: String
+    ) -> some View {
+        if controls.isYesNo {
+            approvalActionButton(
+                systemName: "checkmark.circle.fill", color: .green, help: "Approve"
+            ) {
+                adapter.approve(paneId: paneId)
+            }
+            approvalActionButton(systemName: "xmark.circle.fill", color: .red, help: "Deny") {
+                adapter.deny(paneId: paneId)
+            }
+        } else if controls.isMulti {
+            ForEach(Array(controls.optionLabels.enumerated()), id: \.offset) { index, label in
+                approvalActionButton(
+                    label: Text(label),
+                    color: queueSelections[agentID]?.contains(
+                        IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+                    ) == true ? .green : .white.opacity(0.6),
+                    help: controls.choices[index]
+                ) {
+                    queueSelections[agentID] = IslandMetrics.ApprovalControls.toggling(
+                        queueSelections[agentID] ?? [], index: index)
+                }
+            }
+            approvalActionButton(
+                systemName: "checkmark.circle.fill", color: .green, help: "Submit"
+            ) {
+                let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
+                    queueSelections[agentID] ?? [])
+                adapter.approveMulti(paneId: paneId, selections: numbers)
+                queueSelections.removeValue(forKey: agentID)
+            }
+        } else {
+            ForEach(Array(controls.optionLabels.enumerated()), id: \.offset) { index, label in
+                approvalActionButton(
+                    label: Text(label),
+                    color: .white,
+                    help: controls.choices[index]
+                ) {
+                    adapter.approveChoice(
+                        paneId: paneId,
+                        choice: IslandMetrics.ApprovalControls.optionNumber(forIndex: index))
+                }
+            }
+            if controls.optionLabels.isEmpty {
+                approvalActionButton(
+                    systemName: "checkmark.circle.fill", color: .green, help: "Approve"
+                ) {
+                    adapter.approve(paneId: paneId)
+                }
+            }
+        }
     }
 
     private var groupedAgentRows: some View {

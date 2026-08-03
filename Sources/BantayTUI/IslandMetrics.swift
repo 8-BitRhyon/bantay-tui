@@ -182,6 +182,65 @@ public enum IslandMetrics: Sendable {
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
     }
 
+    // MARK: - Approval controls (in-UI approvals)
+
+    /// Pure description of an approval prompt's interactive surface. The UI
+    /// renders controls from this model; the manager feeds it the variance
+    /// and choices it decoded from the event stream.
+    struct ApprovalControls: Equatable, Sendable {
+        public let variance: ApprovalVariance
+        public let choices: [String]
+
+        init(variance: ApprovalVariance?, choices: [String]?) {
+            self.variance = variance ?? .yesNo
+            self.choices = choices ?? []
+        }
+
+        static func make(
+            variance: ApprovalVariance?, choices: [String]?
+        ) -> ApprovalControls {
+            ApprovalControls(variance: variance, choices: choices)
+        }
+
+        var isYesNo: Bool {
+            variance == .yesNo || choices.isEmpty
+        }
+
+        var isMulti: Bool { variance == .multi && !choices.isEmpty }
+
+        /// 1-based option labels for choice/multi prompts; empty for yes-no.
+        var optionLabels: [String] {
+            guard variance != .yesNo, !choices.isEmpty else { return [] }
+            return (1...choices.count).map { "\($0)" }
+        }
+
+        var submitLabel: String {
+            isMulti ? "Submit" : "Approve"
+        }
+
+        /// Number of the option at index `i` (0-based) in `selection`, or nil.
+        static func optionNumber(forIndex i: Int) -> Int { i + 1 }
+
+        /// Toggle a 0-based option index in a multi-select selection set.
+        static func toggling(
+            _ selection: Set<Int>, index: Int
+        ) -> Set<Int> {
+            var next = selection
+            let option = optionNumber(forIndex: index)
+            if next.contains(option) {
+                next.remove(option)
+            } else {
+                next.insert(option)
+            }
+            return next
+        }
+
+        /// The sorted 1-based option numbers to send for a multi-select.
+        static func selectionNumbers(_ selection: Set<Int>) -> [Int] {
+            selection.sorted()
+        }
+    }
+
     public static func cornerRadius(expanded: Bool) -> CGFloat {
         expanded ? expandedCornerRadius : closedCornerRadius
     }

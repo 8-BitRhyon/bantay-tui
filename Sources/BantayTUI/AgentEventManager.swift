@@ -37,6 +37,15 @@ struct AgentSnapshot: Identifiable, Equatable {
     let message: String?
     let paneId: String?
     let workspaceId: String?
+    /// Approval-prompt shape for blocked agents, merged from the event
+    /// stream so the control plane can render yes/no, numbered choices, and
+    /// multi-select inline. Nil for agents not blocked on an approval.
+    let variance: ApprovalVariance?
+    let choices: [String]?
+
+    var approval: IslandMetrics.ApprovalControls {
+        IslandMetrics.ApprovalControls(variance: variance, choices: choices)
+    }
 }
 
 @MainActor
@@ -60,6 +69,11 @@ final class AgentEventManager: ObservableObject {
     private var lineBuffer = ""
     private var lastSeenKinds: [String: AgentEventKind] = [:]
     private var lastSoundAt: [String: Date] = [:]
+    /// Latest approval prompt shape per pane, decoded from the event stream.
+    /// Merged into roster snapshots so queue cards can render yes/no,
+    /// numbered-choice, and multi-select controls inline.
+    var pendingApprovals: [String: (variance: ApprovalVariance?, choices: [String]?)] =
+        [:]
     private let eventsFileURL: URL
     private let captureEnabled: Bool
     private let herdrAdapter = HerdrSocketAdapter()
@@ -190,6 +204,13 @@ final class AgentEventManager: ObservableObject {
     }
 
     private func showEvent(_ event: AgentEvent) {
+        let key = event.identityKey
+        if event.kind == .accessRequest || event.kind == .waiting {
+            pendingApprovals[key] = (variance: event.variance, choices: event.choices)
+        } else if event.kind != .progress && event.kind != .started {
+            pendingApprovals.removeValue(forKey: key)
+        }
+
         if event.kind == .clear {
             currentEvent = nil
             clearTask?.cancel()
@@ -286,7 +307,9 @@ extension AgentEventManager {
             title: agent.terminalTitle,
             message: agent.agentStatus,
             paneId: agent.paneId,
-            workspaceId: agent.workspaceId
+            workspaceId: agent.workspaceId,
+            variance: nil,
+            choices: nil
         )
     }
 
@@ -438,7 +461,7 @@ extension AgentEventManager {
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
-        self.agents = result.roster
+        self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)
         }
@@ -517,9 +540,33 @@ extension AgentEventManager {
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
-        self.agents = result.roster
+        self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)
+        }
+    }
+
+    /// Attach the latest decoded approval prompt (variance/choices) to blocked
+    /// roster rows so queue cards render the full interactive surface.
+    func mergeApprovals(into roster: [AgentSnapshot]) -> [AgentSnapshot] {
+        roster.map { agent in
+            guard agent.kind == .accessRequest || agent.kind == .waiting,
+                let key = agent.paneId ?? agent.source as String?,
+                let pending = pendingApprovals[key]
+            else {
+                return agent
+            }
+            return AgentSnapshot(
+                id: agent.id,
+                source: agent.source,
+                kind: agent.kind,
+                title: agent.title,
+                message: agent.message,
+                paneId: agent.paneId,
+                workspaceId: agent.workspaceId,
+                variance: pending.variance,
+                choices: pending.choices
+            )
         }
     }
 }

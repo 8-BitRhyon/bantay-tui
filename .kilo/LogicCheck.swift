@@ -785,6 +785,87 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "expandedGroupByState")
         }
 
+        // L7. In-UI approvals: ApprovalControls model + snapshot merge.
+        let yesNo = IslandMetrics.ApprovalControls.make(variance: nil, choices: nil)
+        check(yesNo.isYesNo, "L7 nil variance defaults to yes/no")
+        check(
+            IslandMetrics.ApprovalControls.make(variance: .yesNo, choices: ["a", "b"]).isYesNo,
+            "L7 explicit yes-no ignores choices")
+        check(yesNo.optionLabels.isEmpty, "L7 yes-no has no option buttons")
+        let singleChoice = IslandMetrics.ApprovalControls.make(
+            variance: .choices, choices: ["Build", "Test", "Skip"])
+        check(!singleChoice.isYesNo && !singleChoice.isMulti, "L7 choices is neither yes-no nor multi")
+        check(
+            singleChoice.optionLabels == ["1", "2", "3"],
+            "L7 choices renders numbered options (got \(singleChoice.optionLabels))")
+        check(
+            IslandMetrics.ApprovalControls.optionNumber(forIndex: 2) == 3,
+            "L7 option number is 1-based")
+        let multi = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: ["a", "b", "c"])
+        check(multi.isMulti, "L7 multi variance detected")
+        check(
+            multi.optionLabels.count == 3,
+            "L7 multi renders numbered options (got \(multi.optionLabels))")
+        check(multi.submitLabel == "Submit", "L7 multi submit label")
+        let toggled1 = IslandMetrics.ApprovalControls.toggling([], index: 0)
+        check(toggled1 == [1], "L7 toggling adds option 1 (got \(toggled1))")
+        let toggled2 = IslandMetrics.ApprovalControls.toggling(toggled1, index: 2)
+        check(toggled2 == [1, 3], "L7 toggling adds option 3 (got \(toggled2))")
+        let toggled3 = IslandMetrics.ApprovalControls.toggling(toggled2, index: 0)
+        check(toggled3 == [3], "L7 toggling removes option 1 (got \(toggled3))")
+        check(
+            IslandMetrics.ApprovalControls.selectionNumbers([3, 1, 2]) == [1, 2, 3],
+            "L7 selection numbers sorted 1-based")
+        check(
+            IslandMetrics.ApprovalControls.selectionNumbers([]).isEmpty,
+            "L7 empty selection sends nothing")
+        let emptyChoices = IslandMetrics.ApprovalControls.make(variance: .choices, choices: nil)
+        check(
+            emptyChoices.isYesNo,
+            "L7 choices with no options falls back to yes/no")
+
+        // L7. Snapshot approval merge: blocked agents carry variance/choices.
+        MainActor.assumeIsolated {
+            let info = HerdrAgentInfo(
+                agent: "kilo", agentStatus: "blocked", paneId: "1-1",
+                workspaceId: "1", terminalTitle: "Need approval: run tests?")
+            guard let snapshot = AgentEventManager.snapshot(for: info) else {
+                check(false, "L7 blocked snapshot builds")
+                return
+            }
+            check(snapshot.kind == .accessRequest, "L7 blocked maps to accessRequest")
+            check(snapshot.variance == nil, "L7 raw snapshot has no variance yet")
+            check(snapshot.approval.isYesNo, "L7 raw snapshot defaults to yes/no")
+
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l7-\(UUID().uuidString).jsonl"),
+                capture: false)
+            manager.pendingApprovals["1-1"] = (
+                variance: .multi, choices: ["lint", "test", "deploy"]
+            )
+            let merged = manager.mergeApprovals(into: [snapshot])
+            guard let m = merged.first else {
+                check(false, "L7 merged roster non-empty")
+                return
+            }
+            check(m.variance == .multi, "L7 merge attaches multi variance")
+            check(m.choices == ["lint", "test", "deploy"], "L7 merge attaches choices")
+            check(m.approval.isMulti, "L7 merged snapshot is multi")
+            check(
+                m.approval.optionLabels == ["1", "2", "3"],
+                "L7 merged snapshot renders numbered options")
+            let plain = HerdrAgentInfo(
+                agent: "shell", agentStatus: "idle", paneId: "1-2",
+                workspaceId: "1", terminalTitle: nil)
+            let plainSnapshot = AgentEventManager.snapshot(for: plain)!
+            let unmerged = manager.mergeApprovals(into: [plainSnapshot])
+            check(
+                unmerged[0].variance == nil && unmerged[0].choices == nil,
+                "L7 idle agents never carry approval data")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
