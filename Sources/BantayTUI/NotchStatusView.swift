@@ -730,6 +730,18 @@ struct NotchStatusView: View {
             Spacer(minLength: 8)
             if let paneId = agent.paneId {
                 queueCardActions(controls: controls, paneId: paneId, agentID: agent.id)
+                approvalActionButton(
+                    systemName: "terminal.fill", color: .white.opacity(0.55),
+                    help: "Force focus terminal"
+                ) {
+                    adapter.attachPane(paneId: paneId)
+                }
+                approvalActionButton(
+                    systemName: "arrow.clockwise", color: .white.opacity(0.55),
+                    help: "Retry / re-check agent"
+                ) {
+                    Task { await eventManager.pollHerdrAgents() }
+                }
             }
         }
         .padding(.horizontal, 16)

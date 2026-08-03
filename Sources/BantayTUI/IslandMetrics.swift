@@ -231,6 +231,41 @@ public enum IslandMetrics: Sendable {
             height: size.height)
     }
 
+    // MARK: - Approval heartbeat (phantom-prompt protection)
+
+    /// Live-state verification for pinned approvals. A prompt card stays
+    /// pinned only while the agent's live status still looks blocked (or is
+    /// unknown — never phantom-clear on missing data). When the agent has
+    /// actually moved on, the prompt is a phantom and must self-clear.
+    enum ApprovalHeartbeat {
+        /// Whether a prompt of `kind` should remain pinned given the pane's
+        /// live status from the latest roster poll.
+        static func shouldKeepPinned(
+            kind: AgentEventKind, liveStatus: String?
+        ) -> Bool {
+            guard kind == .accessRequest || kind == .waiting else { return false }
+            switch liveStatus?.lowercased() {
+            case "working", "idle", "done", "failed", "cancelled", "running":
+                return false
+            case "blocked", "unknown", nil:
+                return true
+            default:
+                return true
+            }
+        }
+
+        /// Prune stale pending-approval keys: keep only panes whose live
+        /// status still warrants a pinned prompt.
+        static func verifyPendingKeys(
+            _ keys: [String], liveStatuses: [String: String]
+        ) -> [String] {
+            keys.filter { key in
+                guard let status = liveStatuses[key] else { return true }
+                return shouldKeepPinned(kind: .accessRequest, liveStatus: status)
+            }
+        }
+    }
+
     // MARK: - Approval controls (in-UI approvals)
 
     /// Pure description of an approval prompt's interactive surface. The UI

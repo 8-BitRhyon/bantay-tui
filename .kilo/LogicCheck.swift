@@ -1340,6 +1340,71 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "floatingPillOnNoNotch")
         }
 
+        // L14. Approval heartbeat: phantom-prompt protection — pinned
+        // prompts verify live agent state every poll and self-clear when the
+        // agent moved on; missing data never phantom-clears.
+        check(
+            IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "blocked"),
+            "L14 blocked keeps prompt pinned")
+        check(
+            IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .waiting, liveStatus: nil),
+            "L14 unknown status keeps pinned (no phantom clear)")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "working"),
+            "L14 working clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "done"),
+            "L14 done clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "idle"),
+            "L14 idle clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .accessRequest, liveStatus: "failed"),
+            "L14 failed clears phantom prompt")
+        check(
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: .progress, liveStatus: "blocked"),
+            "L14 non-approval kinds never pin")
+        let kept = IslandMetrics.ApprovalHeartbeat.verifyPendingKeys(
+            ["1-1", "1-2", "1-3"],
+            liveStatuses: ["1-1": "blocked", "1-2": "working", "1-4": "done"])
+        check(
+            kept == ["1-1", "1-3"],
+            "L14 verify prunes moved-on panes, keeps unknown (got \(kept))")
+
+        // L14. Manager heartbeat: pending map + current event self-clear.
+        MainActor.assumeIsolated {
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l14-\(UUID().uuidString).jsonl"),
+                capture: false)
+            manager.pendingApprovals["1-1"] = (variance: .yesNo, choices: nil)
+            manager.pendingApprovals["1-2"] = (variance: .multi, choices: ["a", "b"])
+            manager.heartbeatVerify(liveStatuses: ["1-1": "blocked", "1-2": "done"])
+            check(
+                manager.pendingApprovals["1-1"] != nil && manager.pendingApprovals["1-2"] == nil,
+                "L14 manager prunes only moved-on panes")
+            let prompt = AgentEvent(
+                source: "kilo", kind: .accessRequest, title: "run tests?",
+                message: nil, paneId: "2-1", workspaceId: nil,
+                variance: .yesNo, choices: nil, playSound: true, persistent: true)
+            manager.publishEventForTesting(prompt)
+            manager.heartbeatVerify(liveStatuses: ["2-1": "blocked"])
+            check(
+                manager.currentEventForTesting?.paneId == "2-1",
+                "L14 still-blocked prompt survives heartbeat")
+            manager.heartbeatVerify(liveStatuses: ["2-1": "working"])
+            check(
+                manager.currentEventForTesting == nil,
+                "L14 moved-on prompt self-clears (phantom kill)")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

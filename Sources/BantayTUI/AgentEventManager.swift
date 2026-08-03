@@ -496,6 +496,13 @@ extension AgentEventManager {
         self.usage = await Task.detached(priority: .utility) {
             UsageTracker.latestUsage(home: NSHomeDirectory(), names: agents.map(\.agent))
         }.value
+        let liveStatuses: [String: String] = Dictionary(
+            uniqueKeysWithValues: agents.compactMap {
+                (agent: HerdrAgentInfo) -> (String, String)? in
+                guard let key = agent.paneId ?? agent.agent as String? else { return nil }
+                return (key, agent.agentStatus ?? "")
+            })
+        heartbeatVerify(liveStatuses: liveStatuses)
         let result = Self.update(
             from: agents,
             lastSeenKinds: &lastSeenKinds,
@@ -623,6 +630,36 @@ extension AgentEventManager {
     /// Test seam: clear a working-burst start time (mirrors showEvent).
     func clearStartForTesting(pane: String) {
         startedAtByPane.removeValue(forKey: pane)
+    }
+
+    /// Test seam: inject an event like the pipeline would.
+    func publishEventForTesting(_ event: AgentEvent) {
+        showEvent(event)
+    }
+
+    /// Test seam: current event readout for harness assertions.
+    var currentEventForTesting: AgentEvent? { currentEvent }
+
+    /// Heartbeat: every roster poll re-verifies pinned approvals against live
+    /// agent state. Panes that are no longer blocked (or vanished) drop their
+    /// pending prompts — killing phantom prompts from dropped hooks. Missing
+    /// live data keeps the prompt pinned (never phantom-clear on unknowns).
+    func heartbeatVerify(liveStatuses: [String: String]) {
+        let stale = Set(pendingApprovals.keys).subtracting(
+            IslandMetrics.ApprovalHeartbeat.verifyPendingKeys(
+                Array(pendingApprovals.keys), liveStatuses: liveStatuses))
+        for key in stale {
+            pendingApprovals.removeValue(forKey: key)
+        }
+        if let current = currentEvent,
+            current.kind == .accessRequest || current.kind == .waiting,
+            let status = liveStatuses[current.identityKey],
+            !IslandMetrics.ApprovalHeartbeat.shouldKeepPinned(
+                kind: current.kind, liveStatus: status)
+        {
+            currentEvent = nil
+            clearTask?.cancel()
+        }
     }
 
     /// Ingest a remote event line (SSH bridge): validates the payload then
