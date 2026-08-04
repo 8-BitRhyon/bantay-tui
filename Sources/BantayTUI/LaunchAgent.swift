@@ -125,11 +125,15 @@ enum LaunchAgent {
     /// Enables/disables start-at-login. Enabling self-installs the agent
     /// plist (pointing at the running app) when nothing is installed yet;
     /// disabling boots the agent out and removes the plist.
-    static func setLaunchAtLogin(_ on: Bool) {
+    /// Returns whether the requested state was reached.
+    @discardableResult
+    static func setLaunchAtLogin(_ on: Bool) -> Bool {
         if on {
-            if !install() {
+            let installed = install()
+            if !installed {
                 NSLog("bantay: launch at login could not be enabled")
             }
+            return installed
         } else {
             let uid = getuid()
             _ = processRunner(["bootout", "gui/\(uid)/\(label)"])
@@ -138,6 +142,7 @@ enum LaunchAgent {
             } catch {
                 NSLog("bantay: could not remove launch agent plist: \(error)")
             }
+            return true
         }
     }
 }

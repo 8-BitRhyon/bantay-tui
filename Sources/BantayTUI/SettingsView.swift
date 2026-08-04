@@ -43,6 +43,7 @@ struct SettingsView: View {
     @State private var quietHoursStart = NotchHUDConfig.shared.quietHoursStart
     @State private var quietHoursEnd = NotchHUDConfig.shared.quietHoursEnd
     @State private var notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
+    @State private var volumePreviewTask: Task<Void, Never>?
     @State private var herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
         manifestPath: Self.herdrManifestPath)
 
@@ -52,6 +53,11 @@ struct SettingsView: View {
                 Toggle("Poll agents", isOn: $captureEnabled)
                     .onChange(of: captureEnabled) { newValue in
                         NotchHUDConfig.shared.captureEnabled = newValue
+                        if newValue {
+                            AgentEventManager.shared.startCapture()
+                        } else {
+                            AgentEventManager.shared.stopCapture()
+                        }
                     }
                 Stepper(
                     "Poll interval: \(captureInterval) s",
@@ -121,7 +127,8 @@ struct SettingsView: View {
                 Toggle("Install Claude Code hook", isOn: $claudeHookInstalled)
                     .help(
                         "Adds PermissionPrompt/Stop hooks to ~/.claude/settings.json "
-                            + "that stream approvals to the island — no herdr needed."
+                            + "that stream approvals to the island - no herdr needed. "
+                            + "Also enables the local ingest listener."
                     )
                     .onChange(of: claudeHookInstalled) { newValue in
                         installClaudeHook(newValue)
@@ -158,11 +165,15 @@ struct SettingsView: View {
                     .help("Island moves to the notch on the display under the cursor.")
                     .onChange(of: followMouse) { newValue in
                         NotchHUDConfig.shared.followMouseScreen = newValue
+                        NotificationCenter.default.post(
+                            name: .notchVisibilityChanged, object: nil)
                     }
                 Toggle("Floating pill without notch", isOn: $floatingPill)
                     .help("External displays/clamshell get a centered pill below the menu bar.")
                     .onChange(of: floatingPill) { newValue in
                         NotchHUDConfig.shared.floatingPillOnNoNotch = newValue
+                        NotificationCenter.default.post(
+                            name: .notchVisibilityChanged, object: nil)
                     }
                 Toggle("Keep island in full screen", isOn: $showInFullScreen)
                     .help("Stay visible over full-screen apps; re-anchors after transitions.")
@@ -175,6 +186,8 @@ struct SettingsView: View {
                     )
                     .onChange(of: avoidMenuBar) { newValue in
                         NotchHUDConfig.shared.avoidMenuBarIcons = newValue
+                        NotificationCenter.default.post(
+                            name: .notchVisibilityChanged, object: nil)
                     }
                 Picker("Focus terminal", selection: $preferredTerminal) {
                     Text("Auto").tag("")
@@ -194,6 +207,9 @@ struct SettingsView: View {
                 Toggle("Alert sounds", isOn: $enableAlerts)
                     .onChange(of: enableAlerts) { newValue in
                         NotchHUDConfig.shared.enableAgentAlerts = newValue
+                        if newValue {
+                            playAlertSample()
+                        }
                     }
                 Stepper(
                     "Volume: \(soundVolume)%",
@@ -201,6 +217,7 @@ struct SettingsView: View {
                 )
                 .onChange(of: soundVolume) { newValue in
                     NotchHUDConfig.shared.soundVolume = Float(newValue) / 100
+                    previewAlertVolume()
                 }
                 Toggle("Mute while in Terminal", isOn: $muteInTerminal)
                     .onChange(of: muteInTerminal) { newValue in
@@ -289,7 +306,15 @@ struct SettingsView: View {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .help("Runs the app at login; installs the launch agent on first enable.")
                     .onChange(of: launchAtLogin) { newValue in
-                        LaunchAgent.setLaunchAtLogin(newValue)
+                        if !LaunchAgent.setLaunchAtLogin(newValue) {
+                            launchAtLogin = false
+                            let alert = NSAlert()
+                            alert.messageText = "Could not enable launch at login"
+                            alert.informativeText =
+                                "The launch agent could not be installed. "
+                                + "Check Console for bantay diagnostics."
+                            alert.runModal()
+                        }
                     }
                 Toggle("Hide island at startup", isOn: $hideAtStartup)
                     .help(
@@ -365,6 +390,7 @@ struct SettingsView: View {
                     .help("Show/hide the island from any app.")
                     .onChange(of: hotkeyEnabled) { newValue in
                         NotchHUDConfig.shared.globalHotkeyEnabled = newValue
+                        AppDelegate.shared?.updateGlobalHotkeyMonitor()
                     }
                 Toggle("Keyboard shortcuts in roster", isOn: $keyboardShortcuts)
                     .help("With the island focused: Y approve, N deny, 1-9 choose.")
@@ -394,6 +420,25 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460, height: 860)
+        .onAppear { refreshFromConfig() }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsWillOpen)) { _ in
+            refreshFromConfig()
+        }
+    }
+
+    /// Re-read externally mutable state (menu-bar toggles, launch agent
+    /// status, hook installs) so a persisted Settings window never shows
+    /// stale toggles.
+    private func refreshFromConfig() {
+        captureEnabled = NotchHUDConfig.shared.captureEnabled
+        enableAlerts = NotchHUDConfig.shared.enableAgentAlerts
+        notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
+        quietHoursEnabled = NotchHUDConfig.shared.quietHoursEnabled
+        mutedSources = NotchHUDConfig.shared.mutedSources
+        claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
+        herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
+            manifestPath: Self.herdrManifestPath)
+        launchAtLogin = LaunchAgent.isLoaded()
     }
 
     private func terminalLabel(_ bundleID: String) -> String {
@@ -408,6 +453,24 @@ struct SettingsView: View {
         case "com.microsoft.VSCodeInsiders": return "VS Code Insiders"
         case "com.jetbrains.intellij": return "IntelliJ IDEA"
         default: return bundleID
+        }
+    }
+
+    /// Plays the access-request alert at the current volume: immediate
+    /// confirmation when enabling sounds, and (debounced) while scrubbing
+    /// the volume stepper so the user hears what they are setting.
+    private func playAlertSample() {
+        let sound = NSSound(named: AgentEventKind.accessRequest.soundName)
+        sound?.volume = NotchHUDConfig.shared.soundVolume
+        sound?.play()
+    }
+
+    private func previewAlertVolume() {
+        volumePreviewTask?.cancel()
+        volumePreviewTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            playAlertSample()
         }
     }
 
@@ -428,6 +491,11 @@ struct SettingsView: View {
         let manifest = Self.herdrManifestPath
         guard HerdrPluginInstaller.install(dataDir: dataDir, manifestPath: manifest) else {
             herdrPluginInstalled = false
+            let alert = NSAlert()
+            alert.messageText = "Could not install the herdr integration"
+            alert.informativeText =
+                "The event adapter could not be written to the app data folder."
+            alert.runModal()
             return
         }
         Task {
@@ -451,6 +519,7 @@ struct SettingsView: View {
     }
 
     /// Install or remove the Claude Code hooks in ~/.claude/settings.json.
+    /// On write failure the toggle reverts and the user is told why.
     private func installClaudeHook(_ enabled: Bool) {
         let home = NSHomeDirectory()
         let settingsPath = home + "/.claude/settings.json"
@@ -460,26 +529,42 @@ struct SettingsView: View {
         {
             settings = obj
         }
-        if enabled {
-            let merged = ClaudeHookInstaller.mergedSettings(
+        let merged =
+            enabled
+            ? ClaudeHookInstaller.mergedSettings(
                 existing: settings, port: NotchHUDConfig.shared.ingestPort)
-            if let data = try? JSONSerialization.data(
+            : ClaudeHookInstaller.removingBantayHooks(from: settings)
+        guard
+            let data = try? JSONSerialization.data(
                 withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
-            {
-                try? data.write(to: URL(fileURLWithPath: settingsPath))
-            }
+        else {
+            claudeHookRevertFailure(enabled)
+            return
+        }
+        do {
+            try data.write(to: URL(fileURLWithPath: settingsPath))
+        } catch {
+            claudeHookRevertFailure(enabled)
+            AppDelegate.dbg(
+                "claude hook: could not write \(settingsPath): \(error)")
+            return
+        }
+        if enabled {
             NotchHUDConfig.shared.ingestEnabled = true
             AppDelegate.shared?.updateIngestServer()
-        } else {
-            let withoutBantay = ClaudeHookInstaller.removingBantayHooks(from: settings)
-            if let data = try? JSONSerialization.data(
-                withJSONObject: withoutBantay, options: [.prettyPrinted, .sortedKeys])
-            {
-                try? data.write(to: URL(fileURLWithPath: settingsPath))
-            }
         }
         NotchHUDConfig.shared.claudeHookInstalled = enabled
         claudeHookInstalled = enabled
+    }
+
+    private func claudeHookRevertFailure(_ enabled: Bool) {
+        claudeHookInstalled = !enabled
+        NotchHUDConfig.shared.claudeHookInstalled = !enabled
+        let alert = NSAlert()
+        alert.messageText = "Could not \(enabled ? "install" : "remove") the Claude Code hook"
+        alert.informativeText =
+            "Failed to write ~/.claude/settings.json. Check permissions and try again."
+        alert.runModal()
     }
 }
 
