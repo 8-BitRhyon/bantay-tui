@@ -1,53 +1,75 @@
-# Bantay-TUI -- Agent Sentinel Notch HUD
+# Bantay-TUI — Architecture
 
-Native SwiftUI macOS app that turns the MacBook notch into an interactive agent-state display, reading lifecycle events directly from Herdr.
+Native SwiftUI macOS app that turns the MacBook notch into an **agentic control plane**: live agent state, inline approval execution, and quick actions — across herdr, tmux, zellij, or standalone agent CLIs.
 
 ## Why
-`herdr-focus-notify` (installed) sends native macOS toasts on `agent_status_changed`. This complements it with persistent notch-level visibility: which agent is `blocked`, which just finished (`done`), which needs approval (`access_request`), without opening Notification Center.
 
-## Architecture
+The terminal is where agents live but not where you always are. Bantay bridges the gap: the notch shows which agent is `blocked`, which needs `approval`, which just finished (`done`) — and lets you act (approve, choose, prompt, focus) without opening a terminal.
+
+## Components
 
 | Component | Role |
 |---|---|
-| `DynamicIslandApp.swift` | Main SwiftUI entry; `.accessory` window hidden when idle, shown at the notch on events; menu bar item (live agent roster, focus actions, Quit) |
-| `AgentEventManager.swift` | Dual-source event pipeline: tails `agent-events.jsonl` (launch offset, partial-line buffering, truncation recovery, duplicate suppression, `clear` handling) and polls herdr's live agent list (transition detection, per-source severity, silent re-show of persistent states); publishes `agents` snapshot roster |
-| `AgentEventKind.swift` | Enum mapping herdr states to event kinds (`idle` included for the roster) |
-| `NotchStatusView.swift` | Notch pill + hover-expandable agent roster; shows on state change, plays per-event sounds (suppressed for silent re-shows), row click focuses the pane |
-| `NotchHUDConfig.swift` | `UserDefaults` settings: sounds, volume, auto-clear TTL, sticky approvals, capture interval |
-| `HerdrSocketAdapter.swift` | Runs herdr CLI: `herdr agent list` (capture), `herdr pane focus <paneId>` (click-to-focus) |
+| `DynamicIslandApp.swift` | Main SwiftUI entry; `.accessory` app. Owns the island `NSPanel` (`fullScreenAuxiliary`/`canJoinAllSpaces`/`stationary`/`ignoresCycle`, top-level window level), the tray menu (roster, snooze presets, settings), the global `⌥Space` hotkey, the menu-bar badge timer, and display/full-screen/space observers with settle-delay re-anchoring |
+| `AgentEventManager.swift` | MainActor pipeline: merges herdr poll + standalone scan into a roster, tails the events file, runs the approval heartbeat, aggregates usage, arms status-wait processes; publishes `agents`, `currentEvent`, `usage` |
+| `AgentEventKind.swift` | Enum mapping agent states to event kinds (`idle` included for the roster); severity ordering |
+| `IslandMetrics.swift` | Pure geometry & policy: idle strip widths (names/dots/summary), expanded control-plane metrics (`AgentCounts`, `queueSplit`, group ranks), `ApprovalControls`, `ApprovalHeartbeat`, `FullScreenPolicy`, `MenuBarClearance`, `DisplayAnchor`, multi-monitor `ScreenInfo`/`islandScreen`, floating-pill frames, `elapsedLabel`, shortcut-key mapping |
+| `NotchStatusView.swift` | The island UI: idle agent strip, expanded control plane (approval queue with inline yes/no/choices/multi controls, state-grouped roster, shelf tab, footer with usage gauge), edge-glow, keyboard shortcuts, clipboard polling |
+| `NotchHUDConfig.swift` | `UserDefaults` settings for every facet (see README table); clamps + persistence |
+| `HerdrSocketAdapter.swift` | Runs the herdr CLI: `herdr agent list`, `herdr pane focus`, `herdr agent send-keys` (approve/deny/choices), `herdr agent wait`; conforms to `PlexerAdapter` |
+| `PlexerAdapter.swift` | Multiplexer seam: `PlexerKind` + pure `PlexerDetection` (HERDR_ENV/socket, TMUX env/socket, ZELLIJ env) + the `PlexerAdapter` protocol (listPanes, captureTail, focusPane, sendLine, sendKeys, approve, deny, stop, attachPane) — tmux/zellij adapters plug in behind it |
+| `AgentDetector.swift` | Standalone agent detection: process-name classification (claude/codex/gemini/cursor/opencode), herdr-managed env filtering, transcript discovery + newest-JSONL tailing for latest activity |
+| `UsageTracker.swift` | Token/cost gauge: parses `usage`/`costUSD` from Claude Code and Codex transcripts, aggregates, budget fraction, compact formatting |
+| `EventIngestServer.swift` | Localhost HTTP listener (NWListener) for remote events over SSH tunnels; strict POST parsing; appends validated payloads to the watched events file |
+| `ShelfModel.swift` | Pure clipboard-history + shelf-file logic (dedup, ordering, limits) |
+| `TerminalFocusser.swift` | Terminal-agnostic focus: ordered bundle-ID registry (Ghostty/Warp/WezTerm/Alacritty/iTerm2/Terminal/VSCode/IntelliJ) + app activation |
+| `LaunchAgent.swift` | Launch-agent plist management |
+| `SettingsView.swift` | Settings form (all facets), welcome/onboarding sheet |
 
-## Events File vs Socket
+## Event pipeline
 
-Two sources feed the same pipeline:
+Three sources feed the same manager:
 
-1. **Direct capture** (default, `captureEnabled`): the manager polls `herdr agent list` every `captureInterval` seconds via the herdr CLI. `blocked → access_request`, `working → progress`, `done → completed`; `idle`/`unknown` are ignored. Per source name, the highest-severity agent wins (`access_request` > `completed`/`failed` > `progress`/`started` > `waiting`); events are emitted only on state transitions, and a persistent `access_request`/`progress` pill silently reappears after TTL expiry while the state holds. No plugin or in-herdr launch required — anything herdr's sidebar knows about appears.
-2. **Event file** (optional): `scripts/event-adapter.mjs` (herdr plugin `bantay-tui.integration`, `pane.agent_status_changed`) appends JSONL to `~/Library/Application Support/Bantay-TUI/agent-events.jsonl`, which the manager tails for richer `state_labels` messages.
+1. **herdr poll** (default when herdr is present): `herdr agent list` every `captureInterval` seconds. Status mapping: `blocked → access_request`, `working → progress`, `running → started`, `idle → idle`, `done → completed`, `failed → failed`, `cancelled → cancelled`. Per source, the highest-severity agent wins; events emit only on state transitions; persistent blocked/working pills silently re-show while the state holds.
+2. **Standalone scan** (default on, runs in a detached task): process classification + newest-transcript tailing. herdr-managed processes are skipped by env marker; agents herdr already reports are deduped by canonical name.
+3. **Event file + remote ingest** (optional): `scripts/event-adapter.mjs` (herdr plugin `bantay-tui.integration`) appends JSONL to `~/Library/Application Support/Bantay-TUI/agent-events.jsonl`, which the manager tails for richer `state_labels`/`variance`/`choices`. The localhost ingest server (off by default) POSTs validated lines into the same file, so remote agents over `ssh -R` flow through the identical pipeline.
 
-A direct unix-socket adapter (no CLI subprocess) remains a future option for lower latency; it is not implemented.
+The manager publishes a merged roster (`agents`) and the latest event (`currentEvent`); `mergeApprovals` attaches decoded approval prompts (variance/choices) and working-burst start times to blocked rows.
 
-## Herdr Event Payload
+## Approval execution
 
-Herdr invokes the plugin command with the event JSON in `HERDR_PLUGIN_EVENT_JSON`. Verified shape for `pane.agent_status_changed` (from herdr's bundled API schema, protocol 17):
+Approval prompts carry `variance` (`yes_no`/`choices`/`multi`) and `choices`. `IslandMetrics.ApprovalControls` is the pure model; the UI renders:
 
-```json
-{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"1-2","workspace_id":"1","agent_status":"blocked","display_agent":"claude","agent":"claude","title":"...","state_labels":{"blocked":"Waiting for approval"}}}
-```
+- yes/no → Approve/Deny (`y`/`n` + Enter via `herdr agent send-keys`)
+- choices → numbered buttons (`<n>` + Enter)
+- multi → toggle set + Submit (`1,3` + Enter)
 
-`agent_status` is one of `idle`, `working`, `blocked`, `done`, `unknown`. The adapter maps: `blocked → access_request`, `working → progress`, `idle → waiting`, `done → completed`; `state_labels` supplies the pill message. Approval prompts carry an optional `variance` (`yes-no`/`choices`/`multi`) and `choices` array; nil variance defaults to yes-no.
+The **approval heartbeat** (`IslandMetrics.ApprovalHeartbeat` + `heartbeatVerify`) re-verifies every pinned prompt against live agent status each poll: prompts stay only while the pane still reports blocked/unknown; working/done/idle/failed self-clear — killing phantom prompts from dropped hooks. Unknowns never phantom-clear.
 
-## Click-to-Focus
+## Reliability systems
 
-Notch click triggers the herdr CLI: `herdr pane focus <pane_id>` (same mechanism as `herdr-focus-notify`). Pane ID comes from the event's `paneId` field.
+| System | Mechanism |
+|---|---|
+| Full-screen & spaces | `didEnter/didExitFullScreen` + `activeSpaceDidChange` observers, debounced through a cancellable settle task (0.35 s) that re-shows/re-anchors per `showInFullScreen` |
+| Menu-bar collisions | `MenuBarClearance` clamps the idle strip to `auxiliaryTopLeft/RightArea` widths (fallback screen-minus-notch) when `avoidMenuBarIcons` |
+| Display hot-swap | `didChangeScreenParameters` + `screensDidWake` → `handleDisplayChange` → `reanchorIfGhosted()` (visible window off every screen gets moved back) + reposition |
+| Terminal focus | `TerminalRegistry` resolves the running preferred terminal; `TerminalFocusser` activates it (opens Terminal as last resort) |
+| Main-actor safety | `ps` scan, transcript enumeration, and usage aggregation run in `Task.detached`; process pipes drain before `waitUntilExit` |
 
-## Build Requirements
+## Click-to-focus & actions
 
-- macOS 14.6+
-- SwiftUI, AppKit
-- Node.js 18+ for the event adapter (ESM)
-- No Electron; native Swift binary
-- Open source (MIT license)
-- Notarized release via `notarytool` (optional for public download; can distribute as `.dmg` or `.zip` for manual install)
+- Row/card click → `herdr pane focus <paneId>` (herdr) or `TerminalFocusser` (any terminal).
+- Per-row: Focus, Stop (`ctrl+c` via send-keys), Compose prompt.
+- Queue cards: approve/deny/choice/submit + Force Focus Terminal + Retry.
 
-## Installation Path
+## Build & distribution
 
-Manual (for now): build with `swift build`, run `sh scripts/setup.sh` to install the launch agent, and `herdr plugin link <repo>` to register the event hook. Future: Homebrew cask (`brew install --cask bantay-tui`) once notarized.
+- macOS 14.6+, Swift 6, native Swift/AppKit (no Electron).
+- `scripts/setup.sh`: launch-agent install (auto-start, keep-alive), `--uninstall`, and `--package` (release `.app` zip).
+- Homebrew cask formula in `Cask/` for a future tagged release; notarization still pending.
+
+## See also
+
+- [README.md](README.md) — features, install, configuration, CI
+- [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) — roadmap status
+- `docs/ci-pipeline.mmd` — CI flow diagram

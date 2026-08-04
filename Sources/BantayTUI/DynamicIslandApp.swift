@@ -4,6 +4,7 @@ import SwiftUI
 extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
     static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
+    static let settingsWillOpen = Notification.Name("settingsWillOpen")
 }
 
 @main
@@ -27,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static weak var shared: AppDelegate?
     /// Set once the island has shown at least once; un-gates `hideAtStartup`.
     @MainActor static var didShowOnce = false
+    /// True while the user has forced the island visible via the tray menu.
+    @MainActor static var isForcedVisible = false
     /// Set at launch when the one-time welcome sheet must appear.
     @MainActor static var pendingWelcome = false
     private var statusItem: NSStatusItem?
@@ -112,10 +115,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
+        // Data dir + events file always exist (setup.sh parity) so the
+        // events pipeline and LaunchAgent logs have a home.
+        LaunchAgent.ensureDataDirectory()
         makeIslandWindow()
         installMenuBar()
         observeScreenChanges()
-        installGlobalHotkey()
+        updateGlobalHotkeyMonitor()
         startBadgeTimer()
         updateIngestServer()
         Self.dbg(
@@ -123,10 +129,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
             Self.pendingWelcome = true
         }
-        if NotchHUDConfig.shared.hideAtStartup {
+        let config = NotchHUDConfig.shared
+        if config.hideAtStartup && !config.showIslandWhenIdle {
             Self.dbg("launch: hideAtStartup set, island stays hidden until an event")
         } else {
-            Self.dbg("launch: showing island")
+            Self.dbg(
+                "launch: showing island (hideAtStartup=\(config.hideAtStartup) idleShow=\(config.showIslandWhenIdle))"
+            )
             Self.showAtNotch()
         }
     }
@@ -134,11 +143,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     private func makeIslandWindow() {
         let size = IslandMetrics.windowSize()
+        guard size.width > 0, size.height > 0 else {
+            Self.dbg("startup guard: invalid window size \(size), exiting")
+            NSApp.terminate(nil)
+            return
+        }
+        guard let frame = Self.islandFrame(on: NSScreen.main, size: size) as NSRect?,
+            frame.width > 0, frame.height > 0
+        else {
+            Self.dbg("startup guard: invalid island frame, exiting")
+            NSApp.terminate(nil)
+            return
+        }
         let window = KeyablePanel(
-            contentRect: Self.islandFrame(on: NSScreen.main, size: size),
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false)
+        guard window.screen != nil else {
+            Self.dbg("startup guard: window server refused panel screen, exiting")
+            NSApp.terminate(nil)
+            return
+        }
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -347,8 +373,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Global ⌥Space toggle: show/hide the island from anywhere. Uses a
     /// key-down monitor so no Accessibility permission is required.
+    /// Re-run whenever the setting changes: removes any stale monitor and
+    /// reinstalls only when the feature is enabled, so the toggle takes
+    /// effect immediately in both directions.
     @MainActor
-    private func installGlobalHotkey() {
+    func updateGlobalHotkeyMonitor() {
+        if let hotkeyMonitor {
+            NSEvent.removeMonitor(hotkeyMonitor)
+            self.hotkeyMonitor = nil
+        }
         guard NotchHUDConfig.shared.globalHotkeyEnabled else { return }
         let handler: @Sendable (NSEvent) -> Void = { event in
             guard event.modifierFlags.contains(.option),
@@ -476,6 +509,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         let config = NotchHUDConfig.shared
+        let showItem = NSMenuItem(
+            title: Self.isForcedVisible ? "Hide Island" : "Show Island",
+            action: #selector(toggleForcedVisible),
+            keyEquivalent: "")
+        showItem.target = self
+        menu.addItem(showItem)
         let disableItem = NSMenuItem(
             title: config.islandEnabled ? "Disable Island" : "Enable Island",
             action: #selector(toggleIslandEnabled),
@@ -596,6 +635,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @MainActor
+    @objc private func toggleForcedVisible() {
+        Self.isForcedVisible.toggle()
+        if Self.isForcedVisible {
+            Self.didShowOnce = true
+            Self.showAtNotch()
+        } else {
+            Self.hide()
+        }
+        NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+    }
+
+    @MainActor
     @objc private func toggleIslandEnabled() {
         let config = NotchHUDConfig.shared
         config.islandEnabled.toggle()
@@ -641,6 +692,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settingsWindow =
             (NSApp.windows.first { $0.title == "Bantay-TUI Settings" })
             ?? makeSettingsWindow()
+        // The window persists across close/reopen, so the view re-reads its
+        // state from config (menu-bar toggles may have changed it since).
+        NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
         settingsWindow.center()
         settingsWindow.makeKeyAndOrderFront(nil)
     }
@@ -648,13 +702,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     private func makeSettingsWindow() -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 900),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
         window.title = "Bantay-TUI Settings"
         window.contentViewController = NSHostingController(rootView: SettingsView())
         window.isReleasedWhenClosed = false
+        window.contentMinSize = NSSize(width: 480, height: 900)
         return window
     }
 

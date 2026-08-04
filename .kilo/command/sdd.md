@@ -17,10 +17,19 @@ You are executing a Bantay-TUI plan the **spec-driven way** (see
    excerpts, STOP and report — do not improvise.
 2. Read the plan's "Acceptance/done criteria" and the "Why".
 3. Load the Logic harness once so you know today's baseline:
-   `swiftc -o /tmp/logic-check Sources/BantayTUI/AgentEventKind.swift Sources/BantayTUI/NotchHUDConfig.swift Sources/BantayTUI/HerdrSocketAdapter.swift Sources/BantayTUI/IslandMetrics.swift Sources/BantayTUI/AgentEventManager.swift .kilo/LogicCheck.swift` then run `/tmp/logic-check`. Record the PASS/FAIL counts.
+   `swiftc -o /tmp/logic-check Sources/BantayTUI/AgentEventKind.swift Sources/BantayTUI/NotchHUDConfig.swift Sources/BantayTUI/EventIngestServer.swift Sources/BantayTUI/PlexerAdapter.swift Sources/BantayTUI/HerdrSocketClient.swift Sources/BantayTUI/HerdrSocketAdapter.swift Sources/BantayTUI/UsageTracker.swift Sources/BantayTUI/AgentDetector.swift Sources/BantayTUI/ClaudeHookInstaller.swift Sources/BantayTUI/LaunchAgent.swift Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift Sources/BantayTUI/TerminalFocusser.swift Sources/BantayTUI/IslandMetrics.swift Sources/BantayTUI/AgentEventManager.swift .kilo/LogicCheck.swift` then run `/tmp/logic-check`. Record the PASS/FAIL counts.
 4. Gates: CI is 5 layers — `swift format lint --recursive --strict Sources Tests`
    (1), `swift build` zero-warnings (2), `swift test` (Xcode-only, CI may run it),
    `swift build -c release` (4). Test locally, gate on 1/2/4 + the harness.
+5. Platform floor is macOS 13 (Package.swift `.macOS(.v13)`). SwiftUI APIs
+   added in macOS 14 are off-limits raw: `onChange(of:)` zero/old-new param
+   closures, `onKeyPress`, `focusEffectDisabled`. Use the compat modifiers in
+   NotchStatusView (ShortcutKeyPressModifier, FocusEffectDisabledCompat,
+   EscapeCancelsModifier) or the pre-14 forms (`{ newValue in }`). Do not bump
+   the floor without a plan.
+6. Distribution: `scripts/setup.sh --package` (universal2; falls back to host
+   arch without full Xcode) + `.github/workflows/release.yml` for the signed,
+   notarized, cask-SHA-updating build. Locally only arm64 is buildable (CLT).
 
 ## RED phase - write the tests that prove the spec (code first)
 

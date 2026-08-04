@@ -1,32 +1,122 @@
-# Bantay-TUI — Agent Sentinel Notch HUD
+# Bantay-TUI — Agentic Control Plane in Your Notch
 
 [![CI](https://github.com/8-BitRhyon/bantay-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/8-BitRhyon/bantay-tui/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Native SwiftUI macOS app that turns the MacBook notch into an interactive agent-state display, reading lifecycle events directly from Herdr.
+Native SwiftUI macOS app that turns the MacBook notch into a **control plane for your AI coding agents** — supervise, steer, and approve agents from anywhere on the desktop, without switching to a terminal window. Research, marketing, or a meeting with stakeholders — Bantay keeps your agentic workflow glanceable and actionable.
 
-An agent is `working`, `blocked`, waiting for `approval`, or `done` — Bantay-TUI makes that visible without opening Notification Center: a floating pill under the notch, colored per state, with per-event sounds. **Hover the pill** to expand a live roster of every active agent (source, state, what it's doing) — click any row to jump straight to that agent's pane in herdr.
+Agents run inside herdr, tmux, zellij, or a plain terminal — Bantay detects them all. `working`, `blocked`, waiting for `approval`, or `done` — one glance at the notch tells you, and one click approves it.
 
-## Hover island
+## Highlights
 
-- The pill shows the most urgent agent state (`blocked` > `done` > `working`); a gray `Agents · N` pill appears when agents are idle.
-- Hover (or click the idle pill) to expand a list of **all** active agents, refreshed every `captureInterval` seconds — each row: status dot, agent name, state label, terminal title.
-- Click a row (or the pill) → `herdr pane focus <paneId>` jumps to that agent's pane.
-- A menu bar icon lists the same agents with the same focus actions, plus Quit (the app is `.accessory` — no Dock icon).
+- **Live idle strip beside the notch** — agent chips with severity dots (dot/name/summary styles), `+N` overflow, density pin; hover or tap expands.
+- **Expanded control plane** — counts header ("N need you · M working"), a **pinned approval queue** with one-click approve/deny/choice/submit, state-grouped roster (need-input → working → done → failed → idle), and a footer health bar with a token/cost usage gauge.
+- **Full approval execution in-UI** — yes/no, numbered choices, multi-select toggle+submit. Never open the terminal for a permission prompt.
+- **Universal agent detection** — herdr panes *plus* standalone Claude Code, Codex, Gemini, Cursor, and opencode processes (with latest-activity tailing from transcripts). No multiplexer required.
+- **Workflow from anywhere** — global `⌥Space` to show/hide the island, `Y`/`N`/`1-9` roster shortcuts, edge-glow when agents need you, menu-bar badge with pending count, clipboard + file shelf, per-agent prompt composition.
+- **Engineered for the hard cases** — approval heartbeat (no phantom prompts), full-screen & space transitions, menu-bar icon collision avoidance, display hot-swap re-anchoring, terminal-agnostic focus (Ghostty/Warp/WezTerm/Alacritty/iTerm2/VSCode).
 
-## Approval prompts
+## The island
 
-When an agent is `blocked` (access-request), the pill renders inline controls that drive the agent's terminal via `herdr agent send-keys`:
+### Idle
 
-- **Yes/No** (default): Approve (sends `y` + Enter) / Deny (sends `n` + Enter).
-- **Choices** (`variance: "choices"` + `choices` array): numbered buttons that send the 1-based index + Enter.
-- **Multi-select** (`variance: "multi"` + `choices` array): toggle buttons (green = selected) plus a Submit button that sends comma-joined indices (e.g. `1,3` + Enter).
+When agents are active and nothing urgent is pending, the notch shows a compact **agent strip** (beside the notch, left/right/center — your choice):
 
-All variants include a Focus button that jumps to the agent's pane.
+- **Names** (default): per-agent chips — severity dot + agent name, capped (default 3, up to 6) with `+N` overflow.
+- **Dots**: severity dots only for a minimal glance.
+- **Summary**: one dot + "N agents".
 
-## CI/CD Pipeline
+The strip yields to menu-bar icons: when `avoidMenuBarIcons` is on (default), the OS-reported auxiliary areas clamp the strip so it never overlaps Bartender/Ice status clusters.
 
-Every change must pass five CI layers plus the remote merge barrier before it reaches `main`. Nothing merges — or pushes to `main` — without all gates green.
+### Expanded control plane
+
+Hover (or `⌥Space`) to expand the island into a control plane:
+
+- **Header** — "N need you · M working" counts + current event title.
+- **Approval queue** (pinned on top, capped cards + `+N more`) — each blocked agent gets its prompt plus inline controls:
+  - **Yes/No**: Approve / Deny.
+  - **Choices**: numbered buttons (`1`/`2`/`3` → choice + Enter).
+  - **Multi-select**: toggle buttons (green = selected) + Submit (`1,3` + Enter).
+  - Plus **Force Focus Terminal** (activates your terminal via bundle-ID registry) and **Retry** (re-polls the agent).
+- **Roster** — grouped by state (need-input → working → done → failed → idle, toggleable to flat); each row shows status dot, agent, state, elapsed time, latest activity; click to compose a prompt, hover for Focus / Stop (Ctrl-C) actions.
+- **Shelf tab** — drop files or copy text; both land on the shelf with open/copy-back actions.
+- **Footer** — totals, done/failed counts, token/cost usage gauge (budget bar, amber ≥70% / red ≥90%), multiplexer badge, pending count.
+
+## Reliability engineering
+
+Bantay ships fixes for the five hard problems that plague notch apps:
+
+1. **Phantom prompts** — an approval heartbeat re-verifies pinned prompts against live agent state every poll. If the agent actually moved on (dropped hook), the phantom self-clears; unknowns never phantom-clear. Fallback buttons (Force Focus / Retry) are one click away.
+2. **Full-screen & spaces** — the panel uses `fullScreenAuxiliary`/`canJoinAllSpaces`/top-level window level, and enter/exit full-screen + space-change transitions re-anchor it after a settle delay.
+3. **Menu-bar collisions** — idle chips are clamped to the OS-reported auxiliary-area geometry.
+4. **Display hot-swap / clamshell ghosts** — display-change and wake events debounce, detect visible windows off every screen, and re-anchor before the WindowServer race can strand a ghost.
+5. **Terminal-agnostic focus** — a bundle-ID registry (Ghostty → Warp → WezTerm → Alacritty → iTerm2 → Terminal → VSCode → IntelliJ) activates whichever terminal is running, with a preferred-terminal setting.
+
+## Agent detection
+
+Three sources feed the same event pipeline:
+
+1. **herdr** (default when present) — polls `herdr agent list` every `captureInterval` seconds; statuses map `blocked → access_request`, `working → progress`, `done → completed`, etc. No plugin required.
+2. **Standalone scan** (default on) — classifies running processes into canonical agents (claude/codex/gemini/cursor/opencode), skips herdr-managed processes, and tails each agent's newest transcript for a live activity line. Runs off the main actor so the UI never blocks.
+3. **Event file / remote ingest** (optional) — tails `~/Library/Application Support/Bantay-TUI/agent-events.jsonl` for richer state labels, and a localhost listener (off by default) accepts POSTed event lines from remote agents over `ssh -R <port>:localhost:<port>`.
+
+Approval prompts in the event stream carry an optional `variance` (`yes_no`/`choices`/`multi`) and `choices` array; nil variance defaults to yes/no.
+
+## Quick actions
+
+| Action | How |
+|---|---|
+| Show/hide island | `⌥Space` (global, from any app) |
+| Approve / Deny / Choose | `Y` / `N` / `1-9` with the island focused |
+| Compose a prompt | Click an agent row |
+| Copy prompt/message | Right-click an approval card |
+| Snooze alerts | Tray menu → Snooze… (15m / 1h / 4h / until restart) |
+| Test alert sound | Settings → Play alert sound preview |
+
+## Install
+
+### Launch agent (recommended)
+
+```bash
+swift build -c release
+bash scripts/setup.sh        # copies binary + installs launch agent (auto-start, keep-alive)
+```
+
+`setup.sh` installs to `~/Library/Application Support/Bantay-TUI/bantay` with a `com.bantay-tui.agent` launch agent. Restart after a rebuild:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.bantay-tui.agent
+```
+
+Uninstall:
+
+```bash
+bash scripts/setup.sh --uninstall
+```
+
+### Homebrew cask (once a release is tagged)
+
+```bash
+brew tap 8-BitRhyon/bantay-tui
+brew install --cask bantay-tui
+```
+
+Package a release zip locally:
+
+```bash
+swift build -c release
+bash scripts/setup.sh --package   # → dist/bantay-tui.zip (Bantay-TUI.app)
+```
+
+### Requirements
+
+- macOS 14.6+
+- Swift 6 toolchain (Xcode 16+ for `swift test`)
+- Optional: herdr, Node.js 18+ (event adapter)
+
+## CI/CD pipeline
+
+Seven jobs across five layers; `main` is protected (PRs required, status checks required, commits must be signed):
 
 ```mermaid
 flowchart TD
@@ -36,7 +126,9 @@ flowchart TD
     L2 -- "fail" --> REJECT
     L2 -- "pass" --> L3{"Layer 3 · Tests<br/>swift test"}
     L3 -- "fail" --> REJECT
-    L3 -- "pass" --> L4{"Layer 4 · Release<br/>swift build -c release"}
+    L3 -- "pass" --> L35{"Layer 3.5 · Logic checks<br/>swiftc .kilo/LogicCheck.swift"}
+    L35 -- "fail" --> REJECT
+    L35 -- "pass" --> L4{"Layer 4 · Release<br/>swift build -c release"}
     L4 -- "fail" --> REJECT
     L4 -- "pass" --> S1{"gitleaks<br/>secrets scan"}
     L4 -- "pass" --> S2{"SHA-pinned<br/>actions audit"}
@@ -50,149 +142,48 @@ flowchart TD
 
 Source: [`docs/ci-pipeline.mmd`](docs/ci-pipeline.mmd)
 
-### The layers
-
-| Layer | Gate | Job | What fails it |
-|---|---|---|---|
-| 1 · Format | `swift format lint --recursive --strict Sources Tests` | `format` | Any style deviation (`.swift-format` pins the rules) |
-| 2 · Compile | `swift build` | `build` | Compiler errors or warnings-as-failures on macOS |
-| 3 · Tests | `swift test` | `test` | Any failing unit test (`BantayTUILogicTests`) |
-| 4 · Release | `swift build -c release` | `release` | Release-mode build failure (optimization-only issues) |
-| 5 · Security | gitleaks + SHA-pin audit | `secrets`, `pins` | Leaked secrets in history; unpinned third-party actions |
-
-Layers 1–4 run sequentially (`needs:`), so a later layer only starts after the previous one is green. Layer 5 runs in parallel to 1–4 and fails the pipeline on any finding.
-
-### The remote barrier
-
-`main` is protected with branch protection rules:
-
-- Pull requests are **required** — no direct pushes to `main`
-- The `ci` workflow status checks are **required** before merge
-- Commits must be **signed** (verified)
-
-The checks are enforced for administrators too. CI failure at any layer blocks the merge; the fix must re-enter through the pipeline.
-
-## Requirements
-
-- macOS 14.6+
-- Swift 6 toolchain (Xcode 16+ for `swift test` — XCTest is not available in CommandLineTools)
-- Node.js 18+ (for the Herdr event adapter)
-
-## Build & Run
-
-```bash
-swift build          # debug binary at .build/debug/bantay
-./.build/debug/bantay
-```
-
-Run it once as a launch agent (auto-starts on login, keeps running):
-
-```bash
-sh scripts/setup.sh
-```
-
-`setup.sh` copies the binary to `~/Library/Application Support/Bantay-TUI/bantay` and installs the launch agent pointing there. Running the agent from the repo's `.build` directory is unreliable — launchd execution of a freshly rebuilt binary under `~/Downloads` can block in dyld's `open()` (Downloads provenance/TCC evaluation never completes for a launchd-spawned GUI process).
-
-## Herdr Integration
-
-Bantay-TUI captures herdr's live agent state directly — no plugin, wrapper, or in-herdr launch required. Agents herdr knows about (kilo, Freebuff, Command Code, …) show up in the notch regardless of how they were started.
-
-- **Direct capture** (default): the app polls `herdr agent list` every `captureInterval` seconds and maps statuses to the pill: `blocked → access_request`, `working → progress`, `done → completed`. The highest-severity agent per name wins (`blocked` > `done` > `working`); a blocked/working pill that times out silently reappears while the agent is still active.
-- **Event hook** (optional, for richer state labels): `herdr-plugin.toml` registers `scripts/event-adapter.mjs` on `pane.agent_status_changed`, appending JSONL to `agent-events.jsonl`, which the app also tails.
-
-To install the optional event hook and the launch agent:
-
-```bash
-herdr plugin link /path/to/bantay-tui   # links herdr-plugin.toml; enabled by default
-herdr server reload-config
-sh scripts/setup.sh                     # idempotent; data dir + launch agent
-```
-
-- **Setup action** (`scripts/setup.sh`) creates `~/Library/Application Support/Bantay-TUI/` and installs the launch agent (`com.bantay-tui.agent`, `RunAtLoad` + `KeepAlive`).
-- **Event hook** (`scripts/event-adapter.mjs`) subscribes to `pane.agent_status_changed`, maps Herdr statuses to Bantay event kinds, and appends JSONL to `agent-events.jsonl`:
-
-```
-~/Library/Application Support/Bantay-TUI/agent-events.jsonl
-```
-
-Status mapping: `blocked → access_request`, `working → progress`, `running → started`, `idle → waiting`, `done → completed`, `failed → failed`, `cancelled → cancelled`, `clear → clear`.
-
-### Herdr event payload
-
-Herdr delivers each event as JSON in `HERDR_PLUGIN_EVENT_JSON` (verified against herdr's bundled API schema, protocol 17):
-
-```json
-{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"1-2","workspace_id":"1","agent_status":"blocked","display_agent":"claude","agent":"claude","title":"agent display name","state_labels":{"blocked":"Waiting for approval"}}}
-```
-
-| `data` field | Type | Used by the adapter |
+| Layer | Gate | What fails it |
 |---|---|---|
-| `agent_status` | string (required) | Mapped to event `type` (`idle`/`working`/`blocked`/`done`/`unknown`) |
-| `pane_id` | string (required) | `paneId`; pill click runs `herdr pane focus <paneId>` |
-| `workspace_id` | string (required) | `workspaceId` (reserved) |
-| `display_agent` / `agent` | string? | `source` |
-| `title` | string? | `title` |
-| `state_labels` | object? | First label value becomes `message` |
-
-### Event file format
-
-Newline-delimited JSON, one event per line:
-
-```json
-{"source":"claude","type":"access_request","title":"agent display name","message":"Waiting for approval","paneId":"1-2","workspaceId":"1","variance":"yes-no","choices":null}
-```
-
-| Field | Type | Meaning |
-|---|---|---|
-| `source` | string | Agent/display name emitting the event |
-| `type` | string | `access_request`, `waiting`, `completed`, `failed`, `started`, `progress`, `cancelled`, `clear` |
-| `title` | string? | Display title for the pill |
-| `message` | string? | State label text (`state_labels`), e.g. "Waiting for approval" |
-| `paneId` | string? | Herdr pane id; pill click runs `herdr pane focus <paneId>` |
-| `workspaceId` | string? | Workspace label (reserved) |
-| `variance` | string? | Approval prompt type: `yes-no` (default), `choices`, `multi` |
-| `choices` | [string]? | Option labels for `choices` / `multi` prompts |
-
-The app tails the file — events written before launch are skipped, duplicate events for an active state are ignored, and a `clear` event dismisses the pill.
-
-### Verify the integration
-
-```bash
-herdr plugin list                          # bantay-tui.integration: enabled
-herdr plugin log list                      # event-adapter runs show exit_code 0
-tail -f ~/Library/Application Support/Bantay-TUI/agent-events.jsonl
-launchctl print gui/$(id -u)/com.bantay-tui.agent   # state = running
-```
-
-## Uninstalling
-
-To fully remove Bantay-TUI (launch agent, app binary, event history, logs):
-
-```bash
-bash scripts/setup.sh --uninstall
-```
-
-Rerunning it is a safe no-op. Trash the app build afterwards — the agent will
-not relaunch it. Your herdr sessions and hook configuration are untouched;
-Bantay-TUI's `UserDefaults` domain is removed with the app, so Settings do not
-survive an uninstall-driven removal.
+| 1 · Format | `swift format lint --recursive --strict Sources Tests` | Style deviation (`.swift-format`) |
+| 2 · Compile | `swift build` | Compiler errors or warnings-as-failures |
+| 3 · Tests | `swift test` | Failing unit test (`BantayTUILogicTests`) |
+| 3.5 · Logic checks | `swiftc` + run `.kilo/LogicCheck.swift` | Any failing L1–L18 harness assertion (runs without XCTest) |
+| 4 · Release | `swift build -c release` | Release-mode build failure |
+| 5 · Security | gitleaks + SHA-pin audit | Leaked secrets; unpinned third-party actions |
 
 ## Configuration
 
-Stored in `UserDefaults` (domain `BantayTUI`):
+Stored in `UserDefaults` (domain `BantayTUI`). Most settings live in **Settings…** (tray menu, `Cmd-,`).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enableAgentAlerts` | `true` | Play sounds on new events |
-| `soundVolume` | `0.35` | Alert volume |
-| `autoClearTTL` | `3.0` | Seconds before a finished event auto-clears |
-| `stickyApprovalTTL` | `30.0` | Seconds an approval request stays (sticky sources: `codex`, `cursor`, `freebuff`, `commandcode`) |
-| `captureEnabled` | `true` | Poll herdr's live agent list |
-| `captureInterval` | `2.0` | Seconds between `herdr agent list` polls |
+| `islandDockSide` | `right` | Idle strip placement: right / left / center |
+| `idleStyle` | `names` | Idle strip style: `names` / `dots` / `summary` |
+| `idleMaxChips` | `3` | Max agent chips before `+N` (1–6) |
+| `expandedShowQueue` | `true` | Pin the approval queue on top |
+| `expandedGroupByState` | `true` | Group roster by state (else flat) |
+| `expandedQueueCap` | `3` | Queue cards before `+N` (1–5) |
+| `globalHotkeyEnabled` | `true` | `⌥Space` toggle from any app |
+| `keyboardShortcuts` | `true` | `Y`/`N`/`1-9` roster shortcuts |
+| `edgeGlowEnabled` | `true` | Pulsing amber border when agents need you |
+| `showElapsedTime` | `true` | Elapsed timer on working agents |
+| `menuBarBadge` | `true` | Amber dot + pending count in the tray |
+| `showShelfTab` / `shelfLimit` | `true` / `20` | Shelf tab + history cap (1–50) |
+| `followMouseScreen` / `floatingPillOnNoNotch` | `true` / `true` | Multi-monitor placement + floating pill on external displays |
+| `showInFullScreen` | `true` | Keep island visible over full-screen apps |
+| `avoidMenuBarIcons` | `true` | Clamp idle strip to menu-bar clear space |
+| `standaloneScanEnabled` | `true` | Detect agents outside any multiplexer |
+| `showUsageGauge` / `usageBudgetUSD` | `true` / `10.0` | Token/cost gauge + budget (1–100) |
+| `ingestEnabled` / `ingestPort` | `false` / `41817` | Remote event ingest over SSH (off by default) |
+| `preferredTerminalBundleID` | nil | Terminal for Force Focus (nil = auto) |
+| `captureEnabled` / `captureInterval` | `true` / `2.0` | Poll herdr's live agent list |
+| `enableAgentAlerts` / `soundVolume` | `true` / `0.35` | Event sounds + volume |
+| `autoClearTTL` / `stickyApprovalTTL` | `3.0` / `30.0` | Event auto-clear / sticky approval TTLs |
+| `snoozedUntil` / `snoozeUntilRestart` | nil / `false` | Snooze state |
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the component breakdown, event-source design (file adapter vs socket adapter), and integration points.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the component breakdown, the three-source event pipeline, the `PlexerAdapter` seam, and the reliability systems.
 
 ## Development
 
@@ -201,9 +192,10 @@ swift format format --in-place --recursive Sources Tests   # apply style
 swift format lint --recursive --strict Sources Tests       # CI Layer 1
 swift build                                                # CI Layer 2
 swift test                                                 # CI Layer 3 (requires Xcode)
+swiftc -o /tmp/logic-check <harness sources> && /tmp/logic-check   # CI Layer 3.5
 ```
 
-Unit tests live in `Tests/BantayTUILogicTests` and cover the event pipeline: launch offset, tailing, truncation recovery, partial lines, duplicate suppression, `clear` handling, and malformed-line tolerance.
+The `.kilo/LogicCheck.swift` harness (L1–L18) runs without XCTest and is the primary local gate: idle-strip geometry, expanded control-plane metrics, approval controls, heartbeat/phantom protection, screen selection, menu-bar clearance, usage parsing, ingest parsing, shelf logic, terminal registry, and facet persistence. Unit tests live in `Tests/BantayTUILogicTests`.
 
 ## License
 

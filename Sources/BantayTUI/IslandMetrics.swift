@@ -84,6 +84,29 @@ public enum IslandMetrics: Sendable {
         min(max(agentCount, 0), max(maxChips, 0))
     }
 
+    /// The largest chip count whose total strip width fits `availableWidth`
+    /// (used when menu-bar clearance shrinks the strip). Never exceeds
+    /// `maxChips`; floors at 1 when any room exists.
+    public static func idleFitChips(
+        agentCount: Int, maxChips: Int, nameLengths: [Int], availableWidth: CGFloat
+    ) -> Int {
+        let count = max(agentCount, 0)
+        guard count > 0, availableWidth > 0 else { return 0 }
+        let cap = min(count, max(maxChips, 0))
+        guard cap > 0 else { return 0 }
+        var width: CGFloat = 0
+        var shown = 0
+        for i in 0..<cap {
+            let len = nameLengths.isEmpty ? 6 : nameLengths[min(i, nameLengths.count - 1)]
+            let chip = idleNameChipWidth(nameLength: len)
+            let gap = shown > 0 ? idleChipGap : 0
+            guard width + chip + gap <= availableWidth else { break }
+            width += chip + gap
+            shown += 1
+        }
+        return shown
+    }
+
     /// Total closed idle strip width for `style`.
     public static func idleStripWidth(
         style: IdleStyle, agentCount: Int, maxChips: Int, nameLengths: [Int]
@@ -126,6 +149,12 @@ public enum IslandMetrics: Sendable {
     public static let expandedQueueCap: Int = 3
     /// Height of one approval-queue card.
     public static let queueCardHeight: CGFloat = 42
+    /// Shelf tab bar height (Agents/Shelf switcher).
+    public static let shelfTabBarHeight: CGFloat = 22
+    /// Divider between the header/tabs and the list.
+    public static let dividerHeight: CGFloat = 1
+    /// "+N more waiting" overflow row height.
+    public static let overflowRowHeight: CGFloat = 18
     /// Footer health-bar height.
     public static let footerHeight: CGFloat = 22
     /// Group order for the expanded roster: needs input first, then working,
@@ -174,10 +203,14 @@ public enum IslandMetrics: Sendable {
     /// roster rows, and footer — capped at the island max.
     public static func expandedSize(
         topInset: CGFloat, agentCount: Int, queueCount: Int,
+        shelfTabVisible: Bool = false, overflowCount: Int = 0,
         headerHeight: CGFloat = headerHeight, rowHeight: CGFloat = rowHeight
     ) -> CGSize {
+        let chrome =
+            (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
+            + CGFloat(max(overflowCount, 0)) * overflowRowHeight
         let h =
-            topInset + headerHeight + CGFloat(queueCount) * queueCardHeight
+            topInset + headerHeight + chrome + CGFloat(queueCount) * queueCardHeight
             + CGFloat(agentCount) * rowHeight + footerHeight + contentSpacing
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
     }
@@ -229,6 +262,28 @@ public enum IslandMetrics: Sendable {
             y: screenFrame.maxY - topInset - size.height,
             width: size.width,
             height: size.height)
+    }
+
+    // MARK: - Visibility policy
+
+    /// Pure island-visibility gate. The island shows when enabled, not
+    /// snoozed, not hidden-at-start, and either there is work or the user
+    /// asked to keep it visible while idle (`showWhenIdle` / `forced`).
+    enum VisibilityPolicy {
+        static func shouldShow(
+            islandEnabled: Bool,
+            snoozed: Bool,
+            hideAtStartup: Bool,
+            didShowOnce: Bool,
+            hasWork: Bool,
+            showWhenIdle: Bool,
+            forced: Bool = false
+        ) -> Bool {
+            guard islandEnabled, !snoozed else { return false }
+            let hiddenAtStart = hideAtStartup && !didShowOnce && !showWhenIdle && !forced
+            if hiddenAtStart { return false }
+            return hasWork || showWhenIdle || forced
+        }
     }
 
     // MARK: - Menu-bar collision avoidance
@@ -372,6 +427,19 @@ public enum IslandMetrics: Sendable {
             return (1...choices.count).map { "\($0)" }
         }
 
+        /// Max option buttons rendered per queue card before `+N` overflow.
+        static let maxDisplayedOptions = 6
+
+        /// Option labels capped for display; the rest collapse into `+N`.
+        func displayedLabels(cap: Int = ApprovalControls.maxDisplayedOptions) -> [String] {
+            Array(optionLabels.prefix(max(cap, 1)))
+        }
+
+        /// How many options are hidden behind the `+N` overflow.
+        func overflowCount(cap: Int = ApprovalControls.maxDisplayedOptions) -> Int {
+            max(optionLabels.count - max(cap, 1), 0)
+        }
+
         var submitLabel: String {
             isMulti ? "Submit" : "Approve"
         }
@@ -432,6 +500,32 @@ public enum IslandMetrics: Sendable {
         }
     }
 
+    /// Quiet-hours window check. Minutes are 0...1439 (00:00-23:59).
+    /// Windows that wrap midnight (start > end) are handled; a zero-length
+    /// window (start == end) is always inactive. Only suppresses sounds —
+    /// approvals stay visible.
+    public static func quietHoursActive(
+        nowMinutes: Int, startMinutes: Int, endMinutes: Int
+    ) -> Bool {
+        guard (0..<1440).contains(nowMinutes), startMinutes != endMinutes else {
+            return false
+        }
+        if startMinutes < endMinutes {
+            return nowMinutes >= startMinutes && nowMinutes < endMinutes
+        }
+        return nowMinutes >= startMinutes || nowMinutes < endMinutes
+    }
+
+    /// Whether an approval event needs a Notification Center fallback:
+    /// the feature is on, the island is NOT showing the event, and the kind
+    /// is one a user must act on. Progress/completion noise never notifies.
+    static func shouldPostNotification(
+        islandVisible: Bool, notifyWhenHidden: Bool, kind: AgentEventKind
+    ) -> Bool {
+        guard notifyWhenHidden, !islandVisible else { return false }
+        return kind == .accessRequest || kind == .waiting
+    }
+
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
@@ -458,11 +552,13 @@ public enum IslandMetrics: Sendable {
     }
 
     public static func contentHeight(
-        isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0
+        isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0,
+        shelfTabVisible: Bool = false, overflowCount: Int = 0
     ) -> CGFloat {
         if isExpanded {
             return expandedSize(
-                topInset: topInset, agentCount: agentCount, queueCount: queueCount
+                topInset: topInset, agentCount: agentCount, queueCount: queueCount,
+                shelfTabVisible: shelfTabVisible, overflowCount: overflowCount
             ).height - topInset
         }
         return pillHeight
@@ -541,12 +637,22 @@ public enum IslandMetrics: Sendable {
     }
 
     /// How far down (from the window's top edge) the island content sits.
-    /// Docked idle chips sit flush in the notch row (0); the expanded panel and
-    /// the "center" idle mode drop under the menu bar, like BoringNotch.
+    /// Docked idle chips sit flush in the notch row (0); the expanded panel
+    /// drops under the menu bar. Centered idle spans the notch itself, so it
+    /// also sits in the notch row.
     public static func effectiveTopOffset(
         side: IslandDockSide, isExpanded: Bool, topInset: CGFloat
     ) -> CGFloat {
-        isExpanded ? topInset : (side == .center ? topInset : 0)
+        isExpanded ? topInset : 0
+    }
+
+    /// Centered idle: the pill spans the notch width (black bar "behind" the
+    /// notch), and details split to both sides. Each side gets half of the
+    /// remaining window width.
+    public static func centeredSideWidth(
+        windowWidth: CGFloat, notchWidth: CGFloat
+    ) -> CGFloat {
+        max((windowWidth - notchWidth) / 2 - contentSpacing, 0)
     }
 
     /// Collapse on hover-exit unless the user is mid-prompt (composing).

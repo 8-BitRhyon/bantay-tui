@@ -10,18 +10,43 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
     }
 
     private func herdrExecutableURL() -> URL? {
-        if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
-            for dir in pathEnv.split(separator: ":") {
-                let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(
-                    herdrBinPath)
-                if FileManager.default.isExecutableFile(atPath: candidate.path) {
-                    return candidate
-                }
+        for path in Self.candidateHerdrPaths(
+            env: ProcessInfo.processInfo.environment, home: NSHomeDirectory(),
+            binName: herdrBinPath)
+        {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
             }
         }
-        let fallback = URL(fileURLWithPath: "/opt/homebrew/bin").appendingPathComponent(
-            herdrBinPath)
-        return FileManager.default.isExecutableFile(atPath: fallback.path) ? fallback : nil
+        return nil
+    }
+
+    /// Every location a herdr binary can live, most specific first:
+    /// `HERDR_INSTALL_DIR` (official installer's env override), PATH dirs,
+    /// `~/.local/bin` (official installer default), Homebrew on Apple
+    /// Silicon, Homebrew on Intel, then `~/.herdr/bin`. Pure for tests.
+    nonisolated static func candidateHerdrPaths(
+        env: [String: String], home: String, binName: String = "herdr"
+    ) -> [String] {
+        var candidates: [String] = []
+        var seen = Set<String>()
+        func add(_ path: String) {
+            guard !path.isEmpty, seen.insert(path).inserted else { return }
+            candidates.append(path)
+        }
+        if let dir = env["HERDR_INSTALL_DIR"], !dir.isEmpty {
+            add(dir + "/" + binName)
+        }
+        if let pathEnv = env["PATH"] {
+            for dir in pathEnv.split(separator: ":") where !dir.isEmpty {
+                add(String(dir) + "/" + binName)
+            }
+        }
+        add(home + "/.local/bin/" + binName)
+        add("/opt/homebrew/bin/" + binName)
+        add("/usr/local/bin/" + binName)
+        add(home + "/.herdr/bin/" + binName)
+        return candidates
     }
 
     private func runHerdr(_ arguments: [String], timeout: TimeInterval = 3.0) -> String {
@@ -105,21 +130,40 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         }
     }
 
-    func listPanes() -> [PaneInfo] {
-        let output = runHerdr(["pane", "list", "--format", "json"])
-        guard !output.isEmpty else { return [] }
+    /// `pane list` invocation variants in preference order. herdr < 0.8
+    /// required `--format json`; herdr 0.8+ removed the flag and emits JSON
+    /// by default (the flag now errors). Try both.
+    nonisolated static func paneListCommandVariants() -> [[String]] {
+        [
+            ["pane", "list", "--format", "json"],
+            ["pane", "list"],
+        ]
+    }
 
-        let decoder = JSONDecoder()
-        guard let jsonData = output.data(using: .utf8),
-            let raw = try? decoder.decode(HerdrResponse.self, from: jsonData)
-        else {
-            return []
+    func listPanes() -> [PaneInfo] {
+        for args in Self.paneListCommandVariants() {
+            let output = runHerdr(args)
+            guard !output.isEmpty else { continue }
+            let decoder = JSONDecoder()
+            guard let jsonData = output.data(using: .utf8),
+                let raw = try? decoder.decode(HerdrResponse.self, from: jsonData)
+            else {
+                continue
+            }
+            return raw.result?.panes ?? raw.panes ?? []
         }
-        return raw.result?.panes ?? raw.panes ?? []
+        return []
     }
 
     nonisolated func listAgents() async -> [HerdrAgentInfo] {
-        let output = runHerdr(["agent", "list"])
+        if let viaSocket = await listAgentsViaSocket() {
+            return viaSocket
+        }
+        // runHerdr blocks on a child process; hop off the caller's executor
+        // so a MainActor caller never stalls the UI thread.
+        let output = await Task.detached { [self] in
+            self.runHerdr(["agent", "list"])
+        }.value
         guard !output.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
@@ -129,6 +173,26 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
             return []
         }
         return raw.result?.agents ?? []
+    }
+
+    /// Socket-first path: one NDJSON `agent.list` call. Returns nil so the
+    /// caller falls back to the CLI when the socket is unavailable.
+    nonisolated func listAgentsViaSocket() async -> [HerdrAgentInfo]? {
+        let path = HerdrSocketProtocol.socketPath(
+            env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        let client = HerdrSocketClient(socketURL: URL(fileURLWithPath: path))
+        guard let response = await client.call(method: "agent.list"),
+            let resultJSON = response.result,
+            let data = resultJSON.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let agentsJSON = obj["agents"]
+        else {
+            return nil
+        }
+        let agentsData = (try? JSONSerialization.data(withJSONObject: agentsJSON)) ?? Data()
+        let decoder = JSONDecoder()
+        return try? decoder.decode([HerdrAgentInfo].self, from: agentsData)
     }
 
     // MARK: - PlexerAdapter

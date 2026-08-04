@@ -32,6 +32,32 @@ final class NotchHUDConfig {
     var muteInTerminal: Bool = true {
         didSet { defaults.set(muteInTerminal, forKey: "muteInTerminal") }
     }
+    /// Post a Notification Center alert when an approval arrives while the
+    /// island is hidden (snoozed / hide-at-startup). Opt-in; default off.
+    var notifyWhenHidden = false {
+        didSet { defaults.set(notifyWhenHidden, forKey: "notifyWhenHidden") }
+    }
+    /// Quiet hours: window (start/end minutes since midnight) during which
+    /// alert sounds are silenced. Approvals stay visible — nothing is missed.
+    var quietHoursEnabled = false {
+        didSet { defaults.set(quietHoursEnabled, forKey: "quietHoursEnabled") }
+    }
+    var quietHoursStart = 22 * 60 {
+        didSet { defaults.set(quietHoursStart, forKey: "quietHoursStart") }
+    }
+    var quietHoursEnd = 7 * 60 {
+        didSet { defaults.set(quietHoursEnd, forKey: "quietHoursEnd") }
+    }
+
+    /// Whether the quiet-hours window covers `date` (defaults to now).
+    func isInQuietHours(at date: Date = Date()) -> Bool {
+        guard quietHoursEnabled else { return false }
+        let cal = Calendar.current
+        let minutes =
+            cal.component(.hour, from: date) * 60 + cal.component(.minute, from: date)
+        return IslandMetrics.quietHoursActive(
+            nowMinutes: minutes, startMinutes: quietHoursStart, endMinutes: quietHoursEnd)
+    }
     var islandEnabled = true {
         didSet { defaults.set(islandEnabled, forKey: "islandEnabled") }
     }
@@ -40,6 +66,9 @@ final class NotchHUDConfig {
     }
     var hideAtStartup = false {
         didSet { defaults.set(hideAtStartup, forKey: "hideAtStartup") }
+    }
+    var showIslandWhenIdle = true {
+        didSet { defaults.set(showIslandWhenIdle, forKey: "showIslandWhenIdle") }
     }
     var islandDockSide: IslandMetrics.IslandDockSide = .right {
         didSet { defaults.set(islandDockSide.rawValue, forKey: "islandDockSide") }
@@ -131,6 +160,13 @@ final class NotchHUDConfig {
     var preferredTerminalBundleID: String? {
         didSet { defaults.set(preferredTerminalBundleID, forKey: "preferredTerminalBundleID") }
     }
+    var claudeHookInstalled = false {
+        didSet { defaults.set(claudeHookInstalled, forKey: "claudeHookInstalled") }
+    }
+    /// Agent sources the user muted via row context menus (skipped in roster).
+    var mutedSources: Set<String> = [] {
+        didSet { defaults.set(Array(mutedSources), forKey: "mutedSources") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -168,6 +204,18 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "muteInTerminal") as? NSNumber {
             muteInTerminal = v.boolValue
         }
+        if let v = defaults.object(forKey: "notifyWhenHidden") as? Bool {
+            notifyWhenHidden = v
+        }
+        if let v = defaults.object(forKey: "quietHoursEnabled") as? Bool {
+            quietHoursEnabled = v
+        }
+        if let v = defaults.object(forKey: "quietHoursStart") as? NSNumber {
+            quietHoursStart = min(max(v.intValue, 0), 1439)
+        }
+        if let v = defaults.object(forKey: "quietHoursEnd") as? NSNumber {
+            quietHoursEnd = min(max(v.intValue, 0), 1439)
+        }
         if let v = defaults.object(forKey: "islandEnabled") as? Bool {
             islandEnabled = v
         }
@@ -176,6 +224,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "hideAtStartup") as? Bool {
             hideAtStartup = v
+        }
+        if let v = defaults.object(forKey: "showIslandWhenIdle") as? Bool {
+            showIslandWhenIdle = v
         }
         if let v = defaults.string(forKey: "islandDockSide"),
             let side = IslandMetrics.IslandDockSide(rawValue: v)
@@ -252,6 +303,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.string(forKey: "preferredTerminalBundleID") {
             preferredTerminalBundleID = v
+        }
+        if let v = defaults.object(forKey: "claudeHookInstalled") as? Bool {
+            claudeHookInstalled = v
+        }
+        if let v = defaults.array(forKey: "mutedSources") as? [String] {
+            mutedSources = Set(v)
         }
     }
 }

@@ -43,14 +43,22 @@ if (!mapped) {
 }
 
 const stateLabels = data.state_labels && typeof data.state_labels === 'object'
-  ? Object.values(data.state_labels)
-  : [];
+  ? data.state_labels
+  : null;
+
+// Prefer the label for the current status (raw or mapped key); fall back to
+// the first label only when the status has no entry.
+const message =
+  (stateLabels && (stateLabels[status] || stateLabels[mapped])) ||
+  (stateLabels && Object.values(stateLabels)[0]) ||
+  data.custom_status ||
+  null;
 
 const payload = {
   source: data.display_agent || data.agent || 'herdr',
   type: mapped,
   title: data.title || null,
-  message: stateLabels[0] || data.custom_status || null,
+  message,
   paneId: data.pane_id || null,
   workspaceId: data.workspace_id || null,
   variance: data.variance || null,

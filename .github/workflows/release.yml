@@ -1,0 +1,67 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  universal-package:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and stage universal2 app
+        run: scripts/setup.sh --package
+        env:
+          # Developer ID signing: export your cert (Keychain Access ->
+          # right-click cert -> Export... p12) as base64 into this secret,
+          # plus the p12 password. Without them the app is ad-hoc signed and
+          # Gatekeeper will warn on other Macs.
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          P12_BASE64: ${{ secrets.P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          # Notarization: create a notarytool keychain profile on a Mac:
+          #   xcrun notarytool store-credentials bantay \
+          #     --apple-id "$APPLE_ID" --team-id "$TEAM_ID" \
+          #     --password "$APP_PASSWORD"
+          # then expose the same credentials here (or APPLE_ID/TEAM_ID/
+          # APP_PASSWORD individually). Skipped when unset.
+          NOTARY_PROFILE: ${{ secrets.NOTARY_PROFILE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+
+      - name: Attach binary to release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/bantay-tui.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Bantay-TUI $GITHUB_REF_NAME" \
+            --notes "Universal2 (Apple Silicon + Intel) app bundle. SHA256: $(shasum -a 256 dist/bantay-tui.zip | awk '{print $1}')"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Publish updated cask sha256
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          SHA="$(shasum -a 256 dist/bantay-tui.zip | awk '{print $1}')"
+          sed -i '' -E "s/sha256 \"[0-9a-f]{64}\"/sha256 \"$SHA\"/" Cask/bantay-tui.rb
+          git config user.name "bantay-tui bot"
+          git config user.email "bot@bantay-tui.invalid"
+          git add Cask/bantay-tui.rb
+          git commit -m "release: update cask sha256 to $SHA"
+          git push origin HEAD:main
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bantay-tui
+          path: dist/bantay-tui.zip

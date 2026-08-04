@@ -212,6 +212,13 @@ final class AgentEventManager: ObservableObject {
     }
 
     private func showEvent(_ event: AgentEvent) {
+        // Muted sources are fully suppressed: no pill, no sound, no
+        // bookkeeping. They only reappear after an unmute (Settings).
+        if let source = event.source,
+            NotchHUDConfig.shared.mutedSources.contains(source)
+        {
+            return
+        }
         let key = event.identityKey
         if event.kind == .accessRequest || event.kind == .waiting {
             pendingApprovals[key] = (variance: event.variance, choices: event.choices)
@@ -412,7 +419,9 @@ extension AgentEventManager {
         }
 
         if effective == nil,
-            let top = best.first,
+            // best is sorted ascending by severity; the fallback should
+            // promote the most important remaining agent, not the least.
+            let top = best.last,
             lastSeenKinds[top.identityKey] == top.kind,
             !events.contains(where: { $0.paneId ?? $0.source == top.paneId ?? top.source })
         {
@@ -596,7 +605,9 @@ extension AgentEventManager {
     /// working-burst start time to roster rows so the control plane renders
     /// the full interactive surface and elapsed timers.
     func mergeApprovals(into roster: [AgentSnapshot]) -> [AgentSnapshot] {
-        roster.map { agent in
+        let muted = NotchHUDConfig.shared.mutedSources
+        return roster.compactMap { agent in
+            guard !muted.contains(agent.source) else { return nil }
             let key = agent.paneId ?? agent.source
             var variance = agent.variance
             var choices = agent.choices
@@ -662,13 +673,24 @@ extension AgentEventManager {
         }
     }
 
-    /// Ingest a remote event line (SSH bridge): validates the payload then
+    /// Ingest a remote event line (SSH bridge or Claude Code hook): validates
+    /// the payload — mapping Claude hook payloads to Bantay events — then
     /// appends it to the watched events file so the file watcher surfaces it
     /// like any local event.
     func ingestEventLine(_ line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
-            (try? JSONDecoder().decode(AgentEventPayload.self, from: data)) != nil
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return }
+
+        var payloadData = data
+        if (try? JSONDecoder().decode(AgentEventPayload.self, from: data)) == nil,
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let mapped = ClaudeHookInstaller.mapToEventPayload(obj),
+            let mappedData = try? JSONSerialization.data(withJSONObject: mapped)
+        {
+            payloadData = mappedData
+        }
+        guard let payloadText = String(data: payloadData, encoding: .utf8),
+            (try? JSONDecoder().decode(AgentEventPayload.self, from: payloadData)) != nil
         else {
             return
         }
@@ -680,7 +702,7 @@ extension AgentEventManager {
         if let end = try? handle.seekToEnd() {
             _ = end
         }
-        handle.write(Data((trimmed + "\n").utf8))
+        handle.write(Data((payloadText + "\n").utf8))
     }
 
     /// Merge standalone-detected agents into the herdr roster without

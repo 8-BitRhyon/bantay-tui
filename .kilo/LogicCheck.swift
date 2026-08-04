@@ -29,6 +29,12 @@ struct LogicCheckMain {
             check(events.map(\.kind) == kinds, "\(name): \(events.map(\.kind)) != \(kinds)")
         }
 
+        func dateWith(minutesSinceMidnight minutes: Int) -> Date {
+            let cal = Calendar.current
+            let start = cal.startOfDay(for: Date())
+            return cal.date(byAdding: .minute, value: minutes, to: start) ?? Date()
+        }
+
         // MARK: - capture update() logic
 
         var seen: [String: AgentEventKind] = [:]
@@ -588,8 +594,8 @@ struct LogicCheckMain {
             "L4 left-dock idle chip sits at the notch level (top inset 0)")
         check(
             IslandMetrics.effectiveTopOffset(
-                side: .center, isExpanded: false, topInset: 47) == 47,
-            "L4 center idle mode keeps dropping under the notch")
+                side: .center, isExpanded: false, topInset: 47) == 0,
+            "L4 center idle mode sits in the notch row (behind the notch)")
         check(
             IslandMetrics.effectiveTopOffset(
                 side: .right, isExpanded: true, topInset: 47) == 47,
@@ -1550,6 +1556,823 @@ struct LogicCheckMain {
                 "L18 terminal preference persisted")
             cfg.preferredTerminalBundleID = orig
             defaults.removeObject(forKey: "preferredTerminalBundleID")
+        }
+
+        // L19. Herdr direct socket protocol: NDJSON framing, request lines,
+        // response/error parsing, socket path resolution.
+        let sockRequest = HerdrSocketProtocol.requestLine(
+            id: "req_1", method: "agent.list")
+        check(
+            sockRequest == #"{"id":"req_1","method":"agent.list","params":{}}"#,
+            "L19 request line shape (got \(sockRequest))")
+        let requestParams = HerdrSocketProtocol.requestLine(
+            id: "req_2", method: "pane.send_keys",
+            paramsJSON: #"{"pane_id":"w1:p1","keys":["y","enter"]}"#)
+        check(
+            requestParams.contains("pane.send_keys") && requestParams.contains("w1:p1"),
+            "L19 params embedded in request")
+        let okLine = #"{"id":"req_1","result":{"type":"pong"}}"#
+        guard let ok = HerdrSocketProtocol.parseResponseLine(okLine) else {
+            check(false, "L19 success response parses")
+            fatalError()
+        }
+        check(ok.id == "req_1" && !ok.isError, "L19 success id + no error")
+        check(
+            ok.result?.contains("pong") == true,
+            "L19 result JSON preserved (got \(String(describing: ok.result)))")
+        let errLine = #"{"id":"req_9","error":{"code":"not_found","message":"pane not found"}}"#
+        guard let err = HerdrSocketProtocol.parseResponseLine(errLine) else {
+            check(false, "L19 error response parses")
+            fatalError()
+        }
+        check(err.isError && err.errorCode == "not_found", "L19 error code parsed")
+        check(
+            err.errorMessage == "pane not found",
+            "L19 error message parsed (got \(String(describing: err.errorMessage)))")
+        check(
+            HerdrSocketProtocol.parseResponseLine("not json") == nil,
+            "L19 garbage line ignored")
+        check(
+            HerdrSocketProtocol.parseResponseLine(#"{"result":{"type":"pong"}}"#) == nil,
+            "L19 missing id ignored")
+        let lines = HerdrSocketProtocol.extractLines(
+            from: Data("\(okLine)\n\(errLine)\n".utf8))
+        check(lines.count == 2, "L19 NDJSON split into lines (got \(lines.count))")
+        check(
+            HerdrSocketProtocol.socketPath(
+                env: ["HERDR_SOCKET_PATH": "/tmp/custom.sock"], home: "/Users/x")
+                == "/tmp/custom.sock",
+            "L19 env socket path wins")
+        check(
+            HerdrSocketProtocol.socketPath(env: [:], home: "/Users/x")
+                == "/Users/x/.config/herdr/herdr.sock",
+            "L19 default socket path")
+
+        // L20. Claude Code hook installer: settings merge (preserves existing
+        // keys/hooks), hook command, payload mapping.
+        let command = ClaudeHookInstaller.hookCommand(port: 41817)
+        check(
+            command.contains("127.0.0.1:41817/events") && command.contains("curl"),
+            "L20 hook command posts to ingest (got \(command))")
+        let merged = ClaudeHookInstaller.mergedSettings(
+            existing: ["model": "opus", "hooks": ["PreToolUse": [["matcher": ""]]]],
+            port: 41817)
+        check(merged["model"] as? String == "opus", "L20 unrelated settings preserved")
+        let hooks = merged["hooks"] as? [String: Any]
+        check(
+            hooks?["PreToolUse"] != nil && hooks?["PermissionPrompt"] != nil
+                && hooks?["Stop"] != nil,
+            "L20 existing hooks preserved + bantay hooks added")
+        let permission = ClaudeHookInstaller.mapToEventPayload([
+            "hook_event_name": "PermissionPrompt",
+            "tool_name": "Bash",
+            "tool_input": ["command": "rm -rf build"],
+            "permission_prompt_mode": "default",
+        ])
+        check(
+            permission?["type"] as? String == "access_request",
+            "L20 PermissionPrompt maps to access_request")
+        check(
+            permission?["title"] as? String == "rm -rf build",
+            "L20 tool_input command becomes title")
+        check(
+            permission?["variance"] as? String == "yes_no",
+            "L20 prompt defaults to yes_no")
+        let stop = ClaudeHookInstaller.mapToEventPayload([
+            "hook_event_name": "Stop",
+            "tool_name": "Bash",
+        ])
+        check(
+            stop?["type"] as? String == "completed",
+            "L20 Stop maps to completed")
+        check(
+            ClaudeHookInstaller.mapToEventPayload(["hook_event_name": "SubagentStart"]) == nil,
+            "L20 unhandled events ignored")
+
+        // L21. Visibility policy: island shows when enabled/not snoozed and
+        // (hasWork || showWhenIdle || forced); hideAtStartup only gates until
+        // first show; config persistence.
+        let v: (Bool, Bool, Bool, Bool, Bool, Bool, Bool) -> Bool = {
+            IslandMetrics.VisibilityPolicy.shouldShow(
+                islandEnabled: $0, snoozed: $1, hideAtStartup: $2, didShowOnce: $3,
+                hasWork: $4, showWhenIdle: $5, forced: $6)
+        }
+        check(
+            v(true, false, false, true, true, false, false),
+            "L21 work shows island")
+        check(
+            v(true, false, true, false, false, true, false),
+            "L21 showWhenIdle shows island at launch despite hideAtStartup")
+        check(
+            v(true, false, true, false, false, false, true),
+            "L21 forced shows island despite hideAtStartup")
+        check(
+            v(true, false, true, true, true, false, false),
+            "L21 hideAtStartup un-gates after first show")
+        check(
+            !v(false, false, false, true, true, false, false),
+            "L21 disabled island never shows")
+        check(
+            !v(true, true, false, true, true, false, false),
+            "L21 snoozed island never shows")
+        check(
+            !v(true, false, true, false, false, false, false),
+            "L21 hideAtStartup + no work + not idle-show hides")
+        check(
+            v(true, false, false, true, false, false, true),
+            "L21 forced shows even without work")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.showIslandWhenIdle
+            check(cfg.showIslandWhenIdle, "L21 idle-show default on")
+            cfg.showIslandWhenIdle = false
+            check(
+                defaults.bool(forKey: "showIslandWhenIdle") == false,
+                "L21 idle-show persisted")
+            cfg.showIslandWhenIdle = orig
+            defaults.removeObject(forKey: "showIslandWhenIdle")
+        }
+
+        // L22. Queue-card display cap: many-choice prompts collapse to
+        // maxDisplayedOptions buttons + `+N` overflow (keyboard 1-9 still
+        // covers all options), so cards never overflow the panel width.
+        let tenChoices = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: Array(repeating: "x", count: 10))
+        check(
+            tenChoices.displayedLabels().count == IslandMetrics.ApprovalControls.maxDisplayedOptions,
+            "L22 ten choices collapse to \(IslandMetrics.ApprovalControls.maxDisplayedOptions) buttons")
+        check(tenChoices.overflowCount() == 4, "L22 overflow shows +4 (got \(tenChoices.overflowCount()))")
+        let three = IslandMetrics.ApprovalControls.make(
+            variance: .choices, choices: ["a", "b", "c"])
+        check(three.displayedLabels().count == 3 && three.overflowCount() == 0, "L22 under-cap shows all")
+        let exact = IslandMetrics.ApprovalControls.make(
+            variance: .choices, choices: Array(repeating: "x", count: 6))
+        check(exact.overflowCount() == 0, "L22 exactly-cap has no overflow")
+        check(
+            IslandMetrics.ApprovalControls.maxDisplayedOptions >= 4
+                && IslandMetrics.ApprovalControls.maxDisplayedOptions <= 8,
+            "L22 cap stays in sane range")
+        let small = IslandMetrics.ApprovalControls.make(variance: .multi, choices: Array(repeating: "x", count: 10))
+        check(
+            small.displayedLabels(cap: 2).count == 2 && small.overflowCount(cap: 2) == 8,
+            "L22 custom cap respected")
+
+        // L23. Centered idle split + fit-aware chips.
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .center, isExpanded: false, topInset: 47) == 0,
+            "L23 centered idle sits in the notch row")
+        check(
+            IslandMetrics.effectiveTopOffset(
+                side: .center, isExpanded: true, topInset: 47) == 47,
+            "L23 centered expanded still drops under the menu bar")
+        let side = IslandMetrics.centeredSideWidth(windowWidth: 504, notchWidth: 200)
+        check(abs(side - 142) < 0.01, "L23 centered side width (got \(side))")
+        check(
+            IslandMetrics.centeredSideWidth(windowWidth: 200, notchWidth: 200) == 0,
+            "L23 no room for sides when window == notch")
+        let fit1 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 3, nameLengths: [4, 4, 4], availableWidth: 200)
+        check(fit1 == 3, "L23 wide clearance fits all three (got \(fit1))")
+        let fit2 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 3, nameLengths: [4, 4, 4], availableWidth: 90)
+        check(fit2 >= 1 && fit2 < 3, "L23 tight clearance truncates (got \(fit2))")
+        let fit3 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 2, nameLengths: [4, 4, 4], availableWidth: 500)
+        check(fit3 == 2, "L23 fit never exceeds maxChips (got \(fit3))")
+        check(
+            IslandMetrics.idleFitChips(
+                agentCount: 0, maxChips: 3, nameLengths: [], availableWidth: 200) == 0,
+            "L23 empty roster fits nothing")
+        let fit4 = IslandMetrics.idleFitChips(
+            agentCount: 3, maxChips: 3, nameLengths: [30, 30, 30], availableWidth: 200)
+        check(fit4 >= 1 && fit4 <= 3, "L23 long names shrink fit (got \(fit4))")
+        check(fit4 <= fit1, "L23 longer names never fit more than short ones")
+
+        // L24. Expanded height accounts for the shelf tab bar, divider, and
+        // +N overflow rows — otherwise the bottom roster rows clip.
+        let baseSize = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
+        let withTab = IslandMetrics.expandedSize(
+            topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true)
+        check(
+            abs(
+                withTab.height - baseSize.height
+                    - (IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight)) < 0.01,
+            "L24 shelf tab adds tab+divider height (got \(withTab.height) vs \(baseSize.height))")
+        let withOverflow = IslandMetrics.expandedSize(
+            topInset: 47, agentCount: 3, queueCount: 0, overflowCount: 2)
+        check(
+            abs(
+                withOverflow.height - baseSize.height - 2 * IslandMetrics.overflowRowHeight)
+                < 0.01,
+            "L24 overflow rows add height (got \(withOverflow.height) vs \(baseSize.height))")
+        let both = IslandMetrics.expandedSize(
+            topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true,
+            overflowCount: 1)
+        let expected =
+            baseSize.height + IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight
+            + IslandMetrics.overflowRowHeight
+        check(abs(both.height - expected) < 0.01, "L24 tab + overflow stack correctly")
+        check(
+            IslandMetrics.contentHeight(
+                isExpanded: true, topInset: 47, agentCount: 3,
+                shelfTabVisible: true) == withTab.height - 47,
+            "L24 content height excludes top inset with tab chrome")
+        check(
+            IslandMetrics.expandedSize(topInset: 47, agentCount: 3).height
+                <= IslandMetrics.maxExpandedHeight,
+            "L24 cap still applies")
+        check(
+            IslandMetrics.shelfTabBarHeight > 0 && IslandMetrics.dividerHeight > 0
+                && IslandMetrics.overflowRowHeight > 0,
+            "L24 chrome constants positive")
+
+        // L25. Per-source mute filters the published roster and persists;
+        // the roster scroll area is capped so chrome stays visible.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.mutedSources
+            cfg.mutedSources = ["codex"]
+            check(
+                defaults.stringArray(forKey: "mutedSources") == ["codex"],
+                "L25 muted source persisted")
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l25-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let kilo = AgentSnapshot(
+                id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
+                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let codex = AgentSnapshot(
+                id: "p2", source: "codex", kind: .progress, title: nil, message: nil,
+                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let visible = manager.mergeApprovals(into: [kilo, codex])
+            check(
+                visible.map(\.source) == ["kilo"],
+                "L25 muted source filtered from roster (got \(visible.map(\.source)))")
+            cfg.mutedSources = []
+            let all = manager.mergeApprovals(into: [kilo, codex])
+            check(all.count == 2, "L25 unmuted roster restored")
+            cfg.mutedSources = orig
+            defaults.removeObject(forKey: "mutedSources")
+        }
+
+        // L26. herdr binary discovery covers every install location:
+        // HERDR_INSTALL_DIR, PATH, ~/.local/bin (official installer), both
+        // Homebrew prefixes, and ~/.herdr/bin, deduped in priority order.
+        let envNoHerdr = [
+            "PATH": "/usr/bin:/bin",
+        ]
+        let pathsNoOverride = HerdrSocketAdapter.candidateHerdrPaths(
+            env: envNoHerdr, home: "/Users/someone")
+        check(
+            pathsNoOverride == [
+                "/usr/bin/herdr", "/bin/herdr", "/Users/someone/.local/bin/herdr",
+                "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr",
+                "/Users/someone/.herdr/bin/herdr",
+            ],
+            "L26 fallback chain in priority order (got \(pathsNoOverride))")
+        let withOverride = HerdrSocketAdapter.candidateHerdrPaths(
+            env: ["HERDR_INSTALL_DIR": "/custom/bin"], home: "/Users/someone")
+        check(
+            withOverride.first == "/custom/bin/herdr",
+            "L26 HERDR_INSTALL_DIR wins (got \(String(describing: withOverride.first)))")
+        let deduped = HerdrSocketAdapter.candidateHerdrPaths(
+            env: ["PATH": "/opt/homebrew/bin:/usr/local/bin"], home: "/Users/someone")
+        check(
+            deduped.filter { $0 == "/opt/homebrew/bin/herdr" }.count == 1,
+            "L26 PATH candidates dedupe against fallbacks")
+        let customName = HerdrSocketAdapter.candidateHerdrPaths(
+            env: [:], home: "/Users/someone", binName: "herdr-bin")
+        check(
+            customName.first == "/Users/someone/.local/bin/herdr-bin",
+            "L26 custom binary name honored")
+
+        // L27. pane list tries --format json first (herdr < 0.8), then the
+        // plain JSON-only form (herdr 0.8+).
+        let variants = HerdrSocketAdapter.paneListCommandVariants()
+        check(
+            variants.count == 2 && variants[0] == ["pane", "list", "--format", "json"]
+                && variants[1] == ["pane", "list"],
+            "L27 pane list variants: flag first, plain fallback (got \(variants))")
+
+        // L28. Disabling the Claude hook removes only Bantay's entries; hooks
+        // installed by other tools (herdr integration) survive.
+        let settingsWithHooks: [String: Any] = [
+            "apiKeyHelper": "default",
+            "hooks": [
+                "PermissionPrompt": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            ["type": "command", "command": "herdr-claude-integration"]
+                        ],
+                    ],
+                    [
+                        "matcher": "bantay",
+                        "hooks": [
+                            [
+                                "type": "command",
+                                "command":
+                                    "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
+                            ]
+                        ],
+                    ],
+                ],
+                "Stop": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            [
+                                "type": "command",
+                                "command":
+                                    "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
+                            ]
+                        ],
+                    ],
+                ],
+                "PostToolUse": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            ["type": "command", "command": "some-other-tool"]
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        let stripped = ClaudeHookInstaller.removingBantayHooks(from: settingsWithHooks)
+        let strippedHooks = stripped["hooks"] as? [String: Any]
+        check(
+            stripped["apiKeyHelper"] as? String == "default",
+            "L28 unrelated settings preserved")
+        check(
+            (strippedHooks?["PermissionPrompt"] as? [[String: Any]])?.count == 1,
+            "L28 herdr PermissionPrompt entry survives")
+        check(
+            strippedHooks?["Stop"] == nil,
+            "L28 bantay-only Stop entry removed")
+        check(
+            (strippedHooks?["PostToolUse"] as? [[String: Any]])?.count == 1,
+            "L28 unrelated event hooks untouched")
+        let allBantay: [String: Any] = [
+            "hooks": [
+                "Stop": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            [
+                                "type": "command",
+                                "command":
+                                    "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
+                            ]
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        let emptyHooks = ClaudeHookInstaller.removingBantayHooks(from: allBantay)
+        check(
+            emptyHooks["hooks"] == nil,
+            "L28 empty hooks key removed entirely")
+        let noHooks: [String: Any] = ["apiKeyHelper": "default"]
+        check(
+            (ClaudeHookInstaller.removingBantayHooks(from: noHooks)["hooks"]) == nil,
+            "L28 settings without hooks unchanged")
+
+        // L28b. Hook merge appends instead of overwriting, and removal filters
+        // per hook, so foreign hooks sharing an entry survive (kilo review on
+        // PR 16).
+        let foreignPermission: [String: Any] = [
+            "matcher": "",
+            "hooks": [["type": "command", "command": "foreign-tool"]],
+        ]
+        let withForeign = ClaudeHookInstaller.mergedSettings(
+            existing: ["hooks": ["PermissionPrompt": [foreignPermission]]], port: 41817)
+        let mergedPermission = (withForeign["hooks"] as? [String: Any])?["PermissionPrompt"]
+            as? [[String: Any]]
+        check(
+            mergedPermission?.count == 2,
+            "L28b foreign + bantay entries coexist after merge")
+        let remerged = ClaudeHookInstaller.mergedSettings(existing: withForeign, port: 41817)
+        let rePermission = (remerged["hooks"] as? [String: Any])?["PermissionPrompt"]
+            as? [[String: Any]]
+        check(
+            rePermission?.count == 2,
+            "L28b re-merge does not duplicate bantay entries")
+        let bantayCommand = ClaudeHookInstaller.hookCommand(port: 41817)
+        let sharedEntry: [String: Any] = [
+            "matcher": "",
+            "hooks": [
+                ["type": "command", "command": bantayCommand],
+                ["type": "command", "command": "foreign-tool"],
+            ],
+        ]
+        let strippedShared = ClaudeHookInstaller.removingBantayHooks(
+            from: ["hooks": ["Stop": [sharedEntry]]])
+        let stopShared = (strippedShared["hooks"] as? [String: Any])?["Stop"]
+            as? [[String: Any]]
+        check(
+            stopShared?.count == 1,
+            "L28b shared entry keeps foreign hook")
+        check(
+            (stopShared?.first?["hooks"] as? [[String: Any]])?.count == 1,
+            "L28b only the bantay hook removed from shared entry")
+
+        // L28c. LaunchAgent install surfaces plist write failures and verifies
+        // the agent loaded (kilo review on PR 16).
+        let savedPlistPath = LaunchAgent.plistPath
+        let savedRunner = LaunchAgent.processRunner
+        LaunchAgent.processRunner = { _ in 0 }
+        LaunchAgent.plistPath = "/dev/null/bantay-impossible.plist"
+        check(
+            !LaunchAgent.install(binaryPath: "/bin/echo"),
+            "L28c install returns false when plist write fails")
+        let tmpPlist = NSTemporaryDirectory() + "bantay-logiccheck-\(UUID().uuidString).plist"
+        LaunchAgent.plistPath = tmpPlist
+        check(
+            LaunchAgent.install(binaryPath: "/bin/echo"),
+            "L28c install reports loaded when plist written + launchctl ok")
+        try? FileManager.default.removeItem(atPath: tmpPlist)
+        LaunchAgent.plistPath = savedPlistPath
+        LaunchAgent.processRunner = savedRunner
+
+        // L29. Agent classification covers the herdr 0.8 agent families; new
+        // families have no known transcript root but classify safely.
+        check(
+            AgentDetector.canonicalName(forProcess: "grok") == "grok"
+                && AgentDetector.canonicalName(forProcess: "agy") == "antigravity"
+                && AgentDetector.canonicalName(forProcess: "pi") == "pi"
+                && AgentDetector.canonicalName(forProcess: "copilot") == "copilot"
+                && AgentDetector.canonicalName(forProcess: "qoder-cli") == "qoder"
+                && AgentDetector.canonicalName(forProcess: "kimi") == "kimi"
+                && AgentDetector.canonicalName(forProcess: "hermes") == "hermes",
+            "L29 new agent families classified")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/Users/someone", name: "grok").isEmpty
+                && AgentDetector.transcriptSearchPaths(home: "/Users/someone", name: "pi").isEmpty,
+            "L29 unknown transcript roots are empty (no crash)")
+        let detectedGrok = StandaloneAgentScanner.detect(
+            samples: [
+                ProcessSample(
+                    pid: 42, name: "grok", command: "grok -p task", environmentLines: [])
+            ],
+            home: "/Users/someone")
+        check(
+            detectedGrok.first?.name == "grok" && detectedGrok.first?.activity == nil,
+            "L29 grok detected standalone with no transcript")
+
+        // L30. Muting fully suppresses a source: its events never become the
+        // pill (no sound, no approval attention); unmuting restores them.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.mutedSources
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l30-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let prompt = AgentEvent(
+                source: "codex", kind: .accessRequest, title: "run tests?",
+                message: nil, paneId: "3-1", workspaceId: nil,
+                variance: .yesNo, choices: nil, playSound: true, persistent: true)
+            cfg.mutedSources = ["codex"]
+            manager.publishEventForTesting(prompt)
+            check(
+                manager.currentEventForTesting == nil,
+                "L30 muted source never becomes the pill")
+            cfg.mutedSources = []
+            manager.publishEventForTesting(prompt)
+            check(
+                manager.currentEventForTesting?.source == "codex",
+                "L30 unmuted source surfaces again")
+            cfg.mutedSources = orig
+            defaults.removeObject(forKey: "mutedSources")
+        }
+
+        // L31. Quiet hours: window math with overnight wrap and exact
+        // boundaries; config persistence. Effect is sound suppression only —
+        // approvals stay visible, so nothing can be silently missed.
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 10 * 60, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 active mid-window")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 8 * 60 + 59, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 inactive before start")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 17 * 60, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 inactive at end boundary")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 9 * 60, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 active at start boundary")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 23 * 60, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight active past midnight")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 5 * 60 + 59, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight active before end")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 12 * 60, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight inactive midday")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 6 * 60, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight inactive at end")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 10 * 60, startMinutes: 10 * 60, endMinutes: 10 * 60),
+            "L31 zero-length window inactive")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 0, startMinutes: 0, endMinutes: 24 * 60),
+            "L31 full-day window active")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 1439, startMinutes: 0, endMinutes: 24 * 60),
+            "L31 full-day window active at 23:59")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 1440, startMinutes: 0, endMinutes: 24 * 60),
+            "L31 minutes clamped to 0...1439")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = (cfg.quietHoursEnabled, cfg.quietHoursStart, cfg.quietHoursEnd)
+            cfg.quietHoursEnabled = true
+            cfg.quietHoursStart = 22 * 60
+            cfg.quietHoursEnd = 6 * 60
+            check(
+                defaults.bool(forKey: "quietHoursEnabled")
+                    && defaults.integer(forKey: "quietHoursStart") == 1320
+                    && defaults.integer(forKey: "quietHoursEnd") == 360,
+                "L31 quiet hours persisted")
+            cfg.quietHoursEnabled = false
+            check(
+                !cfg.isInQuietHours(at: Date()),
+                "L31 disabled quiet hours inactive")
+            cfg.quietHoursEnabled = true
+            check(
+                cfg.isInQuietHours(at: dateWith(minutesSinceMidnight: 23 * 60)),
+                "L31 config active via date minutes")
+            cfg.quietHoursEnabled = orig.0
+            cfg.quietHoursStart = orig.1
+            cfg.quietHoursEnd = orig.2
+            defaults.removeObject(forKey: "quietHoursEnabled")
+            defaults.removeObject(forKey: "quietHoursStart")
+            defaults.removeObject(forKey: "quietHoursEnd")
+        }
+
+        // L32. LaunchAgent self-install: the app can create its own agent
+        // plist pointing at the running binary, bootstrap the data dir, and
+        // (re)load the agent — no setup.sh needed, so "Launch at login"
+        // works for distributed users.
+        do {
+            let oldPath = LaunchAgent.plistPath
+            let oldRunner = LaunchAgent.processRunner
+            let oldBin = LaunchAgent.defaultBinaryPath
+            let tmp = NSTemporaryDirectory() + "/bantay-l32-\(UUID().uuidString)"
+            let dataDir = tmp + "/Data"
+            let plist = tmp + "/agent.plist"
+            try? FileManager.default.createDirectory(
+                atPath: tmp, withIntermediateDirectories: true)
+            LaunchAgent.plistPath = plist
+            LaunchAgent.defaultBinaryPath = tmp + "/Bantay-TUI.app/Contents/MacOS/bantay"
+
+            var calls: [[String]] = []
+            LaunchAgent.processRunner = { args in
+                calls.append(args)
+                return 0
+            }
+
+            let content = LaunchAgent.plistContent(
+                binaryPath: LaunchAgent.defaultBinaryPath, dataDir: dataDir)
+            check(
+                content.contains("com.bantay-tui.agent"),
+                "L32 plist has agent label")
+            check(
+                content.contains(LaunchAgent.defaultBinaryPath),
+                "L32 plist runs the app binary")
+            check(
+                content.contains("RunAtLoad") && content.contains("KeepAlive"),
+                "L32 plist run-at-load and keep-alive flags")
+            check(
+                content.contains(dataDir + "/bantay.log")
+                    && content.contains(dataDir + "/bantay.err"),
+                "L32 plist log paths under data dir")
+
+            LaunchAgent.install(dataDir: dataDir)
+            check(
+                FileManager.default.fileExists(atPath: plist),
+                "L32 install writes plist")
+            check(
+                FileManager.default.fileExists(atPath: dataDir + "/agent-events.jsonl"),
+                "L32 install bootstraps events file")
+            check(
+                calls.contains(["bootout", "gui/\(getuid())/\(LaunchAgent.label)"]),
+                "L32 install boots out first")
+            check(
+                calls.contains(["bootstrap", "gui/\(getuid())", plist]),
+                "L32 install bootstraps agent")
+
+            let second = try? String(contentsOfFile: plist, encoding: .utf8)
+            check(second == content, "L32 install idempotent")
+
+            try? FileManager.default.removeItem(atPath: plist)
+            calls = []
+            LaunchAgent.setLaunchAtLogin(true)
+            check(
+                FileManager.default.fileExists(atPath: plist),
+                "L32 enable self-installs plist when absent")
+            check(
+                calls.contains { $0.first == "bootstrap" },
+                "L32 enable bootstraps after install")
+
+            calls = []
+            LaunchAgent.setLaunchAtLogin(false)
+            check(
+                !FileManager.default.fileExists(atPath: plist),
+                "L32 disable removes plist")
+            check(
+                calls.first == ["bootout", "gui/\(getuid())/\(LaunchAgent.label)"],
+                "L32 disable boots out")
+
+            calls = []
+            var bootstrapFailed = false
+            LaunchAgent.processRunner = { args in
+                calls.append(args)
+                if args.first == "bootstrap" {
+                    bootstrapFailed = true
+                    return 1
+                }
+                return 0
+            }
+            LaunchAgent.install(dataDir: dataDir)
+            check(
+                bootstrapFailed && calls.contains { $0.first == "load" },
+                "L32 legacy load fallback on bootstrap failure")
+
+            try? FileManager.default.removeItem(atPath: tmp)
+            LaunchAgent.plistPath = oldPath
+            LaunchAgent.processRunner = oldRunner
+            LaunchAgent.defaultBinaryPath = oldBin
+        }
+
+        // L33. Fallback event promotion picks the MOST severe unchanged agent
+        // (kilo review finding): `best` is severity-ascending, so the fallback
+        // must take `.last`, not `.first`.
+        var seen33: [String: AgentEventKind] = [:]
+        let first33 = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "w3:p1"),
+                agent("freebuff", "blocked", pane: "w3:p2"),
+            ],
+            lastSeenKinds: &seen33,
+            current: nil)
+        check(
+            first33.events.contains { $0.kind == .accessRequest },
+            "L33 blocked agent emits on first poll")
+        let second33 = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "w3:p1"),
+                agent("freebuff", "blocked", pane: "w3:p2"),
+            ],
+            lastSeenKinds: &seen33,
+            current: nil)
+        check(
+            second33.events.first?.source == "freebuff",
+            "L33 fallback promotes most severe (got \(String(describing: second33.events.first?.source)))")
+        check(
+            second33.events.first?.playSound == false,
+            "L33 fallback reshow is silent")
+
+        // L34. Hidden-island notifications: an approval arriving while the
+        // island is hidden (snoozed / hide-at-startup) must never be missed
+        // silently. Notification only for approval-ish kinds, never when the
+        // island is showing the event (no double signal), opt-in by default.
+        check(
+            IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .accessRequest),
+            "L34 hidden island notifies on approval")
+        check(
+            IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .waiting),
+            "L34 hidden island notifies on waiting")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .progress),
+            "L34 no notification for progress")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .completed),
+            "L34 no notification for completed")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .idle),
+            "L34 no notification for idle")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: false, kind: .accessRequest),
+            "L34 feature off never notifies")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: true, notifyWhenHidden: true, kind: .accessRequest),
+            "L34 visible island shows event, no notification")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.notifyWhenHidden
+            cfg.notifyWhenHidden = true
+            check(
+                defaults.bool(forKey: "notifyWhenHidden"),
+                "L34 notify toggle persisted")
+            cfg.notifyWhenHidden = orig
+            defaults.removeObject(forKey: "notifyWhenHidden")
+        }
+
+        // L35. herdr integration self-install for distributed users: the app
+        // writes its own event-adapter script + plugin manifest (absolute
+        // paths, no repo checkout) and registers via `plugin.link`.
+        do {
+            let tmp = NSTemporaryDirectory() + "/bantay-l35-\(UUID().uuidString)"
+            try? FileManager.default.createDirectory(
+                atPath: tmp, withIntermediateDirectories: true)
+            let dataDir = tmp + "/Data"
+            let manifest = dataDir + "/herdr-plugin.toml"
+            let adapterPath = dataDir + "/event-adapter.mjs"
+
+            let content = HerdrPluginInstaller.manifestContent(dataDir: dataDir)
+            check(
+                content.contains("id = \"bantay-tui.integration\""),
+                "L35 manifest keeps plugin id")
+            check(
+                content.contains("pane.agent_status_changed"),
+                "L35 manifest wires status events")
+            check(
+                content.contains(adapterPath),
+                "L35 manifest points at absolute adapter path")
+            check(
+                content.contains("command = [\"node\", \"\(adapterPath)\"]"),
+                "L35 manifest command line is well-formed TOML")
+            check(
+                !content.contains(adapterPath + "\"\"]"),
+                "L35 manifest has no doubled quote")
+            check(
+                !content.contains("scripts/setup.sh") && !content.contains("scripts/event-adapter.mjs"),
+                "L35 manifest has no repo-relative script references")
+
+            if let repo = FileManager.default.contents(atPath: FileManager.default.currentDirectoryPath + "/scripts/event-adapter.mjs"),
+                let repoText = String(data: repo, encoding: .utf8)
+            {
+                check(
+                    HerdrPluginInstaller.adapterScript == repoText,
+                    "L35 embedded adapter matches repo script (no drift)")
+            } else {
+                check(false, "L35 repo event-adapter.mjs unreadable")
+            }
+
+            check(
+                !HerdrPluginInstaller.isInstalled(manifestPath: manifest),
+                "L35 not installed before install")
+            check(
+                HerdrPluginInstaller.install(dataDir: dataDir, manifestPath: manifest),
+                "L35 install succeeds")
+            check(
+                FileManager.default.fileExists(atPath: adapterPath)
+                    && FileManager.default.fileExists(atPath: manifest),
+                "L35 install writes both files")
+            check(
+                HerdrPluginInstaller.isInstalled(manifestPath: manifest),
+                "L35 installed after install")
+            let firstManifest = try? String(contentsOfFile: manifest, encoding: .utf8)
+            let firstAdapter = try? String(contentsOfFile: adapterPath, encoding: .utf8)
+            _ = HerdrPluginInstaller.install(dataDir: dataDir, manifestPath: manifest)
+            let secondManifest = try? String(contentsOfFile: manifest, encoding: .utf8)
+            let secondAdapter = try? String(contentsOfFile: adapterPath, encoding: .utf8)
+            check(
+                firstManifest == secondManifest && firstAdapter == secondAdapter,
+                "L35 install idempotent")
+
+            HerdrPluginInstaller.uninstall(manifestPath: manifest)
+            check(
+                !FileManager.default.fileExists(atPath: adapterPath)
+                    && !FileManager.default.fileExists(atPath: manifest),
+                "L35 uninstall removes both files")
+            check(
+                !HerdrPluginInstaller.isInstalled(manifestPath: manifest),
+                "L35 not installed after uninstall")
+            HerdrPluginInstaller.uninstall(manifestPath: manifest)
+            check(true, "L35 uninstall tolerates missing files")
+
+            try? FileManager.default.removeItem(atPath: tmp)
         }
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
