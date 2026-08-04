@@ -114,6 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
+        // Data dir + events file always exist (setup.sh parity) so the
+        // events pipeline and LaunchAgent logs have a home.
+        LaunchAgent.ensureDataDirectory()
         makeIslandWindow()
         installMenuBar()
         observeScreenChanges()

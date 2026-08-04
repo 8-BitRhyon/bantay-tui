@@ -243,7 +243,7 @@ struct SettingsView: View {
             }
             Section("Startup") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
-                    .help("Requires the launch agent installed by scripts/setup.sh.")
+                    .help("Runs the app at login; installs the launch agent on first enable.")
                     .onChange(of: launchAtLogin) { newValue in
                         LaunchAgent.setLaunchAtLogin(newValue)
                     }

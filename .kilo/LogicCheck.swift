@@ -2074,6 +2074,101 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "quietHoursEnd")
         }
 
+        // L32. LaunchAgent self-install: the app can create its own agent
+        // plist pointing at the running binary, bootstrap the data dir, and
+        // (re)load the agent — no setup.sh needed, so "Launch at login"
+        // works for distributed users.
+        do {
+            let oldPath = LaunchAgent.plistPath
+            let oldRunner = LaunchAgent.processRunner
+            let oldBin = LaunchAgent.defaultBinaryPath
+            let tmp = NSTemporaryDirectory() + "/bantay-l32-\(UUID().uuidString)"
+            let dataDir = tmp + "/Data"
+            let plist = tmp + "/agent.plist"
+            try? FileManager.default.createDirectory(
+                atPath: tmp, withIntermediateDirectories: true)
+            LaunchAgent.plistPath = plist
+            LaunchAgent.defaultBinaryPath = tmp + "/Bantay-TUI.app/Contents/MacOS/bantay"
+
+            var calls: [[String]] = []
+            LaunchAgent.processRunner = { args in
+                calls.append(args)
+                return 0
+            }
+
+            let content = LaunchAgent.plistContent(
+                binaryPath: LaunchAgent.defaultBinaryPath, dataDir: dataDir)
+            check(
+                content.contains("com.bantay-tui.agent"),
+                "L32 plist has agent label")
+            check(
+                content.contains(LaunchAgent.defaultBinaryPath),
+                "L32 plist runs the app binary")
+            check(
+                content.contains("RunAtLoad") && content.contains("KeepAlive"),
+                "L32 plist run-at-load and keep-alive flags")
+            check(
+                content.contains(dataDir + "/bantay.log")
+                    && content.contains(dataDir + "/bantay.err"),
+                "L32 plist log paths under data dir")
+
+            LaunchAgent.install(dataDir: dataDir)
+            check(
+                FileManager.default.fileExists(atPath: plist),
+                "L32 install writes plist")
+            check(
+                FileManager.default.fileExists(atPath: dataDir + "/agent-events.jsonl"),
+                "L32 install bootstraps events file")
+            check(
+                calls.contains(["bootout", "gui/\(getuid())/\(LaunchAgent.label)"]),
+                "L32 install boots out first")
+            check(
+                calls.contains(["bootstrap", "gui/\(getuid())", plist]),
+                "L32 install bootstraps agent")
+
+            let second = try? String(contentsOfFile: plist, encoding: .utf8)
+            check(second == content, "L32 install idempotent")
+
+            try? FileManager.default.removeItem(atPath: plist)
+            calls = []
+            LaunchAgent.setLaunchAtLogin(true)
+            check(
+                FileManager.default.fileExists(atPath: plist),
+                "L32 enable self-installs plist when absent")
+            check(
+                calls.contains { $0.first == "bootstrap" },
+                "L32 enable bootstraps after install")
+
+            calls = []
+            LaunchAgent.setLaunchAtLogin(false)
+            check(
+                !FileManager.default.fileExists(atPath: plist),
+                "L32 disable removes plist")
+            check(
+                calls.first == ["bootout", "gui/\(getuid())/\(LaunchAgent.label)"],
+                "L32 disable boots out")
+
+            calls = []
+            var bootstrapFailed = false
+            LaunchAgent.processRunner = { args in
+                calls.append(args)
+                if args.first == "bootstrap" {
+                    bootstrapFailed = true
+                    return 1
+                }
+                return 0
+            }
+            LaunchAgent.install(dataDir: dataDir)
+            check(
+                bootstrapFailed && calls.contains { $0.first == "load" },
+                "L32 legacy load fallback on bootstrap failure")
+
+            try? FileManager.default.removeItem(atPath: tmp)
+            LaunchAgent.plistPath = oldPath
+            LaunchAgent.processRunner = oldRunner
+            LaunchAgent.defaultBinaryPath = oldBin
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
