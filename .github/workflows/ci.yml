@@ -66,7 +66,7 @@ jobs:
             Sources/BantayTUI/AgentEventManager.swift \
             Sources/BantayTUI/UsageTracker.swift \
             Sources/BantayTUI/EventIngestServer.swift \
-            Sources/BantayTUI/ShelfModel.swift \
+            Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
             Sources/BantayTUI/TerminalFocusser.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             .kilo/LogicCheck.swift
@@ -151,7 +151,7 @@ jobs:
             Sources/BantayTUI/AgentEventManager.swift \
             Sources/BantayTUI/UsageTracker.swift \
             Sources/BantayTUI/EventIngestServer.swift \
-            Sources/BantayTUI/ShelfModel.swift \
+            Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
             Sources/BantayTUI/TerminalFocusser.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             .kilo/LogicCheck.swift

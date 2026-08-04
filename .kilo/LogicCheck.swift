@@ -2241,6 +2241,83 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "notifyWhenHidden")
         }
 
+        // L35. herdr integration self-install for distributed users: the app
+        // writes its own event-adapter script + plugin manifest (absolute
+        // paths, no repo checkout) and registers via `plugin.link`.
+        do {
+            let tmp = NSTemporaryDirectory() + "/bantay-l35-\(UUID().uuidString)"
+            try? FileManager.default.createDirectory(
+                atPath: tmp, withIntermediateDirectories: true)
+            let dataDir = tmp + "/Data"
+            let manifest = dataDir + "/herdr-plugin.toml"
+            let adapterPath = dataDir + "/event-adapter.mjs"
+
+            let content = HerdrPluginInstaller.manifestContent(dataDir: dataDir)
+            check(
+                content.contains("id = \"bantay-tui.integration\""),
+                "L35 manifest keeps plugin id")
+            check(
+                content.contains("pane.agent_status_changed"),
+                "L35 manifest wires status events")
+            check(
+                content.contains(adapterPath),
+                "L35 manifest points at absolute adapter path")
+            check(
+                content.contains("command = [\"node\", \"\(adapterPath)\"]"),
+                "L35 manifest command line is well-formed TOML")
+            check(
+                !content.contains(adapterPath + "\"\"]"),
+                "L35 manifest has no doubled quote")
+            check(
+                !content.contains("scripts/setup.sh") && !content.contains("scripts/event-adapter.mjs"),
+                "L35 manifest has no repo-relative script references")
+
+            if let repo = FileManager.default.contents(atPath: FileManager.default.currentDirectoryPath + "/scripts/event-adapter.mjs"),
+                let repoText = String(data: repo, encoding: .utf8)
+            {
+                check(
+                    HerdrPluginInstaller.adapterScript == repoText,
+                    "L35 embedded adapter matches repo script (no drift)")
+            } else {
+                check(false, "L35 repo event-adapter.mjs unreadable")
+            }
+
+            check(
+                !HerdrPluginInstaller.isInstalled(manifestPath: manifest),
+                "L35 not installed before install")
+            check(
+                HerdrPluginInstaller.install(dataDir: dataDir, manifestPath: manifest),
+                "L35 install succeeds")
+            check(
+                FileManager.default.fileExists(atPath: adapterPath)
+                    && FileManager.default.fileExists(atPath: manifest),
+                "L35 install writes both files")
+            check(
+                HerdrPluginInstaller.isInstalled(manifestPath: manifest),
+                "L35 installed after install")
+            let firstManifest = try? String(contentsOfFile: manifest, encoding: .utf8)
+            let firstAdapter = try? String(contentsOfFile: adapterPath, encoding: .utf8)
+            _ = HerdrPluginInstaller.install(dataDir: dataDir, manifestPath: manifest)
+            let secondManifest = try? String(contentsOfFile: manifest, encoding: .utf8)
+            let secondAdapter = try? String(contentsOfFile: adapterPath, encoding: .utf8)
+            check(
+                firstManifest == secondManifest && firstAdapter == secondAdapter,
+                "L35 install idempotent")
+
+            HerdrPluginInstaller.uninstall(manifestPath: manifest)
+            check(
+                !FileManager.default.fileExists(atPath: adapterPath)
+                    && !FileManager.default.fileExists(atPath: manifest),
+                "L35 uninstall removes both files")
+            check(
+                !HerdrPluginInstaller.isInstalled(manifestPath: manifest),
+                "L35 not installed after uninstall")
+            HerdrPluginInstaller.uninstall(manifestPath: manifest)
+            check(true, "L35 uninstall tolerates missing files")
+
+            try? FileManager.default.removeItem(atPath: tmp)
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
