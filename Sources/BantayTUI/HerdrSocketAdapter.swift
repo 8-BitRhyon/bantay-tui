@@ -159,7 +159,11 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         if let viaSocket = await listAgentsViaSocket() {
             return viaSocket
         }
-        let output = runHerdr(["agent", "list"])
+        // runHerdr blocks on a child process; hop off the caller's executor
+        // so a MainActor caller never stalls the UI thread.
+        let output = await Task.detached { [self] in
+            self.runHerdr(["agent", "list"])
+        }.value
         guard !output.isEmpty else { return [] }
 
         let decoder = JSONDecoder()

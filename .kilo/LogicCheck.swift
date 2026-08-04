@@ -2169,6 +2169,34 @@ struct LogicCheckMain {
             LaunchAgent.defaultBinaryPath = oldBin
         }
 
+        // L33. Fallback event promotion picks the MOST severe unchanged agent
+        // (kilo review finding): `best` is severity-ascending, so the fallback
+        // must take `.last`, not `.first`.
+        var seen33: [String: AgentEventKind] = [:]
+        let first33 = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "w3:p1"),
+                agent("freebuff", "blocked", pane: "w3:p2"),
+            ],
+            lastSeenKinds: &seen33,
+            current: nil)
+        check(
+            first33.events.contains { $0.kind == .accessRequest },
+            "L33 blocked agent emits on first poll")
+        let second33 = AgentEventManager.update(
+            from: [
+                agent("kilo", "working", pane: "w3:p1"),
+                agent("freebuff", "blocked", pane: "w3:p2"),
+            ],
+            lastSeenKinds: &seen33,
+            current: nil)
+        check(
+            second33.events.first?.source == "freebuff",
+            "L33 fallback promotes most severe (got \(String(describing: second33.events.first?.source)))")
+        check(
+            second33.events.first?.playSound == false,
+            "L33 fallback reshow is silent")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

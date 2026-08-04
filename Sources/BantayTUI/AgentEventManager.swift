@@ -419,7 +419,9 @@ extension AgentEventManager {
         }
 
         if effective == nil,
-            let top = best.first,
+            // best is sorted ascending by severity; the fallback should
+            // promote the most important remaining agent, not the least.
+            let top = best.last,
             lastSeenKinds[top.identityKey] == top.kind,
             !events.contains(where: { $0.paneId ?? $0.source == top.paneId ?? top.source })
         {
