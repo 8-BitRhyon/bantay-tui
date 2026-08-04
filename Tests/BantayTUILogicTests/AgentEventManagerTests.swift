@@ -243,7 +243,8 @@ final class AgentEventManagerTests: XCTestCase {
             agentStatus: "blocked",
             paneId: "w3:p3",
             workspaceId: "w3",
-            terminalTitle: "Kilo CLI | Working")
+            terminalTitle: "Kilo CLI | Working",
+            cwd: "/Users/runner/work/bantay-tui/bantay-tui")
         let snapshot = AgentEventManager.snapshot(for: agent)
         XCTAssertEqual(snapshot?.source, "kilo")
         XCTAssertEqual(snapshot?.kind, .accessRequest)
@@ -261,7 +262,8 @@ final class AgentEventManagerTests: XCTestCase {
             agentStatus: status,
             paneId: pane,
             workspaceId: String(pane.split(separator: ":").first ?? ""),
-            terminalTitle: "\(name) | \(status)")
+            terminalTitle: "\(name) | \(status)",
+            cwd: nil)
     }
 
     func testFirstPollEmitsWorkingEvent() {
