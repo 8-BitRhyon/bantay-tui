@@ -13,7 +13,7 @@ jobs:
   universal-package:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Build and stage universal2 app
         run: scripts/setup.sh --package
@@ -47,21 +47,42 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Publish updated cask sha256
+      - name: Publish updated cask via PR
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           SHA="$(shasum -a 256 dist/bantay-tui.zip | awk '{print $1}')"
-          sed -i '' -E "s/sha256 \"[0-9a-f]{64}\"/sha256 \"$SHA\"/" Cask/bantay-tui.rb
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Match either the placeholder ("REPLACE_WITH_ZIP_SHA256") or an
+          # existing 64-hex sha, and always sync version from the tag so the
+          # cask URL (v#{version}) and checksum never drift from the release.
+          sed -i '' -E "s/sha256 \".*\"/sha256 \"$SHA\"/" Cask/bantay-tui.rb
+          sed -i '' -E "s/version \".*\"/version \"$VERSION\"/" Cask/bantay-tui.rb
+          if git diff --quiet Cask/bantay-tui.rb; then
+            echo "cask already up to date; nothing to commit"
+            exit 0
+          fi
+          BRANCH="release/cask-v$VERSION"
           git config user.name "bantay-tui bot"
           git config user.email "bot@bantay-tui.invalid"
+          git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
           git add Cask/bantay-tui.rb
-          git commit -m "release: update cask sha256 to $SHA"
-          git push origin HEAD:main
+          git commit -m "release: update cask to v$VERSION (sha256 $SHA)"
+          git push origin "$BRANCH" 2>/dev/null || git push -f origin "$BRANCH"
+          # main is PR-protected, so the cask update lands as a PR that the
+          # maintainer merges; CI runs the normal gates on it.
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "release: cask update for v$VERSION" \
+            --body "Automated by the release workflow for tag $GITHUB_REF_NAME.
+
+            - version: $VERSION
+            - sha256: $SHA" || true
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.7.0
         with:
           name: bantay-tui
           path: dist/bantay-tui.zip
