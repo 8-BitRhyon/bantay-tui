@@ -225,10 +225,14 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
             env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
         if FileManager.default.fileExists(atPath: path) {
             let client = HerdrSocketClient(socketURL: URL(fileURLWithPath: path))
-            if let response = await client.call(
-                method: "pane.read",
-                paramsJSON: "{\"pane_id\":\"\(paneId)\",\"source\":\"recent\",\"lines\":\(lines)}"
-            ),
+            let params: [String: Any] = ["pane_id": paneId, "source": "recent", "lines": lines]
+            let paramsJSON = (try? JSONSerialization.data(withJSONObject: params))
+                .flatMap { String(data: $0, encoding: .utf8) }
+            if let paramsJSON,
+                let response = await client.call(
+                    method: "pane.read",
+                    paramsJSON: paramsJSON
+                ),
                 let result = response.result,
                 let data = result.data(using: .utf8),
                 let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

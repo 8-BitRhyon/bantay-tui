@@ -1570,7 +1570,10 @@ struct NotchStatusView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(0)
                 .onAppear { fetchDiffStats(agent) }
-                .onChange(of: agent.cwd) { _ in fetchDiffStats(agent) }
+                .onChange(of: agent.cwd) { _ in
+                    diffStats[agent.id] = nil
+                    fetchDiffStats(agent)
+                }
                 if let paneId = agent.paneId {
                     Button(action: { adapter.focusPane(paneId: paneId) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
