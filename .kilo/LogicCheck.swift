@@ -2197,6 +2197,50 @@ struct LogicCheckMain {
             second33.events.first?.playSound == false,
             "L33 fallback reshow is silent")
 
+        // L34. Hidden-island notifications: an approval arriving while the
+        // island is hidden (snoozed / hide-at-startup) must never be missed
+        // silently. Notification only for approval-ish kinds, never when the
+        // island is showing the event (no double signal), opt-in by default.
+        check(
+            IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .accessRequest),
+            "L34 hidden island notifies on approval")
+        check(
+            IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .waiting),
+            "L34 hidden island notifies on waiting")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .progress),
+            "L34 no notification for progress")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .completed),
+            "L34 no notification for completed")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, kind: .idle),
+            "L34 no notification for idle")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: false, kind: .accessRequest),
+            "L34 feature off never notifies")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: true, notifyWhenHidden: true, kind: .accessRequest),
+            "L34 visible island shows event, no notification")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.notifyWhenHidden
+            cfg.notifyWhenHidden = true
+            check(
+                defaults.bool(forKey: "notifyWhenHidden"),
+                "L34 notify toggle persisted")
+            cfg.notifyWhenHidden = orig
+            defaults.removeObject(forKey: "notifyWhenHidden")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

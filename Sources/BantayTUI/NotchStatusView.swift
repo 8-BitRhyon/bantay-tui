@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 struct NotchStatusView: View {
     @EnvironmentObject var eventManager: AgentEventManager
@@ -1412,6 +1413,15 @@ struct NotchStatusView: View {
             if event.playSound && eventManager.shouldPlaySound(for: event) {
                 playSound(for: event)
             }
+            // Approvals landing while the island is hidden (snoozed / startup)
+            // must never vanish silently — Notification Center fallback.
+            if IslandMetrics.shouldPostNotification(
+                islandVisible: AppDelegate.window?.isVisible ?? false,
+                notifyWhenHidden: NotchHUDConfig.shared.notifyWhenHidden,
+                kind: event.kind)
+            {
+                postHiddenApprovalNotification(for: event)
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 withAnimation(.easeInOut(duration: 0.3)) { showDetail = true }
             }
@@ -1487,6 +1497,18 @@ struct NotchStatusView: View {
         guard let sound = NSSound(named: event.kind.soundName) else { return }
         sound.volume = config.soundVolume
         sound.play()
+    }
+
+    /// Notification Center fallback for approvals that arrive while the
+    /// island is hidden. Best-effort: permission failures are ignored.
+    private func postHiddenApprovalNotification(for event: AgentEvent) {
+        let content = UNMutableNotificationContent()
+        content.title = "\(event.source) needs approval"
+        content.body = event.title ?? event.message ?? event.kind.label
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: event.identityKey, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     private func isTerminalFocused() -> Bool {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
@@ -41,6 +42,7 @@ struct SettingsView: View {
     @State private var quietHoursEnabled = NotchHUDConfig.shared.quietHoursEnabled
     @State private var quietHoursStart = NotchHUDConfig.shared.quietHoursStart
     @State private var quietHoursEnd = NotchHUDConfig.shared.quietHoursEnd
+    @State private var notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
 
     var body: some View {
         Form {
@@ -186,6 +188,20 @@ struct SettingsView: View {
                 Toggle("Mute while in Terminal", isOn: $muteInTerminal)
                     .onChange(of: muteInTerminal) { newValue in
                         NotchHUDConfig.shared.muteInTerminal = newValue
+                    }
+                Toggle("Notify when island hidden", isOn: $notifyWhenHidden)
+                    .help(
+                        "Approvals arriving while the island is hidden or "
+                            + "snoozed post a Notification Center alert."
+                    )
+                    .onChange(of: notifyWhenHidden) { newValue in
+                        NotchHUDConfig.shared.notifyWhenHidden = newValue
+                        if newValue {
+                            UNUserNotificationCenter.current()
+                                .requestAuthorization(options: [.alert, .sound]) {
+                                    _, _ in
+                                }
+                        }
                     }
                 Button("Play alert sound preview") {
                     let names = ["Ping", "Glass", "Submarine"]
