@@ -69,7 +69,10 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
     }
 
     func paneFocus(paneId: String) {
-        _ = runHerdr(["agent", "focus", paneId], timeout: 1.0)
+        Task {
+            if await socketCall("agent.focus", params: ["pane_id": paneId]) { return }
+            _ = runHerdr(["agent", "focus", paneId], timeout: 1.0)
+        }
     }
 
     func focusPane(paneId: String) {
@@ -82,9 +85,14 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
 
     /// Sends raw key presses to an agent's terminal. Works without focus.
     func sendKeys(paneId: String, keys: [String]) {
-        var arguments = ["agent", "send-keys", paneId]
-        arguments.append(contentsOf: keys)
-        _ = runHerdr(arguments, timeout: 1.0)
+        Task {
+            if await socketCall("agent.send_keys", params: ["pane_id": paneId, "keys": keys]) {
+                return
+            }
+            var arguments = ["agent", "send-keys", paneId]
+            arguments.append(contentsOf: keys)
+            _ = runHerdr(arguments, timeout: 1.0)
+        }
     }
 
     /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter).
@@ -197,8 +205,43 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
 
     // MARK: - PlexerAdapter
 
-    func captureTail(paneId: String, lines: Int) -> String {
-        runHerdr(
+    /// One-shot socket call. Returns true on a successful (non-error) response,
+    /// false on transport/protocol failure so the caller can fall back to the
+    /// CLI. Socket RTT is sub-millisecond vs. a ~100ms Process spawn.
+    private func socketCall(_ method: String, params: [String: Any]) async -> Bool {
+        let path = HerdrSocketProtocol.socketPath(
+            env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        let client = HerdrSocketClient(socketURL: URL(fileURLWithPath: path))
+        guard let data = try? JSONSerialization.data(withJSONObject: params),
+            let paramsJSON = String(data: data, encoding: .utf8)
+        else { return false }
+        let response = await client.call(method: method, paramsJSON: paramsJSON)
+        return response?.isError == false
+    }
+
+    func captureTail(paneId: String, lines: Int) async -> String {
+        let path = HerdrSocketProtocol.socketPath(
+            env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+        if FileManager.default.fileExists(atPath: path) {
+            let client = HerdrSocketClient(socketURL: URL(fileURLWithPath: path))
+            let params: [String: Any] = ["pane_id": paneId, "source": "recent", "lines": lines]
+            let paramsJSON = (try? JSONSerialization.data(withJSONObject: params))
+                .flatMap { String(data: $0, encoding: .utf8) }
+            if let paramsJSON,
+                let response = await client.call(
+                    method: "pane.read",
+                    paramsJSON: paramsJSON
+                ),
+                let result = response.result,
+                let data = result.data(using: .utf8),
+                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let text = obj["text"] as? String
+            {
+                return text
+            }
+        }
+        return runHerdr(
             ["pane", "read", paneId, "--source", "recent", "--lines", "\(lines)"],
             timeout: 2.0)
     }
@@ -222,6 +265,7 @@ struct HerdrAgentInfo: Decodable, Sendable {
     let paneId: String?
     let workspaceId: String?
     let terminalTitle: String?
+    let cwd: String?
 
     enum CodingKeys: String, CodingKey {
         case agent
@@ -229,6 +273,7 @@ struct HerdrAgentInfo: Decodable, Sendable {
         case paneId = "pane_id"
         case workspaceId = "workspace_id"
         case terminalTitle = "terminal_title_stripped"
+        case cwd
     }
 }
 

@@ -24,6 +24,7 @@ adversarial corpus (`try to break it`) grows with every plan.
 | 006  | Spec-driven discipline + adversarial test suite (RED→GREEN) | P1 | M |  -  | IN PROGRESS |
 | 010  | In-app integration: LaunchAgent self-install + events bootstrap | P2 | S |  -  | DONE — no setup.sh needed for launch-at-login (2026-08-04) |
 | 011  | Hidden-island approval notifications (Notification Center fallback) | P3 | S |  -  | DONE — opt-in, approvals never missed silently (2026-08-04) |
+| 014  | UI/UX audit: glanceable agent control plane (F1–F14) | P1 | L |  -  | IN PROGRESS — waves 1–2 shipped; wave 3 (F8/F9/F11/F13) on `feat/ux-wave3`, gated locally, pending merge |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale  -  finding fixed independently or approach

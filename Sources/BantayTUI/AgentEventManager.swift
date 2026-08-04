@@ -37,6 +37,10 @@ struct AgentSnapshot: Identifiable, Equatable {
     let message: String?
     let paneId: String?
     let workspaceId: String?
+    /// Working directory of the agent's pane (herdr poll). Used to derive a
+    /// human project name + git branch so rows read "project · branch" instead
+    /// of a bare tool name (so N claude agents stop looking identical).
+    let cwd: String?
     /// Approval-prompt shape for blocked agents, merged from the event
     /// stream so the control plane can render yes/no, numbered choices, and
     /// multi-select inline. Nil for agents not blocked on an approval.
@@ -48,6 +52,51 @@ struct AgentSnapshot: Identifiable, Equatable {
     var approval: IslandMetrics.ApprovalControls {
         IslandMetrics.ApprovalControls(variance: variance, choices: choices)
     }
+
+    /// Human-readable project context derived from `cwd`: the directory
+    /// basename plus the current git branch. Lets the roster show
+    /// "bantay-tui · main" instead of a bare tool name. Cheap + offline
+    /// (reads `.git/HEAD`); nil when cwd is unknown or not a git repo.
+    var projectContext: ProjectContext? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        return ProjectContext(cwd: cwd)
+    }
+}
+
+/// Project + branch identity for an agent's working directory.
+struct ProjectContext: Equatable, Sendable {
+    let project: String
+    let branch: String?
+    let isGit: Bool
+
+    init(cwd: String) {
+        self.project = (cwd as NSString).lastPathComponent
+        let headURL = URL(fileURLWithPath: cwd).appendingPathComponent(".git/HEAD")
+        if let content = try? String(contentsOf: headURL, encoding: .utf8) {
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("ref: refs/heads/") {
+                self.branch = String(trimmed.dropFirst("ref: refs/heads/".count))
+                self.isGit = true
+            } else if !trimmed.isEmpty {
+                self.branch = "detached"
+                self.isGit = true
+            } else {
+                self.branch = nil
+                self.isGit = false
+            }
+        } else {
+            self.branch = nil
+            self.isGit = false
+        }
+    }
+}
+
+struct RecentCompletion: Identifiable, Equatable, Sendable {
+    let id: String
+    let source: String
+    let kind: AgentEventKind
+    let title: String?
+    let createdAt: Date
 }
 
 @MainActor
@@ -56,6 +105,7 @@ final class AgentEventManager: ObservableObject {
 
     @Published private(set) var currentEvent: AgentEvent?
     @Published private(set) var agents: [AgentSnapshot] = []
+    @Published private(set) var recentCompletions: [RecentCompletion] = []
     /// Aggregate token/cost usage from agent transcripts (gauge in footer).
     @Published private(set) var usage: UsageSnapshot = .zero
     private var watchTask: Task<Void, Never>?
@@ -82,6 +132,16 @@ final class AgentEventManager: ObservableObject {
     /// numbered-choice, and multi-select controls inline.
     var pendingApprovals: [String: (variance: ApprovalVariance?, choices: [String]?)] =
         [:]
+    /// Panes with an in-flight approve/deny/choice/stop. The control plane
+    /// marks a pane here the instant a user acts so the card shows a resolving
+    /// state and cannot be double-fired (a synchronous `Process.waitUntilExit`
+    /// in the adapter would otherwise block the island and invite a second
+    /// click). Cleared when the next poll confirms the agent left the blocked
+    /// state, or after a safety timeout.
+    private var resolvingPanes: Set<String> = []
+    /// Caps how long a pane stays in the resolving state if the next poll
+    /// doesn't clear it (e.g. herdr daemon down).
+    private let resolvingTimeout: TimeInterval = 4
     private let eventsFileURL: URL
     private let captureEnabled: Bool
     private let herdrAdapter = HerdrSocketAdapter()
@@ -144,6 +204,11 @@ final class AgentEventManager: ObservableObject {
 
     func setActive(_ active: Bool) {
         isActive = active
+    }
+
+    /// Acknowledges completion/failure recents when the expanded panel opens.
+    func markRecentCompletionsSeen() {
+        recentCompletions.removeAll()
     }
 
     func shouldPlaySound(for event: AgentEvent) -> Bool {
@@ -233,6 +298,16 @@ final class AgentEventManager: ObservableObject {
             || event.kind == .cancelled || event.kind == .clear
         {
             startedAtByPane.removeValue(forKey: key)
+        }
+
+        if (event.kind == .completed || event.kind == .failed) && !isActive {
+            let recent = RecentCompletion(
+                id: "\(key):\(event.kind.rawValue):\(event.createdAt.timeIntervalSince1970)",
+                source: event.sourceKey,
+                kind: event.kind,
+                title: event.title ?? event.message,
+                createdAt: event.createdAt)
+            recentCompletions = Array(([recent] + recentCompletions).prefix(5))
         }
 
         if event.kind == .clear {
@@ -332,6 +407,7 @@ extension AgentEventManager {
             message: agent.agentStatus,
             paneId: agent.paneId,
             workspaceId: agent.workspaceId,
+            cwd: agent.cwd,
             variance: nil,
             choices: nil,
             startedAt: nil
@@ -483,27 +559,29 @@ extension AgentEventManager {
 
     private func refreshRosterAndArmWaits() async {
         ensureFileWatcher()
-        let herdrAgents = await herdrAdapter.listAgents()
+        let herdrAgents: [HerdrAgentInfo] = await herdrAdapter.listAgents()
         let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
         // Heavy scans (ps, transcript enumeration) run off the main actor so
         // the island never beachballs while polling.
-        let agents = await Task.detached(priority: .userInitiated) {
+        let agents: [HerdrAgentInfo] = await Task.detached(priority: .userInitiated) {
             let detected = scanStandalone ? StandaloneAgentScanner.scan() : []
             return herdrAgents
                 + detected.filter {
-                    !Set(herdrAgents.map(\.agent)).contains($0.name)
+                    !Set(herdrAgents.map { $0.agent }).contains($0.name)
                 }.map {
                     HerdrAgentInfo(
                         agent: $0.name,
                         agentStatus: "working",
                         paneId: nil,
                         workspaceId: nil,
-                        terminalTitle: $0.activity
+                        terminalTitle: $0.activity,
+                        cwd: nil
                     )
                 }
         }.value
         self.usage = await Task.detached(priority: .utility) {
-            UsageTracker.latestUsage(home: NSHomeDirectory(), names: agents.map(\.agent))
+            UsageTracker.latestUsage(
+                home: NSHomeDirectory(), names: agents.map { $0.agent })
         }.value
         let liveStatuses: [String: String] = Dictionary(
             uniqueKeysWithValues: agents.compactMap {
@@ -521,7 +599,7 @@ extension AgentEventManager {
             showEvent(event)
         }
 
-        let livePanes = Set(agents.compactMap(\.paneId))
+        let livePanes = Set(agents.compactMap { $0.paneId })
         let stale = waitProcesses.keys.filter { !livePanes.contains($0) }
         for pane in stale {
             waitProcesses[pane]?.terminate()
@@ -537,7 +615,7 @@ extension AgentEventManager {
             guard let process = herdrAdapter.spawnAgentWait(paneId: pane, statuses: Array(statuses))
             else { continue }
             waitProcesses[pane] = process
-            process.terminationHandler = { [weak self] _ in
+            process.terminationHandler = { [weak self] (_: Process) in
                 DispatchQueue.main.async {
                     guard let self, self.waitProcesses[pane] === process else { return }
                     self.waitProcesses.removeValue(forKey: pane)
@@ -599,6 +677,15 @@ extension AgentEventManager {
         for event in result.events {
             showEvent(event)
         }
+        // A poll that no longer reports a pane as blocked clears any stale
+        // resolving flag so the optimistic card removal isn't stuck.
+        for paneId in resolvingPanes
+        where !result.roster.contains(where: {
+            $0.paneId == paneId
+                && ($0.kind == .accessRequest || $0.kind == .waiting)
+        }) {
+            resolvingPanes.remove(paneId)
+        }
     }
 
     /// Attach the latest decoded approval prompt (variance/choices) and the
@@ -626,11 +713,48 @@ extension AgentEventManager {
                 message: agent.message,
                 paneId: agent.paneId,
                 workspaceId: agent.workspaceId,
+                cwd: agent.cwd,
                 variance: variance,
                 choices: choices,
                 startedAt: startedAt
             )
         }
+    }
+
+    /// True while an action is in flight for `paneId` — the control plane
+    /// disables its buttons and shows a resolving state to prevent re-fire.
+    func isResolving(paneId: String) -> Bool {
+        resolvingPanes.contains(paneId)
+    }
+
+    /// Convenience: resolves the agent's paneId and checks `isResolving`.
+    func isResolving(agent: AgentSnapshot?) -> Bool {
+        guard let paneId = agent?.paneId else { return false }
+        return resolvingPanes.contains(paneId)
+    }
+
+    /// Fire an adapter action off the main actor (the adapter does blocking
+    /// `Process.waitUntilExit` I/O) and optimistically mark the pane as
+    /// resolving so the UI can't double-fire and feels instant. The resolving
+    /// flag clears on the next confirming poll, or after `resolvingTimeout`.
+    func performAction(
+        paneId: String, _ action: @escaping @Sendable (HerdrSocketAdapter) -> Void
+    ) {
+        resolvingPanes.insert(paneId)
+        let adapter = herdrAdapter
+        Task.detached {
+            action(adapter)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(self.resolvingTimeout))
+                self.resolvingPanes.remove(paneId)
+            }
+        }
+    }
+
+    /// Drop a pane from the resolving set immediately — called when a poll
+    /// confirms the agent is no longer blocked/working (avoids the 4s wait).
+    func clearResolving(paneId: String) {
+        resolvingPanes.remove(paneId)
     }
 
     /// Test seam: record a working-burst start time (mirrors showEvent).
@@ -717,7 +841,8 @@ extension AgentEventManager {
                 agentStatus: "working",
                 paneId: nil,
                 workspaceId: nil,
-                terminalTitle: $0.activity
+                terminalTitle: $0.activity,
+                cwd: nil
             )
         }
         return herdr + extras

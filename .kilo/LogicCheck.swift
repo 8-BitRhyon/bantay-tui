@@ -22,7 +22,7 @@ struct LogicCheckMain {
                 agentStatus: status,
                 paneId: pane,
                 workspaceId: String(pane.split(separator: ":").first ?? ""),
-                terminalTitle: "\(name) | \(status)")
+                terminalTitle: "\(name) | \(status)", cwd: nil)
         }
 
         func expectKinds(_ events: [AgentEvent], _ kinds: [AgentEventKind], _ name: String) {
@@ -835,7 +835,7 @@ struct LogicCheckMain {
         MainActor.assumeIsolated {
             let info = HerdrAgentInfo(
                 agent: "kilo", agentStatus: "blocked", paneId: "1-1",
-                workspaceId: "1", terminalTitle: "Need approval: run tests?")
+                workspaceId: "1", terminalTitle: "Need approval: run tests?", cwd: nil)
             guard let snapshot = AgentEventManager.snapshot(for: info) else {
                 check(false, "L7 blocked snapshot builds")
                 return
@@ -864,7 +864,7 @@ struct LogicCheckMain {
                 "L7 merged snapshot renders numbered options")
             let plain = HerdrAgentInfo(
                 agent: "shell", agentStatus: "idle", paneId: "1-2",
-                workspaceId: "1", terminalTitle: nil)
+                workspaceId: "1", terminalTitle: nil, cwd: nil)
             let plainSnapshot = AgentEventManager.snapshot(for: plain)!
             let unmerged = manager.mergeApprovals(into: [plainSnapshot])
             check(
@@ -914,10 +914,10 @@ struct LogicCheckMain {
                 capture: false)
             let working = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
-                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let done = AgentSnapshot(
                 id: "p2", source: "codex", kind: .completed, title: nil, message: nil,
-                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let start = Date(timeIntervalSince1970: 500_000)
             manager.pendingApprovals["1-1"] = (variance: nil, choices: nil)
             let merged = manager.mergeApprovals(into: [working, done])
@@ -1079,7 +1079,7 @@ struct LogicCheckMain {
             let herdr = [
                 HerdrAgentInfo(
                     agent: "claude", agentStatus: "working", paneId: "1-1",
-                    workspaceId: "1", terminalTitle: "refactor")
+                    workspaceId: "1", terminalTitle: "refactor", cwd: nil)
             ]
             let merged = manager.mergeStandalone(into: herdr, detected: detected)
             check(
@@ -1804,10 +1804,10 @@ struct LogicCheckMain {
                 capture: false)
             let kilo = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
-                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let codex = AgentSnapshot(
                 id: "p2", source: "codex", kind: .progress, title: nil, message: nil,
-                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let visible = manager.mergeApprovals(into: [kilo, codex])
             check(
                 visible.map(\.source) == ["kilo"],
@@ -2374,6 +2374,158 @@ struct LogicCheckMain {
 
             try? FileManager.default.removeItem(atPath: tmp)
         }
+
+        // L36. ProjectContext (wave 2): project basename + git branch from
+        // .git/HEAD, offline; detached HEAD and non-git dirs handled; nil
+        // when no cwd. Roster rows read "project · branch" not bare tool names.
+        do {
+            let tmp = NSTemporaryDirectory() + "/bantay-l36-\(UUID().uuidString)"
+            let gitDir = tmp + "/bantay-tui"
+            try? FileManager.default.createDirectory(
+                atPath: gitDir + "/.git", withIntermediateDirectories: true)
+            try? "ref: refs/heads/main\n".write(
+                toFile: gitDir + "/.git/HEAD", atomically: true, encoding: .utf8)
+            let ctx = ProjectContext(cwd: gitDir)
+            check(ctx.project == "bantay-tui", "L36 project is dir basename")
+            check(ctx.branch == "main", "L36 branch parsed from HEAD")
+            check(ctx.isGit, "L36 git repo detected")
+
+            let detachedDir = tmp + "/detached"
+            try? FileManager.default.createDirectory(
+                atPath: detachedDir + "/.git", withIntermediateDirectories: true)
+            try? "a1b2c3d4f5\n".write(
+                toFile: detachedDir + "/.git/HEAD", atomically: true, encoding: .utf8)
+            let detached = ProjectContext(cwd: detachedDir)
+            check(
+                detached.branch == "detached" && detached.isGit,
+                "L36 detached HEAD labeled")
+
+            let plainDir = tmp + "/plain"
+            try? FileManager.default.createDirectory(
+                atPath: plainDir, withIntermediateDirectories: true)
+            let plain = ProjectContext(cwd: plainDir)
+            check(!plain.isGit && plain.branch == nil, "L36 non-git dir has no branch")
+
+            let snapshot = AgentSnapshot(
+                id: "p1", source: "claude", kind: .progress, title: nil, message: nil,
+                paneId: "1-1", workspaceId: nil, cwd: gitDir,
+                variance: nil, choices: nil, startedAt: nil)
+            check(
+                snapshot.projectContext?.project == "bantay-tui"
+                    && snapshot.projectContext?.branch == "main",
+                "L36 snapshot surfaces project context")
+            let noCwd = AgentSnapshot(
+                id: "p2", source: "claude", kind: .progress, title: nil, message: nil,
+                paneId: "1-2", workspaceId: nil, cwd: nil,
+                variance: nil, choices: nil, startedAt: nil)
+            check(noCwd.projectContext == nil, "L36 no cwd means no context")
+
+            try? FileManager.default.removeItem(atPath: tmp)
+        }
+
+        // L37. F8 attention-only filter: only needs-input and failed agents
+        // survive; order preserved; config toggle defaults off and persists.
+        do {
+            let mk = { (id: String, kind: AgentEventKind) in
+                AgentSnapshot(
+                    id: id, source: id, kind: kind, title: nil, message: nil,
+                    paneId: nil, workspaceId: nil, cwd: nil,
+                    variance: nil, choices: nil, startedAt: nil)
+            }
+            let roster = [
+                mk("a", .progress), mk("b", .accessRequest), mk("c", .completed),
+                mk("d", .failed), mk("e", .idle), mk("f", .waiting),
+            ]
+            let attention = IslandMetrics.attentionFilter(roster)
+            check(
+                attention.map(\.id) == ["b", "d", "f"],
+                "L37 attention filter keeps needs-input + failed (got \(attention.map(\.id)))")
+            let none = IslandMetrics.attentionFilter([mk("a", .progress), mk("c", .completed)])
+            check(none.isEmpty, "L37 attention filter empty when nothing needs input")
+            let empty = IslandMetrics.attentionFilter([])
+            check(empty.isEmpty, "L37 attention filter empty roster safe")
+
+            MainActor.assumeIsolated {
+                let defaults = UserDefaults.standard
+                let cfg = NotchHUDConfig.shared
+                let orig = cfg.attentionFilterEnabled
+                check(cfg.attentionFilterEnabled == false, "L37 attention tab default off")
+                cfg.attentionFilterEnabled = true
+                check(defaults.bool(forKey: "attentionFilterEnabled"), "L37 attention toggle persisted")
+                cfg.attentionFilterEnabled = orig
+                defaults.removeObject(forKey: "attentionFilterEnabled")
+            }
+        }
+
+        // L38. F9 completion recents: completed/failed work arriving while
+        // inactive is retained, capped, ordered newest-first, and cleared
+        // when the expanded panel acknowledges it. Active work is not noisy.
+        MainActor.assumeIsolated {
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l38-\(UUID().uuidString).jsonl"),
+                capture: false)
+            manager.setActive(false)
+            for index in 0..<7 {
+                manager.publishEventForTesting(
+                    AgentEvent(
+                        source: "agent-\(index)", kind: index.isMultiple(of: 2) ? .completed : .failed,
+                        title: "result \(index)", message: nil, paneId: "p\(index)",
+                        workspaceId: nil, variance: nil, choices: nil,
+                        playSound: false, persistent: false))
+            }
+            check(manager.recentCompletions.count == 5, "L38 recents capped at five")
+            check(
+                manager.recentCompletions.first?.source == "agent-6",
+                "L38 recents newest first")
+            manager.setActive(true)
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "active", kind: .completed, title: "visible", message: nil,
+                    paneId: "active", workspaceId: nil, variance: nil, choices: nil,
+                    playSound: false, persistent: false))
+            check(
+                manager.recentCompletions.count == 5,
+                "L38 active completion does not add unread recent")
+            manager.markRecentCompletionsSeen()
+            check(manager.recentCompletions.isEmpty, "L38 expand acknowledges recents")
+        }
+
+        // L39. F13 stable layout: empty and one-row rosters reserve the same
+        // viewport; growth caps at available height; negative counts are safe.
+        let emptyHeight = IslandMetrics.stableRosterHeight(
+            agentCount: 0, availableHeight: 200)
+        let oneHeight = IslandMetrics.stableRosterHeight(
+            agentCount: 1, availableHeight: 200)
+        let cappedHeight = IslandMetrics.stableRosterHeight(
+            agentCount: 20, availableHeight: 100)
+        let negativeHeight = IslandMetrics.stableRosterHeight(
+            agentCount: -3, availableHeight: 200)
+        check(emptyHeight == oneHeight, "L39 empty and one-row heights stable")
+        check(cappedHeight == 100, "L39 roster height caps at available viewport")
+        check(negativeHeight == oneHeight, "L39 negative agent count is safe")
+
+        // L40. F11 pin/hover policy: composing and pinned panels stay open;
+        // an unpinned expanded panel may collapse after hover grace.
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: true, isComposing: false, isPinned: true),
+            "L40 pinned panel ignores hover exit")
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: true, isComposing: true, isPinned: false),
+            "L40 composing panel ignores hover exit")
+        check(
+            IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: true, isComposing: false, isPinned: false),
+            "L40 unpinned panel collapses after grace")
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: false, isComposing: false, isPinned: false),
+            "L40 closed panel never collapses")
+        check(
+            IslandMetrics.hoverExitGrace >= 0.25,
+            "L40 hover grace is at least 250ms")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

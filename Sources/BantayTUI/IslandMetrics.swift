@@ -38,6 +38,7 @@ public enum IslandMetrics: Sendable {
     public static let contentSpacing: CGFloat = 10
     public static let maxExpandedHeight: CGFloat = 560
     public static let hoverCooldown: TimeInterval = 0.22
+    public static let hoverExitGrace: TimeInterval = 0.25
     public static let idleChipWidth: CGFloat = 120
     public static let dockGap: CGFloat = 0
     public static let notchlessFallbackWidth: CGFloat = 211
@@ -147,8 +148,9 @@ public enum IslandMetrics: Sendable {
     /// How many blocked/needs-input agents get their own queue card before
     /// collapsing into `+N more`.
     public static let expandedQueueCap: Int = 3
-    /// Height of one approval-queue card.
-    public static let queueCardHeight: CGFloat = 42
+    /// Height of one approval-queue card. Reserves room for the optional live
+    /// "peek" tail (captureTail) that drops in below the controls on hover.
+    public static let queueCardHeight: CGFloat = 56
     /// Shelf tab bar height (Agents/Shelf switcher).
     public static let shelfTabBarHeight: CGFloat = 22
     /// Divider between the header/tabs and the list.
@@ -166,6 +168,19 @@ public enum IslandMetrics: Sendable {
         case .completed: return 2
         case .failed: return 3
         case .idle, .cancelled, .clear: return 4
+        }
+    }
+
+    /// Human label for a roster group rank (section header in the expanded
+    /// control plane). Empty for ranks that never carry agents.
+    static func groupLabel(rank: Int) -> String {
+        switch rank {
+        case 0: return "Needs you"
+        case 1: return "Working"
+        case 2: return "Done"
+        case 3: return "Failed"
+        case 4: return "Idle"
+        default: return ""
         }
     }
 
@@ -526,6 +541,14 @@ public enum IslandMetrics: Sendable {
         return kind == .accessRequest || kind == .waiting
     }
 
+    /// F8 "attention only" triage filter: keeps needs-input (blocked) and
+    /// failed agents, in roster order; everything else is dropped.
+    static func attentionFilter(_ roster: [AgentSnapshot]) -> [AgentSnapshot] {
+        roster.filter {
+            $0.kind == .accessRequest || $0.kind == .waiting || $0.kind == .failed
+        }
+    }
+
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
@@ -562,6 +585,15 @@ public enum IslandMetrics: Sendable {
             ).height - topInset
         }
         return pillHeight
+    }
+
+    /// F13 stable roster viewport: reserve one row even when the roster is
+    /// empty, then cap growth at the available viewport height.
+    static func stableRosterHeight(
+        agentCount: Int, availableHeight: CGFloat, rowHeight: CGFloat = rowHeight
+    ) -> CGFloat {
+        let natural = CGFloat(max(agentCount, 0)) * rowHeight
+        return max(min(max(natural, rowHeight), max(availableHeight, 0)), 0)
     }
 
     public static func notchWidth(
@@ -656,8 +688,10 @@ public enum IslandMetrics: Sendable {
     }
 
     /// Collapse on hover-exit unless the user is mid-prompt (composing).
-    public static func shouldCollapseOnHoverExit(isExpanded: Bool, isComposing: Bool) -> Bool {
-        isExpanded && !isComposing
+    public static func shouldCollapseOnHoverExit(
+        isExpanded: Bool, isComposing: Bool, isPinned: Bool = false
+    ) -> Bool {
+        isExpanded && !isComposing && !isPinned
     }
 
     public static func requiresApproval(_ kind: String) -> Bool {

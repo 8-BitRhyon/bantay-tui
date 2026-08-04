@@ -51,7 +51,7 @@ protocol PlexerAdapter: Sendable {
 
     func listPanes() -> [PaneInfo]
     /// Latest rendered output of a pane, up to `lines`.
-    func captureTail(paneId: String, lines: Int) -> String
+    func captureTail(paneId: String, lines: Int) async -> String
     func focusPane(paneId: String)
     /// Sends a full line (text + Enter) to the pane.
     func sendLine(paneId: String, text: String)
