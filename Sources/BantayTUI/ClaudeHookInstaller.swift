@@ -36,46 +36,68 @@ enum ClaudeHookInstaller {
         ]
     }
 
+    /// True when a hook's command targets the Bantay ingest server, regardless
+    /// of which port Bantay used at install time.
+    static func isBantayHook(_ hook: [String: Any]) -> Bool {
+        guard let command = hook["command"] as? String else { return false }
+        return command.contains("http://127.0.0.1:")
+            && command.contains("/events")
+    }
+
+    /// True when an entry's hooks include at least one Bantay hook.
+    static func isBantayEntry(_ entry: [String: Any]) -> Bool {
+        guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return false }
+        return entryHooks.contains(where: isBantayHook)
+    }
+
     /// Merge the Bantay hooks into an existing settings dictionary, preserving
-    /// all unrelated keys and any pre-existing hook entries.
+    /// all unrelated keys. Existing entries for the same events are kept and
+    /// Bantay's entries appended after any stale Bantay entries are removed,
+    /// so foreign hooks (herdr, user config) are never overwritten and
+    /// re-installs do not duplicate.
     static func mergedSettings(existing: [String: Any], port: Int) -> [String: Any] {
         var merged = existing
         var hooks = (existing["hooks"] as? [String: Any]) ?? [:]
         let bantayHooks = (hooksSection(port: port)["hooks"] as? [String: Any]) ?? [:]
-        for (event, entries) in bantayHooks {
-            hooks[event] = entries
+        for (event, bantayEntries) in bantayHooks {
+            guard let fresh = bantayEntries as? [[String: Any]] else { continue }
+            var existingEntries = (hooks[event] as? [[String: Any]]) ?? []
+            existingEntries.removeAll { isBantayEntry($0) }
+            existingEntries.append(contentsOf: fresh)
+            hooks[event] = existingEntries
         }
         merged["hooks"] = hooks
         return merged
     }
 
-    /// Remove only the Bantay-owned hook entries from a settings dictionary.
-    /// Identified by command shape (`http://127.0.0.1:<port>/events`), so
-    /// hooks installed by other tools (e.g. herdr's Claude integration) are
-    /// preserved no matter which port Bantay used at install time. If the
-    /// `hooks` key ends up empty it is removed entirely.
+    /// Remove only the Bantay-owned hooks from a settings dictionary.
+    /// Hooks are identified by command shape (`http://127.0.0.1:<port>/events`)
+    /// and filtered individually, so a foreign hook that shares an entry with
+    /// a Bantay hook survives. Entries that become hook-less are dropped and
+    /// an empty `hooks` key is removed entirely.
     static func removingBantayHooks(from settings: [String: Any]) -> [String: Any] {
         guard var hooks = settings["hooks"] as? [String: Any] else { return settings }
         var changed = false
         var emptyEvents: [String] = []
         for (event, entries) in hooks {
-            guard var list = entries as? [[String: Any]] else { continue }
-            let before = list.count
-            list.removeAll { entry in
-                guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return false }
-                return entryHooks.contains { hook in
-                    guard let command = hook["command"] as? String else { return false }
-                    return command.contains("http://127.0.0.1:")
-                        && command.contains("/events")
+            guard let list = entries as? [[String: Any]] else { continue }
+            let filtered = list.compactMap { entry -> [String: Any]? in
+                guard var entryHooks = entry["hooks"] as? [[String: Any]] else {
+                    return entry
                 }
-            }
-            if list.count != before {
+                let before = entryHooks.count
+                entryHooks.removeAll(where: isBantayHook)
+                guard entryHooks.count != before else { return entry }
                 changed = true
-                if list.isEmpty {
-                    emptyEvents.append(event)
-                } else {
-                    hooks[event] = list
-                }
+                guard !entryHooks.isEmpty else { return nil }
+                var partial = entry
+                partial["hooks"] = entryHooks
+                return partial
+            }
+            if filtered.isEmpty {
+                emptyEvents.append(event)
+            } else {
+                hooks[event] = filtered
             }
         }
         guard changed else { return settings }

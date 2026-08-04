@@ -216,7 +216,18 @@ struct SettingsView: View {
                         if newValue {
                             UNUserNotificationCenter.current()
                                 .requestAuthorization(options: [.alert, .sound]) {
-                                    _, _ in
+                                    granted, _ in
+                                    Task { @MainActor in
+                                        guard !granted else { return }
+                                        NotchHUDConfig.shared.notifyWhenHidden = false
+                                        notifyWhenHidden = false
+                                        let alert = NSAlert()
+                                        alert.messageText = "Notifications are blocked"
+                                        alert.informativeText =
+                                            "Enable notifications for Bantay-TUI "
+                                            + "in System Settings to use this."
+                                        alert.runModal()
+                                    }
                                 }
                         }
                     }

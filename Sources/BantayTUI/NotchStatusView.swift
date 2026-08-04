@@ -848,10 +848,11 @@ struct NotchStatusView: View {
         }
     }
 
-    /// Roster scroll area: natural row height, capped so header/tabs/footer
-    /// always stay visible inside the island (scrolls when 6+ rows overflow).
+    /// Roster scroll area: natural row height from the rendered roster
+    /// (muted sources excluded), capped so header/tabs/footer always stay
+    /// visible inside the island (scrolls when 6+ rows overflow).
     private var rosterScrollHeight: CGFloat {
-        let natural = CGFloat(eventManager.agents.count) * IslandMetrics.rowHeight
+        let natural = CGFloat(mergedRoster.count) * IslandMetrics.rowHeight
         let chrome =
             IslandMetrics.headerHeight + IslandMetrics.footerHeight
             + (NotchHUDConfig.shared.showShelfTab
@@ -1415,9 +1416,21 @@ struct NotchStatusView: View {
             }
             // Approvals landing while the island is hidden (snoozed / startup)
             // must never vanish silently — Notification Center fallback.
+            // Effective visibility follows the same policy that drives
+            // show/hide, so a snoozed or startup-hidden island counts as
+            // hidden even if the window has not finished dismissing.
+            let config = NotchHUDConfig.shared
+            let islandVisible = IslandMetrics.VisibilityPolicy.shouldShow(
+                islandEnabled: config.islandEnabled,
+                snoozed: config.isSnoozed,
+                hideAtStartup: config.hideAtStartup,
+                didShowOnce: AppDelegate.didShowOnce,
+                hasWork: eventManager.currentEvent != nil || !eventManager.agents.isEmpty,
+                showWhenIdle: config.showIslandWhenIdle,
+                forced: AppDelegate.isForcedVisible)
             if IslandMetrics.shouldPostNotification(
-                islandVisible: AppDelegate.window?.isVisible ?? false,
-                notifyWhenHidden: NotchHUDConfig.shared.notifyWhenHidden,
+                islandVisible: islandVisible,
+                notifyWhenHidden: config.notifyWhenHidden,
                 kind: event.kind)
             {
                 postHiddenApprovalNotification(for: event)
@@ -1500,15 +1513,21 @@ struct NotchStatusView: View {
     }
 
     /// Notification Center fallback for approvals that arrive while the
-    /// island is hidden. Best-effort: permission failures are ignored.
+    /// island is hidden. Best-effort: delivery failures are logged, never
+    /// silently dropped.
     private func postHiddenApprovalNotification(for event: AgentEvent) {
         let content = UNMutableNotificationContent()
-        content.title = "\(event.source) needs approval"
+        content.title = "\(event.source ?? "agent") needs approval"
         content.body = event.title ?? event.message ?? event.kind.label
         content.sound = .default
         let request = UNNotificationRequest(
             identifier: event.identityKey, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                AppDelegate.dbg(
+                    "notify: delivery failed for \(event.identityKey): \(error)")
+            }
+        }
     }
 
     private func isTerminalFocused() -> Bool {
