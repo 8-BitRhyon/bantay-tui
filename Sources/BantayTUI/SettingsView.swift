@@ -43,6 +43,7 @@ struct SettingsView: View {
     @State private var quietHoursStart = NotchHUDConfig.shared.quietHoursStart
     @State private var quietHoursEnd = NotchHUDConfig.shared.quietHoursEnd
     @State private var notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
+    @State private var attentionFilter = NotchHUDConfig.shared.attentionFilterEnabled
     @State private var volumePreviewTask: Task<Void, Never>?
     @State private var herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
         manifestPath: Self.herdrManifestPath)
@@ -366,6 +367,14 @@ struct SettingsView: View {
                     }
             }
             Section("Expanded panel") {
+                Toggle("Attention-only tab", isOn: $attentionFilter)
+                    .help(
+                        "Adds an Attention tab showing only agents that need "
+                            + "you or failed — the 'everything that needs me' triage."
+                    )
+                    .onChange(of: attentionFilter) { newValue in
+                        NotchHUDConfig.shared.attentionFilterEnabled = newValue
+                    }
                 Toggle("Pin approval queue on top", isOn: $expandedShowQueue)
                     .help("Blocked agents get approve/deny cards above the roster.")
                     .onChange(of: expandedShowQueue) { newValue in

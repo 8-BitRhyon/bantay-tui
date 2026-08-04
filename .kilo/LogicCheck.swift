@@ -2423,6 +2423,110 @@ struct LogicCheckMain {
             try? FileManager.default.removeItem(atPath: tmp)
         }
 
+        // L37. F8 attention-only filter: only needs-input and failed agents
+        // survive; order preserved; config toggle defaults off and persists.
+        do {
+            let mk = { (id: String, kind: AgentEventKind) in
+                AgentSnapshot(
+                    id: id, source: id, kind: kind, title: nil, message: nil,
+                    paneId: nil, workspaceId: nil, cwd: nil,
+                    variance: nil, choices: nil, startedAt: nil)
+            }
+            let roster = [
+                mk("a", .progress), mk("b", .accessRequest), mk("c", .completed),
+                mk("d", .failed), mk("e", .idle), mk("f", .waiting),
+            ]
+            let attention = IslandMetrics.attentionFilter(roster)
+            check(
+                attention.map(\.id) == ["b", "d", "f"],
+                "L37 attention filter keeps needs-input + failed (got \(attention.map(\.id)))")
+            let none = IslandMetrics.attentionFilter([mk("a", .progress), mk("c", .completed)])
+            check(none.isEmpty, "L37 attention filter empty when nothing needs input")
+            let empty = IslandMetrics.attentionFilter([])
+            check(empty.isEmpty, "L37 attention filter empty roster safe")
+
+            MainActor.assumeIsolated {
+                let defaults = UserDefaults.standard
+                let cfg = NotchHUDConfig.shared
+                let orig = cfg.attentionFilterEnabled
+                check(cfg.attentionFilterEnabled == false, "L37 attention tab default off")
+                cfg.attentionFilterEnabled = true
+                check(defaults.bool(forKey: "attentionFilterEnabled"), "L37 attention toggle persisted")
+                cfg.attentionFilterEnabled = orig
+                defaults.removeObject(forKey: "attentionFilterEnabled")
+            }
+        }
+
+        // L38. F9 completion recents: completed/failed work arriving while
+        // inactive is retained, capped, ordered newest-first, and cleared
+        // when the expanded panel acknowledges it. Active work is not noisy.
+        MainActor.assumeIsolated {
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l38-\(UUID().uuidString).jsonl"),
+                capture: false)
+            manager.setActive(false)
+            for index in 0..<7 {
+                manager.publishEventForTesting(
+                    AgentEvent(
+                        source: "agent-\(index)", kind: index.isMultiple(of: 2) ? .completed : .failed,
+                        title: "result \(index)", message: nil, paneId: "p\(index)",
+                        workspaceId: nil, variance: nil, choices: nil,
+                        playSound: false, persistent: false))
+            }
+            check(manager.recentCompletions.count == 5, "L38 recents capped at five")
+            check(
+                manager.recentCompletions.first?.source == "agent-6",
+                "L38 recents newest first")
+            manager.setActive(true)
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "active", kind: .completed, title: "visible", message: nil,
+                    paneId: "active", workspaceId: nil, variance: nil, choices: nil,
+                    playSound: false, persistent: false))
+            check(
+                manager.recentCompletions.count == 5,
+                "L38 active completion does not add unread recent")
+            manager.markRecentCompletionsSeen()
+            check(manager.recentCompletions.isEmpty, "L38 expand acknowledges recents")
+        }
+
+        // L39. F13 stable layout: empty and one-row rosters reserve the same
+        // viewport; growth caps at available height; negative counts are safe.
+        let emptyHeight = IslandMetrics.stableRosterHeight(
+            agentCount: 0, availableHeight: 200)
+        let oneHeight = IslandMetrics.stableRosterHeight(
+            agentCount: 1, availableHeight: 200)
+        let cappedHeight = IslandMetrics.stableRosterHeight(
+            agentCount: 20, availableHeight: 100)
+        let negativeHeight = IslandMetrics.stableRosterHeight(
+            agentCount: -3, availableHeight: 200)
+        check(emptyHeight == oneHeight, "L39 empty and one-row heights stable")
+        check(cappedHeight == 100, "L39 roster height caps at available viewport")
+        check(negativeHeight == oneHeight, "L39 negative agent count is safe")
+
+        // L40. F11 pin/hover policy: composing and pinned panels stay open;
+        // an unpinned expanded panel may collapse after hover grace.
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: true, isComposing: false, isPinned: true),
+            "L40 pinned panel ignores hover exit")
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: true, isComposing: true, isPinned: false),
+            "L40 composing panel ignores hover exit")
+        check(
+            IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: true, isComposing: false, isPinned: false),
+            "L40 unpinned panel collapses after grace")
+        check(
+            !IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: false, isComposing: false, isPinned: false),
+            "L40 closed panel never collapses")
+        check(
+            IslandMetrics.hoverExitGrace >= 0.25,
+            "L40 hover grace is at least 250ms")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

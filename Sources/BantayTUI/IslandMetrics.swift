@@ -38,6 +38,7 @@ public enum IslandMetrics: Sendable {
     public static let contentSpacing: CGFloat = 10
     public static let maxExpandedHeight: CGFloat = 560
     public static let hoverCooldown: TimeInterval = 0.22
+    public static let hoverExitGrace: TimeInterval = 0.25
     public static let idleChipWidth: CGFloat = 120
     public static let dockGap: CGFloat = 0
     public static let notchlessFallbackWidth: CGFloat = 211
@@ -540,6 +541,14 @@ public enum IslandMetrics: Sendable {
         return kind == .accessRequest || kind == .waiting
     }
 
+    /// F8 "attention only" triage filter: keeps needs-input (blocked) and
+    /// failed agents, in roster order; everything else is dropped.
+    static func attentionFilter(_ roster: [AgentSnapshot]) -> [AgentSnapshot] {
+        roster.filter {
+            $0.kind == .accessRequest || $0.kind == .waiting || $0.kind == .failed
+        }
+    }
+
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
@@ -576,6 +585,15 @@ public enum IslandMetrics: Sendable {
             ).height - topInset
         }
         return pillHeight
+    }
+
+    /// F13 stable roster viewport: reserve one row even when the roster is
+    /// empty, then cap growth at the available viewport height.
+    static func stableRosterHeight(
+        agentCount: Int, availableHeight: CGFloat, rowHeight: CGFloat = rowHeight
+    ) -> CGFloat {
+        let natural = CGFloat(max(agentCount, 0)) * rowHeight
+        return max(min(max(natural, rowHeight), max(availableHeight, 0)), 0)
     }
 
     public static func notchWidth(
@@ -670,8 +688,10 @@ public enum IslandMetrics: Sendable {
     }
 
     /// Collapse on hover-exit unless the user is mid-prompt (composing).
-    public static func shouldCollapseOnHoverExit(isExpanded: Bool, isComposing: Bool) -> Bool {
-        isExpanded && !isComposing
+    public static func shouldCollapseOnHoverExit(
+        isExpanded: Bool, isComposing: Bool, isPinned: Bool = false
+    ) -> Bool {
+        isExpanded && !isComposing && !isPinned
     }
 
     public static func requiresApproval(_ kind: String) -> Bool {

@@ -169,3 +169,10 @@ A user can (a) see what every agent is actively doing from the notch, (b)
 answer any approval with one click that feels instant and cannot double-fire,
 (c) tell at a glance what needs them vs. what's done, and (d) never miss a
 completion — all without opening a terminal.
+
+## Current Status
+
+Waves 1 and 2 are merged or covered by the UX branch. Wave 3 is implemented
+locally: F8 attention-only triage, F9 completion recents, F11 click-to-pin with
+hover grace, and F13 stable roster layout. The branch must pass the full
+harness, debug/release builds, format lint, and CI before merge.

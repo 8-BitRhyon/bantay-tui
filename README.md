@@ -108,9 +108,18 @@ swift build -c release
 bash scripts/setup.sh --package   # → dist/bantay-tui.zip (Bantay-TUI.app)
 ```
 
+### Open-source distribution
+
+This project is not distributed through the Mac App Store and does not require
+Apple Developer secrets. Releases are source-first and may include a universal2
+ad-hoc-signed zip from CI. macOS Gatekeeper can warn for an ad-hoc artifact;
+users can right-click the app and choose **Open**, or build from source with
+the commands above. Developer ID signing/notarization is optional, not a
+project requirement.
+
 ### Requirements
 
-- macOS 14.6+
+- macOS 13+
 - Swift 6 toolchain (Xcode 16+ for `swift test`)
 - Optional: herdr, Node.js 18+ (event adapter)
 

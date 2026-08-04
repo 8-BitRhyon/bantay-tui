@@ -164,6 +164,7 @@ wave (richer data, latency). F9/F13 round it out.
   (`git diff --shortstat` `+N −M` meter fetched per row, `diffStats`), F14
   (route `sendKeys` / `focusPane` / `captureTail` over the herdr socket with CLI
   fallback — sub-ms vs ~100ms Process spawn; `socketCall` + `HerdrSocketClient.perform`).
-- **Not yet built:** F8 (Attention-only filter), F9 (completion recents /
-  "while you were away"), F11 (click-to-pin + hover grace), F13 (stable layout /
-  no-jitter on add-remove).
+- **Wave 3 shipped locally:** F8 (Attention-only filter), F9 (completion
+  recents / "while you were away"), F11 (click-to-pin + hover grace), and F13
+  (stable roster viewport + no agent-count animation). These changes require
+  the same full harness/build/format gates before merge.

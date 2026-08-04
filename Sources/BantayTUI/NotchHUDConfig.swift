@@ -37,6 +37,10 @@ final class NotchHUDConfig {
     var notifyWhenHidden = false {
         didSet { defaults.set(notifyWhenHidden, forKey: "notifyWhenHidden") }
     }
+    /// Show the F8 "Attention" tab (needs-input + failed triage). Default off.
+    var attentionFilterEnabled = false {
+        didSet { defaults.set(attentionFilterEnabled, forKey: "attentionFilterEnabled") }
+    }
     /// Quiet hours: window (start/end minutes since midnight) during which
     /// alert sounds are silenced. Approvals stay visible — nothing is missed.
     var quietHoursEnabled = false {
@@ -206,6 +210,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "notifyWhenHidden") as? Bool {
             notifyWhenHidden = v
+        }
+        if let v = defaults.object(forKey: "attentionFilterEnabled") as? Bool {
+            attentionFilterEnabled = v
         }
         if let v = defaults.object(forKey: "quietHoursEnabled") as? Bool {
             quietHoursEnabled = v

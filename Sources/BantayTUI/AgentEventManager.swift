@@ -91,12 +91,21 @@ struct ProjectContext: Equatable, Sendable {
     }
 }
 
+struct RecentCompletion: Identifiable, Equatable, Sendable {
+    let id: String
+    let source: String
+    let kind: AgentEventKind
+    let title: String?
+    let createdAt: Date
+}
+
 @MainActor
 final class AgentEventManager: ObservableObject {
     @MainActor static let shared = AgentEventManager()
 
     @Published private(set) var currentEvent: AgentEvent?
     @Published private(set) var agents: [AgentSnapshot] = []
+    @Published private(set) var recentCompletions: [RecentCompletion] = []
     /// Aggregate token/cost usage from agent transcripts (gauge in footer).
     @Published private(set) var usage: UsageSnapshot = .zero
     private var watchTask: Task<Void, Never>?
@@ -197,6 +206,11 @@ final class AgentEventManager: ObservableObject {
         isActive = active
     }
 
+    /// Acknowledges completion/failure recents when the expanded panel opens.
+    func markRecentCompletionsSeen() {
+        recentCompletions.removeAll()
+    }
+
     func shouldPlaySound(for event: AgentEvent) -> Bool {
         let key = "\(event.sourceKey):\(event.kind)"
         let now = Date()
@@ -284,6 +298,16 @@ final class AgentEventManager: ObservableObject {
             || event.kind == .cancelled || event.kind == .clear
         {
             startedAtByPane.removeValue(forKey: key)
+        }
+
+        if (event.kind == .completed || event.kind == .failed) && !isActive {
+            let recent = RecentCompletion(
+                id: "\(key):\(event.kind.rawValue):\(event.createdAt.timeIntervalSince1970)",
+                source: event.sourceKey,
+                kind: event.kind,
+                title: event.title ?? event.message,
+                createdAt: event.createdAt)
+            recentCompletions = Array(([recent] + recentCompletions).prefix(5))
         }
 
         if event.kind == .clear {

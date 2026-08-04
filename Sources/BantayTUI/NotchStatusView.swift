@@ -19,6 +19,8 @@ struct NotchStatusView: View {
     @State private var glowPulse = false
     @State private var now = Date()
     @State private var showShelf = false
+    @State private var showAttention = false
+    @State private var isPinned = false
     /// Live "peek" tail for a hovered/expanded agent — shows what the agent is
     /// actually doing inline (the core promise of the control plane).
     @State private var peekingPaneId: String?
@@ -224,7 +226,6 @@ struct NotchStatusView: View {
         .background(Color.clear.allowsHitTesting(false))
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
-        .animation(morphAnimation, value: eventManager.agents.count)
         .onAppear {
             if !ProcessInfo.processInfo.isOperatingSystemAtLeast(
                 .init(majorVersion: 14, minorVersion: 0, patchVersion: 0))
@@ -236,6 +237,7 @@ struct NotchStatusView: View {
         .onDisappear { removeLegacyKeyMonitor() }
         .onChange(of: isExpanded) { _ in
             if !isExpanded { cancelComposing() }
+            if isExpanded { eventManager.markRecentCompletionsSeen() }
             eventManager.setActive(isExpanded)
         }
         .onChange(of: eventManager.currentEvent) { _ in handleEventChange() }
@@ -665,6 +667,7 @@ struct NotchStatusView: View {
         }
         .frame(width: islandWidth, height: IslandMetrics.pillHeight)
         .contentShape(Rectangle())
+        .overlay(alignment: .topTrailing) { recentCompletionBadge }
     }
 
     /// Centered idle: the pill spans the notch (black bar behind it) and
@@ -746,6 +749,22 @@ struct NotchStatusView: View {
             alignment: .center
         )
         .contentShape(Rectangle())
+        .overlay(alignment: .topTrailing) { recentCompletionBadge }
+    }
+
+    @ViewBuilder
+    private var recentCompletionBadge: some View {
+        if !eventManager.recentCompletions.isEmpty {
+            Text("\(eventManager.recentCompletions.count) recent")
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .frame(height: 16)
+                .background(Color.teal.opacity(0.85), in: Capsule())
+                .offset(x: -5, y: -4)
+                .accessibilityLabel(
+                    "\(eventManager.recentCompletions.count) recent agent completions")
+        }
     }
 
     private func approvalPill(event: AgentEvent, paneId: String) -> some View {
@@ -889,7 +908,9 @@ struct NotchStatusView: View {
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
 
-            if showShelf {
+            if showAttention {
+                attentionContent
+            } else if showShelf {
                 shelfContent
             } else {
                 queueAndRoster(queue: queue, queueSplit: queueSplit, counts: counts)
@@ -944,24 +965,63 @@ struct NotchStatusView: View {
         }
     }
 
+    /// F8 triage view: only agents that need you (blocked) or failed.
+    /// Reuses the merged roster so approval variance/choices render.
+    private var attentionContent: some View {
+        let rows = IslandMetrics.attentionFilter(mergedRoster)
+        return VStack(spacing: 0) {
+            if rows.isEmpty {
+                Text("Nothing needs you")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.4))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: IslandMetrics.rowHeight)
+            }
+            ForEach(rows) { agent in
+                if agent.kind == .accessRequest || agent.kind == .waiting,
+                    agent.paneId != nil
+                {
+                    approvalQueueCard(agent: agent)
+                } else {
+                    agentRow(agent: agent)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
     /// Roster scroll area: natural row height from the rendered roster
     /// (muted sources excluded), capped so header/tabs/footer always stay
     /// visible inside the island (scrolls when 6+ rows overflow).
     private var rosterScrollHeight: CGFloat {
-        let natural = CGFloat(mergedRoster.count) * IslandMetrics.rowHeight
         let chrome =
             IslandMetrics.headerHeight + IslandMetrics.footerHeight
             + (NotchHUDConfig.shared.showShelfTab
                 ? IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight : 0)
         let available =
             IslandMetrics.maxExpandedHeight - chipTopOffset - chrome - IslandMetrics.contentSpacing
-        return max(min(natural, available), 0)
+        return IslandMetrics.stableRosterHeight(
+            agentCount: mergedRoster.count, availableHeight: available)
     }
 
     private var shelfTabBar: some View {
         HStack(spacing: 4) {
-            shelfTabButton(title: "Agents", selected: !showShelf) { showShelf = false }
-            shelfTabButton(title: "Shelf", selected: showShelf) { showShelf = true }
+            shelfTabButton(title: "Agents", selected: !showShelf && !showAttention) {
+                showShelf = false
+                showAttention = false
+            }
+            if NotchHUDConfig.shared.attentionFilterEnabled {
+                shelfTabButton(
+                    title: "Attention", selected: showAttention
+                ) {
+                    showShelf = false
+                    showAttention = true
+                }
+            }
+            shelfTabButton(title: "Shelf", selected: showShelf) {
+                showAttention = false
+                showShelf = true
+            }
             Spacer(minLength: 8)
         }
         .padding(.horizontal, 12)
@@ -1089,6 +1149,18 @@ struct NotchStatusView: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: 200, alignment: .trailing)
             }
+            Button {
+                isPinned.toggle()
+            } label: {
+                Image(systemName: isPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(isPinned ? .white : .white.opacity(0.5))
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isPinned ? "Unpin panel" : "Pin panel open")
+            .accessibilityLabel(isPinned ? "Unpin panel" : "Pin panel open")
         }
         .padding(.horizontal, 16)
         .frame(height: IslandMetrics.headerHeight)
@@ -1586,7 +1658,10 @@ struct NotchStatusView: View {
     }
 
     private func expandTo(_ expanded: Bool) {
-        withAnimation(morphAnimation) { isExpanded = expanded }
+        withAnimation(morphAnimation) {
+            isExpanded = expanded
+            if !expanded { isPinned = false }
+        }
     }
 
     private func handleHover(_ hovering: Bool) {
@@ -1599,9 +1674,14 @@ struct NotchStatusView: View {
                 expandTo(true)
             }
         } else if IslandMetrics.shouldCollapseOnHoverExit(
-            isExpanded: isExpanded, isComposing: composingPaneId != nil)
+            isExpanded: isExpanded, isComposing: composingPaneId != nil, isPinned: isPinned)
         {
-            expandTo(false)
+            hoverTask = Task { @MainActor in
+                try? await Task.sleep(
+                    for: .milliseconds(Int(IslandMetrics.hoverExitGrace * 1000)))
+                guard !Task.isCancelled, !isHovered, !isPinned else { return }
+                expandTo(false)
+            }
         }
     }
 

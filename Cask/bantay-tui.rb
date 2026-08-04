@@ -2,10 +2,10 @@ cask "bantay-tui" do
   version "0.1.0"
   sha256 "REPLACE_WITH_ZIP_SHA256"
 
-  url "https://github.com/monozen/bantay-tui/releases/download/v#{version}/bantay-tui.zip"
+  url "https://github.com/8-BitRhyon/bantay-tui/releases/download/v#{version}/bantay-tui.zip"
   name "Bantay-TUI"
   desc "Agentic control plane in your MacBook notch"
-  homepage "https://github.com/monozen/bantay-tui"
+  homepage "https://github.com/8-BitRhyon/bantay-tui"
 
   auto_updates true
 
