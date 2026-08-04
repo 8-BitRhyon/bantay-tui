@@ -20,7 +20,7 @@ adversarial corpus (`try to break it`) grows with every plan.
 | 002  | Real Settings window (replace `EmptyView()`) + onboarding | P1 | M | 001 | DONE |
 | 003  | Auto-update via Sparkle | P2 | M | 002 | TODO |
 | 004  | Clean uninstall (script `--uninstall` + in-app path) | P2 | S |  -  | DONE |
-| 005  | Quiet hours + per-source mute + snooze persistence | P2 | S | 002 | TODO |
+| 005  | Quiet hours + per-source mute + snooze persistence | P2 | S | 002 | IN PROGRESS — mute shipped 2026-08-04 (4ce9fc0); quiet hours remain |
 | 006  | Spec-driven discipline + adversarial test suite (RED→GREEN) | P1 | M |  -  | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
