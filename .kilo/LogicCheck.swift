@@ -29,6 +29,12 @@ struct LogicCheckMain {
             check(events.map(\.kind) == kinds, "\(name): \(events.map(\.kind)) != \(kinds)")
         }
 
+        func dateWith(minutesSinceMidnight minutes: Int) -> Date {
+            let cal = Calendar.current
+            let start = cal.startOfDay(for: Date())
+            return cal.date(byAdding: .minute, value: minutes, to: start) ?? Date()
+        }
+
         // MARK: - capture update() logic
 
         var seen: [String: AgentEventKind] = [:]
@@ -1987,6 +1993,85 @@ struct LogicCheckMain {
                 "L30 unmuted source surfaces again")
             cfg.mutedSources = orig
             defaults.removeObject(forKey: "mutedSources")
+        }
+
+        // L31. Quiet hours: window math with overnight wrap and exact
+        // boundaries; config persistence. Effect is sound suppression only —
+        // approvals stay visible, so nothing can be silently missed.
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 10 * 60, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 active mid-window")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 8 * 60 + 59, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 inactive before start")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 17 * 60, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 inactive at end boundary")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 9 * 60, startMinutes: 9 * 60, endMinutes: 17 * 60),
+            "L31 active at start boundary")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 23 * 60, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight active past midnight")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 5 * 60 + 59, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight active before end")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 12 * 60, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight inactive midday")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 6 * 60, startMinutes: 22 * 60, endMinutes: 6 * 60),
+            "L31 overnight inactive at end")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 10 * 60, startMinutes: 10 * 60, endMinutes: 10 * 60),
+            "L31 zero-length window inactive")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 0, startMinutes: 0, endMinutes: 24 * 60),
+            "L31 full-day window active")
+        check(
+            IslandMetrics.quietHoursActive(
+                nowMinutes: 1439, startMinutes: 0, endMinutes: 24 * 60),
+            "L31 full-day window active at 23:59")
+        check(
+            !IslandMetrics.quietHoursActive(
+                nowMinutes: 1440, startMinutes: 0, endMinutes: 24 * 60),
+            "L31 minutes clamped to 0...1439")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = (cfg.quietHoursEnabled, cfg.quietHoursStart, cfg.quietHoursEnd)
+            cfg.quietHoursEnabled = true
+            cfg.quietHoursStart = 22 * 60
+            cfg.quietHoursEnd = 6 * 60
+            check(
+                defaults.bool(forKey: "quietHoursEnabled")
+                    && defaults.integer(forKey: "quietHoursStart") == 1320
+                    && defaults.integer(forKey: "quietHoursEnd") == 360,
+                "L31 quiet hours persisted")
+            cfg.quietHoursEnabled = false
+            check(
+                !cfg.isInQuietHours(at: Date()),
+                "L31 disabled quiet hours inactive")
+            cfg.quietHoursEnabled = true
+            check(
+                cfg.isInQuietHours(at: dateWith(minutesSinceMidnight: 23 * 60)),
+                "L31 config active via date minutes")
+            cfg.quietHoursEnabled = orig.0
+            cfg.quietHoursStart = orig.1
+            cfg.quietHoursEnd = orig.2
+            defaults.removeObject(forKey: "quietHoursEnabled")
+            defaults.removeObject(forKey: "quietHoursStart")
+            defaults.removeObject(forKey: "quietHoursEnd")
         }
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")

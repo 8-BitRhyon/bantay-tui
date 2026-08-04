@@ -1481,6 +1481,9 @@ struct NotchStatusView: View {
         let config = NotchHUDConfig.shared
         guard config.enableAgentAlerts else { return }
         guard !(config.muteInTerminal && isTerminalFocused()) else { return }
+        // Quiet hours silence sounds only — the pill and queue stay visible,
+        // so an approval can never be missed silently.
+        guard !config.isInQuietHours() else { return }
         guard let sound = NSSound(named: event.kind.soundName) else { return }
         sound.volume = config.soundVolume
         sound.play()

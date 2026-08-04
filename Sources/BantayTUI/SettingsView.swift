@@ -38,6 +38,9 @@ struct SettingsView: View {
     @State private var preferredTerminal = NotchHUDConfig.shared.preferredTerminalBundleID ?? ""
     @State private var claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
     @State private var mutedSources = NotchHUDConfig.shared.mutedSources
+    @State private var quietHoursEnabled = NotchHUDConfig.shared.quietHoursEnabled
+    @State private var quietHoursStart = NotchHUDConfig.shared.quietHoursStart
+    @State private var quietHoursEnd = NotchHUDConfig.shared.quietHoursEnd
 
     var body: some View {
         Form {
@@ -199,6 +202,32 @@ struct SettingsView: View {
                     Text("Test notification is available in debug builds only.")
                 #endif
             }
+            Section("Quiet hours") {
+                Toggle("Silence alert sounds", isOn: $quietHoursEnabled)
+                    .help(
+                        "During the window, alert sounds are silenced. "
+                            + "Approvals still appear on the island — nothing is missed."
+                    )
+                    .onChange(of: quietHoursEnabled) { newValue in
+                        NotchHUDConfig.shared.quietHoursEnabled = newValue
+                    }
+                Stepper(
+                    "From \(timeLabel(quietHoursStart))",
+                    value: $quietHoursStart, in: 0...1410, step: 30
+                )
+                .disabled(!quietHoursEnabled)
+                .onChange(of: quietHoursStart) { newValue in
+                    NotchHUDConfig.shared.quietHoursStart = newValue
+                }
+                Stepper(
+                    "To \(timeLabel(quietHoursEnd))",
+                    value: $quietHoursEnd, in: 0...1410, step: 30
+                )
+                .disabled(!quietHoursEnabled)
+                .onChange(of: quietHoursEnd) { newValue in
+                    NotchHUDConfig.shared.quietHoursEnd = newValue
+                }
+            }
             Section("Pill behavior") {
                 Stepper("Auto-clear after \(autoClearTTL) s", value: $autoClearTTL, in: 1...30)
                     .onChange(of: autoClearTTL) { newValue in
@@ -336,6 +365,10 @@ struct SettingsView: View {
         case "com.jetbrains.intellij": return "IntelliJ IDEA"
         default: return bundleID
         }
+    }
+
+    private func timeLabel(_ minutes: Int) -> String {
+        String(format: "%02d:%02d", minutes / 60, minutes % 60)
     }
 
     /// Install or remove the Claude Code hooks in ~/.claude/settings.json.

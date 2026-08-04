@@ -32,6 +32,27 @@ final class NotchHUDConfig {
     var muteInTerminal: Bool = true {
         didSet { defaults.set(muteInTerminal, forKey: "muteInTerminal") }
     }
+    /// Quiet hours: window (start/end minutes since midnight) during which
+    /// alert sounds are silenced. Approvals stay visible — nothing is missed.
+    var quietHoursEnabled = false {
+        didSet { defaults.set(quietHoursEnabled, forKey: "quietHoursEnabled") }
+    }
+    var quietHoursStart = 22 * 60 {
+        didSet { defaults.set(quietHoursStart, forKey: "quietHoursStart") }
+    }
+    var quietHoursEnd = 7 * 60 {
+        didSet { defaults.set(quietHoursEnd, forKey: "quietHoursEnd") }
+    }
+
+    /// Whether the quiet-hours window covers `date` (defaults to now).
+    func isInQuietHours(at date: Date = Date()) -> Bool {
+        guard quietHoursEnabled else { return false }
+        let cal = Calendar.current
+        let minutes =
+            cal.component(.hour, from: date) * 60 + cal.component(.minute, from: date)
+        return IslandMetrics.quietHoursActive(
+            nowMinutes: minutes, startMinutes: quietHoursStart, endMinutes: quietHoursEnd)
+    }
     var islandEnabled = true {
         didSet { defaults.set(islandEnabled, forKey: "islandEnabled") }
     }
@@ -177,6 +198,15 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "muteInTerminal") as? NSNumber {
             muteInTerminal = v.boolValue
+        }
+        if let v = defaults.object(forKey: "quietHoursEnabled") as? Bool {
+            quietHoursEnabled = v
+        }
+        if let v = defaults.object(forKey: "quietHoursStart") as? NSNumber {
+            quietHoursStart = min(max(v.intValue, 0), 1439)
+        }
+        if let v = defaults.object(forKey: "quietHoursEnd") as? NSNumber {
+            quietHoursEnd = min(max(v.intValue, 0), 1439)
         }
         if let v = defaults.object(forKey: "islandEnabled") as? Bool {
             islandEnabled = v

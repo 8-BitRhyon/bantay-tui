@@ -500,6 +500,22 @@ public enum IslandMetrics: Sendable {
         }
     }
 
+    /// Quiet-hours window check. Minutes are 0...1439 (00:00-23:59).
+    /// Windows that wrap midnight (start > end) are handled; a zero-length
+    /// window (start == end) is always inactive. Only suppresses sounds —
+    /// approvals stay visible.
+    public static func quietHoursActive(
+        nowMinutes: Int, startMinutes: Int, endMinutes: Int
+    ) -> Bool {
+        guard (0..<1440).contains(nowMinutes), startMinutes != endMinutes else {
+            return false
+        }
+        if startMinutes < endMinutes {
+            return nowMinutes >= startMinutes && nowMinutes < endMinutes
+        }
+        return nowMinutes >= startMinutes || nowMinutes < endMinutes
+    }
+
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
