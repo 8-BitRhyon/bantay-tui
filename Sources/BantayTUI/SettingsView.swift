@@ -44,6 +44,8 @@ struct SettingsView: View {
     @State private var quietHoursEnd = NotchHUDConfig.shared.quietHoursEnd
     @State private var notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
     @State private var volumePreviewTask: Task<Void, Never>?
+    @State private var herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
+        manifestPath: Self.herdrManifestPath)
 
     var body: some View {
         Form {
@@ -130,6 +132,21 @@ struct SettingsView: View {
                     )
                     .onChange(of: claudeHookInstalled) { newValue in
                         installClaudeHook(newValue)
+                    }
+            }
+            Section("herdr integration") {
+                Toggle("Stream herdr events", isOn: $herdrPluginInstalled)
+                    .help(
+                        "Installs the event adapter + plugin manifest into the app's "
+                            + "data folder and registers it with herdr (plugin.link). "
+                            + "No repository checkout needed."
+                    )
+                    .onChange(of: herdrPluginInstalled) { newValue in
+                        if newValue {
+                            installHerdrPlugin()
+                        } else {
+                            uninstallHerdrPlugin()
+                        }
                     }
             }
             Section("Shelf") {
@@ -419,6 +436,8 @@ struct SettingsView: View {
         quietHoursEnabled = NotchHUDConfig.shared.quietHoursEnabled
         mutedSources = NotchHUDConfig.shared.mutedSources
         claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
+        herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
+            manifestPath: Self.herdrManifestPath)
         launchAtLogin = LaunchAgent.isLoaded()
     }
 
@@ -457,6 +476,46 @@ struct SettingsView: View {
 
     private func timeLabel(_ minutes: Int) -> String {
         String(format: "%02d:%02d", minutes / 60, minutes % 60)
+    }
+
+    /// Where the app-managed herdr plugin manifest lives.
+    private static var herdrManifestPath: String {
+        LaunchAgent.dataDirectory() + "/" + HerdrPluginInstaller.manifestFileName
+    }
+
+    /// One-click herdr integration: write adapter + manifest, then register
+    /// with the running herdr server over its socket. Best-effort — herdr
+    /// not running just means events start at next launch.
+    private func installHerdrPlugin() {
+        let dataDir = LaunchAgent.dataDirectory()
+        let manifest = Self.herdrManifestPath
+        guard HerdrPluginInstaller.install(dataDir: dataDir, manifestPath: manifest) else {
+            herdrPluginInstalled = false
+            let alert = NSAlert()
+            alert.messageText = "Could not install the herdr integration"
+            alert.informativeText =
+                "The event adapter could not be written to the app data folder."
+            alert.runModal()
+            return
+        }
+        Task {
+            let path = HerdrSocketProtocol.socketPath(
+                env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+            let client = HerdrSocketClient(socketURL: URL(fileURLWithPath: path))
+            let params = "{\"path\": \"\(manifest)\", \"enabled\": true}"
+            _ = await client.call(method: "plugin.link", paramsJSON: params)
+        }
+    }
+
+    private func uninstallHerdrPlugin() {
+        Task {
+            let path = HerdrSocketProtocol.socketPath(
+                env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+            let client = HerdrSocketClient(socketURL: URL(fileURLWithPath: path))
+            let params = "{\"plugin_id\": \"\(HerdrPluginInstaller.pluginID)\"}"
+            _ = await client.call(method: "plugin.unlink", paramsJSON: params)
+            HerdrPluginInstaller.uninstall(manifestPath: Self.herdrManifestPath)
+        }
     }
 
     /// Install or remove the Claude Code hooks in ~/.claude/settings.json.
