@@ -23,6 +23,7 @@ adversarial corpus (`try to break it`) grows with every plan.
 | 005  | Quiet hours + per-source mute + snooze persistence | P2 | S | 002 | DONE — mute + quiet hours shipped 2026-08-04 (4ce9fc0) |
 | 006  | Spec-driven discipline + adversarial test suite (RED→GREEN) | P1 | M |  -  | IN PROGRESS |
 | 010  | In-app integration: LaunchAgent self-install + events bootstrap | P2 | S |  -  | DONE — no setup.sh needed for launch-at-login (2026-08-04) |
+| 011  | Hidden-island approval notifications (Notification Center fallback) | P3 | S |  -  | DONE — opt-in, approvals never missed silently (2026-08-04) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale  -  finding fixed independently or approach

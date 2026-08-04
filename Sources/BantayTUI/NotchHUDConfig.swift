@@ -32,6 +32,11 @@ final class NotchHUDConfig {
     var muteInTerminal: Bool = true {
         didSet { defaults.set(muteInTerminal, forKey: "muteInTerminal") }
     }
+    /// Post a Notification Center alert when an approval arrives while the
+    /// island is hidden (snoozed / hide-at-startup). Opt-in; default off.
+    var notifyWhenHidden = false {
+        didSet { defaults.set(notifyWhenHidden, forKey: "notifyWhenHidden") }
+    }
     /// Quiet hours: window (start/end minutes since midnight) during which
     /// alert sounds are silenced. Approvals stay visible — nothing is missed.
     var quietHoursEnabled = false {
@@ -198,6 +203,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "muteInTerminal") as? NSNumber {
             muteInTerminal = v.boolValue
+        }
+        if let v = defaults.object(forKey: "notifyWhenHidden") as? Bool {
+            notifyWhenHidden = v
         }
         if let v = defaults.object(forKey: "quietHoursEnabled") as? Bool {
             quietHoursEnabled = v

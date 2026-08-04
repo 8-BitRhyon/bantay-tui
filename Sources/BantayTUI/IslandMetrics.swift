@@ -516,6 +516,16 @@ public enum IslandMetrics: Sendable {
         return nowMinutes >= startMinutes || nowMinutes < endMinutes
     }
 
+    /// Whether an approval event needs a Notification Center fallback:
+    /// the feature is on, the island is NOT showing the event, and the kind
+    /// is one a user must act on. Progress/completion noise never notifies.
+    static func shouldPostNotification(
+        islandVisible: Bool, notifyWhenHidden: Bool, kind: AgentEventKind
+    ) -> Bool {
+        guard notifyWhenHidden, !islandVisible else { return false }
+        return kind == .accessRequest || kind == .waiting
+    }
+
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
