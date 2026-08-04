@@ -1,9 +1,69 @@
 import AppKit
+import Sparkle
 import SwiftUI
 
 extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
     static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
+}
+
+/// Sparkle appcast feed for the packaged release (placeholder until the
+/// first signed release; the release pipeline overwrites update/appcast.xml).
+let dsuAppCastURL = "https://github.com/8-BitRhyon/bantay-tui/releases/latest/download/appcast.xml"
+
+/// App-wide Sparkle coordinator. One strong reference must live for the
+/// app's lifetime. Nil when the binary runs unbundled (plain `swift build`
+/// runs have no Info.plist), so dev runs never touch Sparkle.
+@MainActor
+enum AppUpdater {
+    private static var controller: SPUStandardUpdaterController?
+    private static var feedDelegate: FeedURLDelegate?
+    private static var started = false
+
+    static func launchIfConfigured() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let delegate = FeedURLDelegate()
+        feedDelegate = delegate
+        let c = SPUStandardUpdaterController(
+            startingUpdater: false, updaterDelegate: delegate, userDriverDelegate: nil)
+        controller = c
+        if NotchHUDConfig.shared.automaticallyChecksForUpdates {
+            do {
+                try c.updater.start()
+                started = true
+            } catch {
+                AppDelegate.dbg("updater: start failed: \(error)")
+            }
+        }
+    }
+
+    static func checkForUpdates() {
+        controller?.checkForUpdates(nil)
+    }
+
+    static func setAutomaticCheck(_ enabled: Bool) {
+        guard let controller else { return }
+        if enabled && !started {
+            do {
+                try controller.updater.start()
+                started = true
+            } catch {
+                AppDelegate.dbg("updater: start failed: \(error)")
+            }
+        }
+        controller.updater.automaticallyChecksForUpdates = enabled
+    }
+
+    static func setAutomaticDownload(_ enabled: Bool) {
+        guard started else { return }
+        controller?.updater.automaticallyDownloadsUpdates = enabled
+    }
+}
+
+private final class FeedURLDelegate: NSObject, SPUUpdaterDelegate {
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        dsuAppCastURL
+    }
 }
 
 @main
@@ -112,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
+        AppUpdater.launchIfConfigured()
         makeIslandWindow()
         installMenuBar()
         observeScreenChanges()
@@ -553,6 +614,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdatesAction),
+            keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
@@ -643,6 +711,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ?? makeSettingsWindow()
         settingsWindow.center()
         settingsWindow.makeKeyAndOrderFront(nil)
+    }
+
+    @MainActor
+    @objc private func checkForUpdatesAction() {
+        AppUpdater.checkForUpdates()
     }
 
     @MainActor

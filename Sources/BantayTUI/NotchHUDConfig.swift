@@ -131,6 +131,16 @@ final class NotchHUDConfig {
     var preferredTerminalBundleID: String? {
         didSet { defaults.set(preferredTerminalBundleID, forKey: "preferredTerminalBundleID") }
     }
+    var automaticallyChecksForUpdates = false {
+        didSet {
+            defaults.set(automaticallyChecksForUpdates, forKey: "automaticallyChecksForUpdates")
+        }
+    }
+    var automaticallyDownloadsUpdates = false {
+        didSet {
+            defaults.set(automaticallyDownloadsUpdates, forKey: "automaticallyDownloadsUpdates")
+        }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -252,6 +262,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.string(forKey: "preferredTerminalBundleID") {
             preferredTerminalBundleID = v
+        }
+        if let v = defaults.object(forKey: "automaticallyChecksForUpdates") as? Bool {
+            automaticallyChecksForUpdates = v
+        }
+        if let v = defaults.object(forKey: "automaticallyDownloadsUpdates") as? Bool {
+            automaticallyDownloadsUpdates = v
         }
     }
 }

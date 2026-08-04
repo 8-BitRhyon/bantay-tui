@@ -35,6 +35,8 @@ struct SettingsView: View {
     @State private var showInFullScreen = NotchHUDConfig.shared.showInFullScreen
     @State private var avoidMenuBar = NotchHUDConfig.shared.avoidMenuBarIcons
     @State private var preferredTerminal = NotchHUDConfig.shared.preferredTerminalBundleID ?? ""
+    @State private var autoCheckUpdates = NotchHUDConfig.shared.automaticallyChecksForUpdates
+    @State private var autoDownloadUpdates = NotchHUDConfig.shared.automaticallyDownloadsUpdates
 
     var body: some View {
         Form {
@@ -225,6 +227,26 @@ struct SettingsView: View {
                         NotificationCenter.default.post(
                             name: .notchVisibilityChanged, object: nil)
                     }
+            }
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $autoCheckUpdates)
+                    .help(
+                        "On by default once the first signed release exists; "
+                            + "until then updates stay manual."
+                    )
+                    .onChange(of: autoCheckUpdates) { _, newValue in
+                        NotchHUDConfig.shared.automaticallyChecksForUpdates = newValue
+                        AppUpdater.setAutomaticCheck(newValue)
+                    }
+                Toggle("Download updates automatically", isOn: $autoDownloadUpdates)
+                    .help("Requires automatic checks to be enabled.")
+                    .onChange(of: autoDownloadUpdates) { _, newValue in
+                        NotchHUDConfig.shared.automaticallyDownloadsUpdates = newValue
+                        AppUpdater.setAutomaticDownload(newValue)
+                    }
+                Button("Check for Updates…") {
+                    AppUpdater.checkForUpdates()
+                }
             }
             Section("Expanded panel") {
                 Toggle("Pin approval queue on top", isOn: $expandedShowQueue)

@@ -9,9 +9,15 @@ let package = Package(
     products: [
         .executable(name: "bantay", targets: ["BantayTUI"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.6.4"),
+    ],
     targets: [
         .executableTarget(
             name: "BantayTUI",
+            dependencies: [
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             path: "Sources/BantayTUI"
         ),
         .testTarget(
