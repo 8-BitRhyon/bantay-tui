@@ -41,14 +41,14 @@ enum AgentEventKind: String, Decodable, CaseIterable {
 
     var color: String {
         switch self {
-        case .accessRequest: return "#ff6b6b"
+        case .accessRequest: return "#ff5470"  // alarm red — the only "needs you now"
         case .clear: return "#8a8aa8"
         case .idle: return "#6e6e8a"
-        case .waiting: return "#ffe066"
-        case .completed: return "#4ecdc4"
-        case .failed: return "#ff6b6b"
-        case .started: return "#8b7eff"
-        case .progress: return "#8b7eff"
+        case .waiting: return "#ffd166"  // amber — blocked, not urgent
+        case .completed: return "#4ecdc4"  // teal — done
+        case .failed: return "#ff9f43"  // orange — failed, distinct from "needs you"
+        case .started: return "#7c83ff"  // periwinkle — working
+        case .progress: return "#7c83ff"
         case .cancelled: return "#8a8aa8"
         }
     }

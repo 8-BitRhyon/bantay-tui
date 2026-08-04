@@ -147,8 +147,9 @@ public enum IslandMetrics: Sendable {
     /// How many blocked/needs-input agents get their own queue card before
     /// collapsing into `+N more`.
     public static let expandedQueueCap: Int = 3
-    /// Height of one approval-queue card.
-    public static let queueCardHeight: CGFloat = 42
+    /// Height of one approval-queue card. Reserves room for the optional live
+    /// "peek" tail (captureTail) that drops in below the controls on hover.
+    public static let queueCardHeight: CGFloat = 56
     /// Shelf tab bar height (Agents/Shelf switcher).
     public static let shelfTabBarHeight: CGFloat = 22
     /// Divider between the header/tabs and the list.
@@ -166,6 +167,19 @@ public enum IslandMetrics: Sendable {
         case .completed: return 2
         case .failed: return 3
         case .idle, .cancelled, .clear: return 4
+        }
+    }
+
+    /// Human label for a roster group rank (section header in the expanded
+    /// control plane). Empty for ranks that never carry agents.
+    static func groupLabel(rank: Int) -> String {
+        switch rank {
+        case 0: return "Needs you"
+        case 1: return "Working"
+        case 2: return "Done"
+        case 3: return "Failed"
+        case 4: return "Idle"
+        default: return ""
         }
     }
 

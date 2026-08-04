@@ -61,6 +61,40 @@ enum HerdrSocketProtocol {
     }
 }
 
+/// Lock-protected accumulation for the socket read loop. The NWConnection
+/// completion callbacks are `@Sendable`; the buffer and settle-once flag
+/// must be reachable from all of them without data races.
+private final class SocketReadState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var settled = false
+
+    func append(_ data: Data) {
+        lock.lock()
+        buffer.append(data)
+        lock.unlock()
+    }
+
+    /// First parseable response line currently buffered, if any.
+    func firstResponseLine() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return HerdrSocketProtocol.extractLines(from: buffer).first
+    }
+
+    /// Settles the continuation exactly once; subsequent calls no-op.
+    func settleOnce(
+        _ continuation: CheckedContinuation<HerdrSocketProtocol.Response?, Never>,
+        with value: HerdrSocketProtocol.Response?
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !settled else { return }
+        settled = true
+        continuation.resume(returning: value)
+    }
+}
+
 /// Direct herdr socket client: sends one NDJSON request per connection,
 /// returns the first complete response line. Used by the adapter before
 /// falling back to CLI subprocesses.
@@ -76,46 +110,51 @@ final class HerdrSocketClient {
     func call(method: String, paramsJSON: String = "{}", timeout: TimeInterval = 1.0)
         async -> HerdrSocketProtocol.Response?
     {
+        await HerdrSocketClient.perform(
+            socketPath: socketURL.path, method: method,
+            paramsJSON: paramsJSON, timeout: timeout)
+    }
+
+    /// Standalone socket request so callers can run it from a `Task` closure
+    /// that captures only `Sendable` values (no `self`), avoiding the
+    /// data-race warning a captured client instance would trigger.
+    private static func perform(
+        socketPath: String, method: String, paramsJSON: String, timeout: TimeInterval
+    ) async -> HerdrSocketProtocol.Response? {
         let id = "req_\(UUID().uuidString.prefix(8))"
-        let line = HerdrSocketProtocol.requestLine(id: id, method: method, paramsJSON: paramsJSON)
-        let endpoint = NWEndpoint.unix(path: socketURL.path)
+        let line = HerdrSocketProtocol.requestLine(
+            id: id, method: method, paramsJSON: paramsJSON)
+        let endpoint = NWEndpoint.unix(path: socketPath)
         let connection = NWConnection(to: endpoint, using: .tcp)
         connection.start(queue: .main)
 
+        let state = SocketReadState()
         let response = await withCheckedContinuation { continuation in
-            var buffer = Data()
-            var settled = false
-            let settle: (HerdrSocketProtocol.Response?) -> Void = { value in
-                guard !settled else { return }
-                settled = true
-                continuation.resume(returning: value)
-            }
             connection.send(
                 content: Data((line + "\n").utf8),
                 completion: .contentProcessed { error in
                     if error != nil {
-                        settle(nil)
+                        state.settleOnce(continuation, with: nil)
                     }
                 })
             connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
                 data, _, isComplete, error in
                 if let data {
-                    buffer.append(data)
-                    let lines = HerdrSocketProtocol.extractLines(from: buffer)
-                    if let first = lines.first,
+                    state.append(data)
+                    if let first = state.firstResponseLine(),
                         let parsed = HerdrSocketProtocol.parseResponseLine(first)
                     {
-                        settle(parsed)
+                        state.settleOnce(continuation, with: parsed)
                         return
                     }
                 }
                 if error != nil || isComplete {
-                    settle(nil)
+                    state.settleOnce(continuation, with: nil)
                 }
             }
             Task {
                 try? await Task.sleep(for: .seconds(timeout))
-                settle(nil)
+                state.settleOnce(continuation, with: nil)
             }
         }
         connection.cancel()

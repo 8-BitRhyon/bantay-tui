@@ -22,7 +22,7 @@ struct LogicCheckMain {
                 agentStatus: status,
                 paneId: pane,
                 workspaceId: String(pane.split(separator: ":").first ?? ""),
-                terminalTitle: "\(name) | \(status)")
+                terminalTitle: "\(name) | \(status)", cwd: nil)
         }
 
         func expectKinds(_ events: [AgentEvent], _ kinds: [AgentEventKind], _ name: String) {
@@ -835,7 +835,7 @@ struct LogicCheckMain {
         MainActor.assumeIsolated {
             let info = HerdrAgentInfo(
                 agent: "kilo", agentStatus: "blocked", paneId: "1-1",
-                workspaceId: "1", terminalTitle: "Need approval: run tests?")
+                workspaceId: "1", terminalTitle: "Need approval: run tests?", cwd: nil)
             guard let snapshot = AgentEventManager.snapshot(for: info) else {
                 check(false, "L7 blocked snapshot builds")
                 return
@@ -864,7 +864,7 @@ struct LogicCheckMain {
                 "L7 merged snapshot renders numbered options")
             let plain = HerdrAgentInfo(
                 agent: "shell", agentStatus: "idle", paneId: "1-2",
-                workspaceId: "1", terminalTitle: nil)
+                workspaceId: "1", terminalTitle: nil, cwd: nil)
             let plainSnapshot = AgentEventManager.snapshot(for: plain)!
             let unmerged = manager.mergeApprovals(into: [plainSnapshot])
             check(
@@ -914,10 +914,10 @@ struct LogicCheckMain {
                 capture: false)
             let working = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
-                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let done = AgentSnapshot(
                 id: "p2", source: "codex", kind: .completed, title: nil, message: nil,
-                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let start = Date(timeIntervalSince1970: 500_000)
             manager.pendingApprovals["1-1"] = (variance: nil, choices: nil)
             let merged = manager.mergeApprovals(into: [working, done])
@@ -1079,7 +1079,7 @@ struct LogicCheckMain {
             let herdr = [
                 HerdrAgentInfo(
                     agent: "claude", agentStatus: "working", paneId: "1-1",
-                    workspaceId: "1", terminalTitle: "refactor")
+                    workspaceId: "1", terminalTitle: "refactor", cwd: nil)
             ]
             let merged = manager.mergeStandalone(into: herdr, detected: detected)
             check(
@@ -1804,10 +1804,10 @@ struct LogicCheckMain {
                 capture: false)
             let kilo = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
-                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let codex = AgentSnapshot(
                 id: "p2", source: "codex", kind: .progress, title: nil, message: nil,
-                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
             let visible = manager.mergeApprovals(into: [kilo, codex])
             check(
                 visible.map(\.source) == ["kilo"],
@@ -2371,6 +2371,54 @@ struct LogicCheckMain {
                 "L35 not installed after uninstall")
             HerdrPluginInstaller.uninstall(manifestPath: manifest)
             check(true, "L35 uninstall tolerates missing files")
+
+            try? FileManager.default.removeItem(atPath: tmp)
+        }
+
+        // L36. ProjectContext (wave 2): project basename + git branch from
+        // .git/HEAD, offline; detached HEAD and non-git dirs handled; nil
+        // when no cwd. Roster rows read "project · branch" not bare tool names.
+        do {
+            let tmp = NSTemporaryDirectory() + "/bantay-l36-\(UUID().uuidString)"
+            let gitDir = tmp + "/bantay-tui"
+            try? FileManager.default.createDirectory(
+                atPath: gitDir + "/.git", withIntermediateDirectories: true)
+            try? "ref: refs/heads/main\n".write(
+                toFile: gitDir + "/.git/HEAD", atomically: true, encoding: .utf8)
+            let ctx = ProjectContext(cwd: gitDir)
+            check(ctx.project == "bantay-tui", "L36 project is dir basename")
+            check(ctx.branch == "main", "L36 branch parsed from HEAD")
+            check(ctx.isGit, "L36 git repo detected")
+
+            let detachedDir = tmp + "/detached"
+            try? FileManager.default.createDirectory(
+                atPath: detachedDir + "/.git", withIntermediateDirectories: true)
+            try? "a1b2c3d4f5\n".write(
+                toFile: detachedDir + "/.git/HEAD", atomically: true, encoding: .utf8)
+            let detached = ProjectContext(cwd: detachedDir)
+            check(
+                detached.branch == "detached" && detached.isGit,
+                "L36 detached HEAD labeled")
+
+            let plainDir = tmp + "/plain"
+            try? FileManager.default.createDirectory(
+                atPath: plainDir, withIntermediateDirectories: true)
+            let plain = ProjectContext(cwd: plainDir)
+            check(!plain.isGit && plain.branch == nil, "L36 non-git dir has no branch")
+
+            let snapshot = AgentSnapshot(
+                id: "p1", source: "claude", kind: .progress, title: nil, message: nil,
+                paneId: "1-1", workspaceId: nil, cwd: gitDir,
+                variance: nil, choices: nil, startedAt: nil)
+            check(
+                snapshot.projectContext?.project == "bantay-tui"
+                    && snapshot.projectContext?.branch == "main",
+                "L36 snapshot surfaces project context")
+            let noCwd = AgentSnapshot(
+                id: "p2", source: "claude", kind: .progress, title: nil, message: nil,
+                paneId: "1-2", workspaceId: nil, cwd: nil,
+                variance: nil, choices: nil, startedAt: nil)
+            check(noCwd.projectContext == nil, "L36 no cwd means no context")
 
             try? FileManager.default.removeItem(atPath: tmp)
         }
