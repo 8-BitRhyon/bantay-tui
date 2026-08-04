@@ -1942,6 +1942,63 @@ struct LogicCheckMain {
             (ClaudeHookInstaller.removingBantayHooks(from: noHooks)["hooks"]) == nil,
             "L28 settings without hooks unchanged")
 
+        // L28b. Hook merge appends instead of overwriting, and removal filters
+        // per hook, so foreign hooks sharing an entry survive (kilo review on
+        // PR 16).
+        let foreignPermission: [String: Any] = [
+            "matcher": "",
+            "hooks": [["type": "command", "command": "foreign-tool"]],
+        ]
+        let withForeign = ClaudeHookInstaller.mergedSettings(
+            existing: ["hooks": ["PermissionPrompt": [foreignPermission]]], port: 41817)
+        let mergedPermission = (withForeign["hooks"] as? [String: Any])?["PermissionPrompt"]
+            as? [[String: Any]]
+        check(
+            mergedPermission?.count == 2,
+            "L28b foreign + bantay entries coexist after merge")
+        let remerged = ClaudeHookInstaller.mergedSettings(existing: withForeign, port: 41817)
+        let rePermission = (remerged["hooks"] as? [String: Any])?["PermissionPrompt"]
+            as? [[String: Any]]
+        check(
+            rePermission?.count == 2,
+            "L28b re-merge does not duplicate bantay entries")
+        let bantayCommand = ClaudeHookInstaller.hookCommand(port: 41817)
+        let sharedEntry: [String: Any] = [
+            "matcher": "",
+            "hooks": [
+                ["type": "command", "command": bantayCommand],
+                ["type": "command", "command": "foreign-tool"],
+            ],
+        ]
+        let strippedShared = ClaudeHookInstaller.removingBantayHooks(
+            from: ["hooks": ["Stop": [sharedEntry]]])
+        let stopShared = (strippedShared["hooks"] as? [String: Any])?["Stop"]
+            as? [[String: Any]]
+        check(
+            stopShared?.count == 1,
+            "L28b shared entry keeps foreign hook")
+        check(
+            (stopShared?.first?["hooks"] as? [[String: Any]])?.count == 1,
+            "L28b only the bantay hook removed from shared entry")
+
+        // L28c. LaunchAgent install surfaces plist write failures and verifies
+        // the agent loaded (kilo review on PR 16).
+        let savedPlistPath = LaunchAgent.plistPath
+        let savedRunner = LaunchAgent.processRunner
+        LaunchAgent.processRunner = { _ in 0 }
+        LaunchAgent.plistPath = "/dev/null/bantay-impossible.plist"
+        check(
+            !LaunchAgent.install(binaryPath: "/bin/echo"),
+            "L28c install returns false when plist write fails")
+        let tmpPlist = NSTemporaryDirectory() + "bantay-logiccheck-\(UUID().uuidString).plist"
+        LaunchAgent.plistPath = tmpPlist
+        check(
+            LaunchAgent.install(binaryPath: "/bin/echo"),
+            "L28c install reports loaded when plist written + launchctl ok")
+        try? FileManager.default.removeItem(atPath: tmpPlist)
+        LaunchAgent.plistPath = savedPlistPath
+        LaunchAgent.processRunner = savedRunner
+
         // L29. Agent classification covers the herdr 0.8 agent families; new
         // families have no known transcript root but classify safely.
         check(

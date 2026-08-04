@@ -90,19 +90,36 @@ enum LaunchAgent {
 
     /// Full install: data dir + events file, agent plist pointing at the
     /// given binary, then (re)load the agent. Idempotent.
+    /// Returns false (and leaves launchd untouched) when the plist could not
+    /// be written; when it was written, reports whether the agent actually
+    /// loaded.
+    @discardableResult
     static func install(
         binaryPath: String = defaultBinaryPath,
         dataDir: String = dataDirectory()
-    ) {
-        guard !binaryPath.isEmpty else { return }
-        ensureDataDirectory(dataDir: dataDir)
+    ) -> Bool {
+        guard !binaryPath.isEmpty else { return false }
+        guard ensureDataDirectory(dataDir: dataDir) else {
+            NSLog("bantay: launch agent data dir could not be created")
+            return false
+        }
         let content = plistContent(binaryPath: binaryPath, dataDir: dataDir)
-        try? content.write(toFile: plistPath, atomically: true, encoding: .utf8)
+        do {
+            try content.write(toFile: plistPath, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("bantay: could not write launch agent plist: \(error)")
+            return false
+        }
         let uid = getuid()
         _ = processRunner(["bootout", "gui/\(uid)/\(label)"])
         if processRunner(["bootstrap", "gui/\(uid)", plistPath]) != 0 {
             _ = processRunner(["load", plistPath])
         }
+        let loaded = isLoaded()
+        if !loaded {
+            NSLog("bantay: launch agent not loaded after install")
+        }
+        return loaded
     }
 
     /// Enables/disables start-at-login. Enabling self-installs the agent
@@ -110,11 +127,17 @@ enum LaunchAgent {
     /// disabling boots the agent out and removes the plist.
     static func setLaunchAtLogin(_ on: Bool) {
         if on {
-            install()
+            if !install() {
+                NSLog("bantay: launch at login could not be enabled")
+            }
         } else {
             let uid = getuid()
             _ = processRunner(["bootout", "gui/\(uid)/\(label)"])
-            try? FileManager.default.removeItem(atPath: plistPath)
+            do {
+                try FileManager.default.removeItem(atPath: plistPath)
+            } catch {
+                NSLog("bantay: could not remove launch agent plist: \(error)")
+            }
         }
     }
 }

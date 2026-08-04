@@ -847,10 +847,11 @@ struct NotchStatusView: View {
         }
     }
 
-    /// Roster scroll area: natural row height, capped so header/tabs/footer
-    /// always stay visible inside the island (scrolls when 6+ rows overflow).
+    /// Roster scroll area: natural row height from the rendered roster
+    /// (muted sources excluded), capped so header/tabs/footer always stay
+    /// visible inside the island (scrolls when 6+ rows overflow).
     private var rosterScrollHeight: CGFloat {
-        let natural = CGFloat(eventManager.agents.count) * IslandMetrics.rowHeight
+        let natural = CGFloat(mergedRoster.count) * IslandMetrics.rowHeight
         let chrome =
             IslandMetrics.headerHeight + IslandMetrics.footerHeight
             + (NotchHUDConfig.shared.showShelfTab
