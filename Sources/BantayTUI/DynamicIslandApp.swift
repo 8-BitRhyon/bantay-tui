@@ -4,6 +4,7 @@ import SwiftUI
 extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
     static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
+    static let settingsWillOpen = Notification.Name("settingsWillOpen")
 }
 
 @main
@@ -120,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         makeIslandWindow()
         installMenuBar()
         observeScreenChanges()
-        installGlobalHotkey()
+        updateGlobalHotkeyMonitor()
         startBadgeTimer()
         updateIngestServer()
         Self.dbg(
@@ -372,8 +373,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Global ⌥Space toggle: show/hide the island from anywhere. Uses a
     /// key-down monitor so no Accessibility permission is required.
+    /// Re-run whenever the setting changes: removes any stale monitor and
+    /// reinstalls only when the feature is enabled, so the toggle takes
+    /// effect immediately in both directions.
     @MainActor
-    private func installGlobalHotkey() {
+    func updateGlobalHotkeyMonitor() {
+        if let hotkeyMonitor {
+            NSEvent.removeMonitor(hotkeyMonitor)
+            self.hotkeyMonitor = nil
+        }
         guard NotchHUDConfig.shared.globalHotkeyEnabled else { return }
         let handler: @Sendable (NSEvent) -> Void = { event in
             guard event.modifierFlags.contains(.option),
@@ -684,6 +692,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settingsWindow =
             (NSApp.windows.first { $0.title == "Bantay-TUI Settings" })
             ?? makeSettingsWindow()
+        // The window persists across close/reopen, so the view re-reads its
+        // state from config (menu-bar toggles may have changed it since).
+        NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
         settingsWindow.center()
         settingsWindow.makeKeyAndOrderFront(nil)
     }
@@ -691,13 +702,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     private func makeSettingsWindow() -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 900),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
         window.title = "Bantay-TUI Settings"
         window.contentViewController = NSHostingController(rootView: SettingsView())
         window.isReleasedWhenClosed = false
+        window.contentMinSize = NSSize(width: 480, height: 900)
         return window
     }
 
