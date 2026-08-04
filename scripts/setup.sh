@@ -16,13 +16,26 @@ for arg in "$@"; do
 done
 
 if [[ "$PACKAGE" == "yes" ]]; then
-  RELEASE_BIN="$(cd "$(dirname "$0")/.." && pwd)/.build/release/bantay"
+  ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  cd "$ROOT"
+  echo "bantay-tui: building universal release (arm64 + x86_64)..."
+  ARCHES=(--arch arm64 --arch x86_64)
+  if ! swift build -c release "${ARCHES[@]}" 2>/dev/null; then
+    echo "bantay-tui: universal build unavailable (needs full Xcode; falling back to host arch)"
+    ARCHES=()
+    swift build -c release || exit 1
+  fi
+  RELEASE_BIN="$ROOT/.build/apple/Products/Release/bantay"
   if [[ ! -x "$RELEASE_BIN" ]]; then
-    echo "bantay-tui: release binary not found -- build with 'swift build -c release' first"
+    RELEASE_BIN="$ROOT/.build/release/bantay"
+  fi
+  if [[ ! -x "$RELEASE_BIN" ]]; then
+    echo "bantay-tui: release binary not found after build" >&2
     exit 1
   fi
-  DIST="$(cd "$(dirname "$0")/.." && pwd)/dist"
+  DIST="$ROOT/dist"
   STAGE="$DIST/Bantay-TUI.app/Contents"
+  rm -rf "$DIST/Bantay-TUI.app"
   mkdir -p "$STAGE/MacOS"
   cp "$RELEASE_BIN" "$STAGE/MacOS/bantay"
   cat > "$STAGE/Info.plist" <<PLIST
@@ -46,7 +59,7 @@ if [[ "$PACKAGE" == "yes" ]]; then
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -54,8 +67,53 @@ if [[ "$PACKAGE" == "yes" ]]; then
 </dict>
 </plist>
 PLIST
-  cd "$DIST" && rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
-  echo "bantay-tui: packaged $DIST/bantay-tui.zip (release $RELEASE_BIN)"
+  if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+    KEYCHAIN=""
+    if [[ -n "${P12_BASE64:-}" && -n "${P12_PASSWORD:-}" ]]; then
+      # CI: import the Developer ID cert into a throwaway keychain.
+      KEYCHAIN="$(mktemp -d)/bantay.keychain-db"
+      security create-keychain -p bantay "$KEYCHAIN" >/dev/null
+      security default-keychain -s "$KEYCHAIN" >/dev/null
+      security unlock-keychain -p bantay "$KEYCHAIN" >/dev/null
+      echo "$P12_BASE64" | base64 --decode > /tmp/bantay-cert.p12
+      security import /tmp/bantay-cert.p12 -P "$P12_PASSWORD" -A -k "$KEYCHAIN" >/dev/null
+      rm -f /tmp/bantay-cert.p12
+    fi
+    echo "bantay-tui: signing with $CODESIGN_IDENTITY"
+    codesign --force --options runtime --sign "$CODESIGN_IDENTITY" "$DIST/Bantay-TUI.app" || exit 1
+    cd "$DIST" && rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
+    if [[ -n "${NOTARY_PROFILE:-}" || -n "${APPLE_ID:-}" ]]; then
+      echo "bantay-tui: submitting to Apple notary..."
+      NOTARY_ARGS=()
+      if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+        NOTARY_ARGS+=(--keychain-profile "$NOTARY_PROFILE")
+      else
+        NOTARY_ARGS+=(--apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD")
+      fi
+      xcrun notarytool submit bantay-tui.zip "${NOTARY_ARGS[@]}" --wait || exit 1
+      xcrun stapler staple "$DIST/Bantay-TUI.app" || exit 1
+      rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
+    fi
+    if [[ -n "$KEYCHAIN" ]]; then
+      security default-keychain -s "$HOME/Library/Keychains/login.keychain-db" >/dev/null
+    fi
+  else
+    # Ad-hoc bundle sign so the seal matches the binary. This is NOT
+    # notarized: Gatekeeper will still block it on other Macs. For public
+    # distribution set CODESIGN_IDENTITY (Developer ID) and notarize:
+    #   xcrun notarytool submit bantay-tui.zip --keychain-profile bantay --wait
+    codesign --force --sign - "$DIST/Bantay-TUI.app"
+    echo "bantay-tui: WARNING ad-hoc signed only (not notarized)."
+    echo "bantay-tui:   set CODESIGN_IDENTITY + notarize for Gatekeeper-clean distribution."
+    cd "$DIST" && rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
+  fi
+  SHA="$(shasum -a 256 "$DIST/bantay-tui.zip" | awk '{print $1}')"
+  echo "bantay-tui: packaged $DIST/bantay-tui.zip"
+  echo "bantay-tui: sha256 $SHA (update Cask/bantay-tui.rb)"
+  if ! lipo -archs "$STAGE/MacOS/bantay" | grep -q "x86_64"; then
+    echo "bantay-tui: WARNING binary is $(lipo -archs "$STAGE/MacOS/bantay" | tr '\n' ' ')-only --"
+    echo "bantay-tui:   universal2 requires full Xcode. Intel Macs need the CI release build."
+  fi
   exit 0
 fi
 

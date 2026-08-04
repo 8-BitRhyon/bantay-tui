@@ -49,6 +49,20 @@ enum AgentDetector {
             return "cursor"
         case "opencode", "opencode-cli":
             return "opencode"
+        case "grok", "grok-cli":
+            return "grok"
+        case "agy", "antigravity":
+            return "antigravity"
+        case "pi":
+            return "pi"
+        case "copilot":
+            return "copilot"
+        case "qoder", "qoder-cli":
+            return "qoder"
+        case "kimi":
+            return "kimi"
+        case "hermes":
+            return "hermes"
         default:
             return nil
         }

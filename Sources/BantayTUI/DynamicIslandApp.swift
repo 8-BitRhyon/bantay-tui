@@ -139,11 +139,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor
     private func makeIslandWindow() {
         let size = IslandMetrics.windowSize()
+        guard size.width > 0, size.height > 0 else {
+            Self.dbg("startup guard: invalid window size \(size), exiting")
+            NSApp.terminate(nil)
+            return
+        }
+        guard let frame = Self.islandFrame(on: NSScreen.main, size: size) as NSRect?,
+            frame.width > 0, frame.height > 0
+        else {
+            Self.dbg("startup guard: invalid island frame, exiting")
+            NSApp.terminate(nil)
+            return
+        }
         let window = KeyablePanel(
-            contentRect: Self.islandFrame(on: NSScreen.main, size: size),
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false)
+        guard window.screen != nil else {
+            Self.dbg("startup guard: window server refused panel screen, exiting")
+            NSApp.terminate(nil)
+            return
+        }
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false

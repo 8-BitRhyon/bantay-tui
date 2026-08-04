@@ -1782,6 +1782,213 @@ struct LogicCheckMain {
                 && IslandMetrics.overflowRowHeight > 0,
             "L24 chrome constants positive")
 
+        // L25. Per-source mute filters the published roster and persists;
+        // the roster scroll area is capped so chrome stays visible.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.mutedSources
+            cfg.mutedSources = ["codex"]
+            check(
+                defaults.stringArray(forKey: "mutedSources") == ["codex"],
+                "L25 muted source persisted")
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l25-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let kilo = AgentSnapshot(
+                id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
+                paneId: "1-1", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let codex = AgentSnapshot(
+                id: "p2", source: "codex", kind: .progress, title: nil, message: nil,
+                paneId: "1-2", workspaceId: nil, variance: nil, choices: nil, startedAt: nil)
+            let visible = manager.mergeApprovals(into: [kilo, codex])
+            check(
+                visible.map(\.source) == ["kilo"],
+                "L25 muted source filtered from roster (got \(visible.map(\.source)))")
+            cfg.mutedSources = []
+            let all = manager.mergeApprovals(into: [kilo, codex])
+            check(all.count == 2, "L25 unmuted roster restored")
+            cfg.mutedSources = orig
+            defaults.removeObject(forKey: "mutedSources")
+        }
+
+        // L26. herdr binary discovery covers every install location:
+        // HERDR_INSTALL_DIR, PATH, ~/.local/bin (official installer), both
+        // Homebrew prefixes, and ~/.herdr/bin, deduped in priority order.
+        let envNoHerdr = [
+            "PATH": "/usr/bin:/bin",
+        ]
+        let pathsNoOverride = HerdrSocketAdapter.candidateHerdrPaths(
+            env: envNoHerdr, home: "/Users/someone")
+        check(
+            pathsNoOverride == [
+                "/usr/bin/herdr", "/bin/herdr", "/Users/someone/.local/bin/herdr",
+                "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr",
+                "/Users/someone/.herdr/bin/herdr",
+            ],
+            "L26 fallback chain in priority order (got \(pathsNoOverride))")
+        let withOverride = HerdrSocketAdapter.candidateHerdrPaths(
+            env: ["HERDR_INSTALL_DIR": "/custom/bin"], home: "/Users/someone")
+        check(
+            withOverride.first == "/custom/bin/herdr",
+            "L26 HERDR_INSTALL_DIR wins (got \(String(describing: withOverride.first)))")
+        let deduped = HerdrSocketAdapter.candidateHerdrPaths(
+            env: ["PATH": "/opt/homebrew/bin:/usr/local/bin"], home: "/Users/someone")
+        check(
+            deduped.filter { $0 == "/opt/homebrew/bin/herdr" }.count == 1,
+            "L26 PATH candidates dedupe against fallbacks")
+        let customName = HerdrSocketAdapter.candidateHerdrPaths(
+            env: [:], home: "/Users/someone", binName: "herdr-bin")
+        check(
+            customName.first == "/Users/someone/.local/bin/herdr-bin",
+            "L26 custom binary name honored")
+
+        // L27. pane list tries --format json first (herdr < 0.8), then the
+        // plain JSON-only form (herdr 0.8+).
+        let variants = HerdrSocketAdapter.paneListCommandVariants()
+        check(
+            variants.count == 2 && variants[0] == ["pane", "list", "--format", "json"]
+                && variants[1] == ["pane", "list"],
+            "L27 pane list variants: flag first, plain fallback (got \(variants))")
+
+        // L28. Disabling the Claude hook removes only Bantay's entries; hooks
+        // installed by other tools (herdr integration) survive.
+        let settingsWithHooks: [String: Any] = [
+            "apiKeyHelper": "default",
+            "hooks": [
+                "PermissionPrompt": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            ["type": "command", "command": "herdr-claude-integration"]
+                        ],
+                    ],
+                    [
+                        "matcher": "bantay",
+                        "hooks": [
+                            [
+                                "type": "command",
+                                "command":
+                                    "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
+                            ]
+                        ],
+                    ],
+                ],
+                "Stop": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            [
+                                "type": "command",
+                                "command":
+                                    "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
+                            ]
+                        ],
+                    ],
+                ],
+                "PostToolUse": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            ["type": "command", "command": "some-other-tool"]
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        let stripped = ClaudeHookInstaller.removingBantayHooks(from: settingsWithHooks)
+        let strippedHooks = stripped["hooks"] as? [String: Any]
+        check(
+            stripped["apiKeyHelper"] as? String == "default",
+            "L28 unrelated settings preserved")
+        check(
+            (strippedHooks?["PermissionPrompt"] as? [[String: Any]])?.count == 1,
+            "L28 herdr PermissionPrompt entry survives")
+        check(
+            strippedHooks?["Stop"] == nil,
+            "L28 bantay-only Stop entry removed")
+        check(
+            (strippedHooks?["PostToolUse"] as? [[String: Any]])?.count == 1,
+            "L28 unrelated event hooks untouched")
+        let allBantay: [String: Any] = [
+            "hooks": [
+                "Stop": [
+                    [
+                        "matcher": "",
+                        "hooks": [
+                            [
+                                "type": "command",
+                                "command":
+                                    "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
+                            ]
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        let emptyHooks = ClaudeHookInstaller.removingBantayHooks(from: allBantay)
+        check(
+            emptyHooks["hooks"] == nil,
+            "L28 empty hooks key removed entirely")
+        let noHooks: [String: Any] = ["apiKeyHelper": "default"]
+        check(
+            (ClaudeHookInstaller.removingBantayHooks(from: noHooks)["hooks"]) == nil,
+            "L28 settings without hooks unchanged")
+
+        // L29. Agent classification covers the herdr 0.8 agent families; new
+        // families have no known transcript root but classify safely.
+        check(
+            AgentDetector.canonicalName(forProcess: "grok") == "grok"
+                && AgentDetector.canonicalName(forProcess: "agy") == "antigravity"
+                && AgentDetector.canonicalName(forProcess: "pi") == "pi"
+                && AgentDetector.canonicalName(forProcess: "copilot") == "copilot"
+                && AgentDetector.canonicalName(forProcess: "qoder-cli") == "qoder"
+                && AgentDetector.canonicalName(forProcess: "kimi") == "kimi"
+                && AgentDetector.canonicalName(forProcess: "hermes") == "hermes",
+            "L29 new agent families classified")
+        check(
+            AgentDetector.transcriptSearchPaths(home: "/Users/someone", name: "grok").isEmpty
+                && AgentDetector.transcriptSearchPaths(home: "/Users/someone", name: "pi").isEmpty,
+            "L29 unknown transcript roots are empty (no crash)")
+        let detectedGrok = StandaloneAgentScanner.detect(
+            samples: [
+                ProcessSample(
+                    pid: 42, name: "grok", command: "grok -p task", environmentLines: [])
+            ],
+            home: "/Users/someone")
+        check(
+            detectedGrok.first?.name == "grok" && detectedGrok.first?.activity == nil,
+            "L29 grok detected standalone with no transcript")
+
+        // L30. Muting fully suppresses a source: its events never become the
+        // pill (no sound, no approval attention); unmuting restores them.
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.mutedSources
+            let manager = AgentEventManager(
+                eventsFileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("lc-l30-\(UUID().uuidString).jsonl"),
+                capture: false)
+            let prompt = AgentEvent(
+                source: "codex", kind: .accessRequest, title: "run tests?",
+                message: nil, paneId: "3-1", workspaceId: nil,
+                variance: .yesNo, choices: nil, playSound: true, persistent: true)
+            cfg.mutedSources = ["codex"]
+            manager.publishEventForTesting(prompt)
+            check(
+                manager.currentEventForTesting == nil,
+                "L30 muted source never becomes the pill")
+            cfg.mutedSources = []
+            manager.publishEventForTesting(prompt)
+            check(
+                manager.currentEventForTesting?.source == "codex",
+                "L30 unmuted source surfaces again")
+            cfg.mutedSources = orig
+            defaults.removeObject(forKey: "mutedSources")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

@@ -21,6 +21,7 @@ struct NotchStatusView: View {
     @State private var clipboardItems: [ClipboardItem] = []
     @State private var shelfFiles: [ShelfFile] = []
     @State private var lastChangeCount = NSPasteboard.general.changeCount
+    @State private var legacyKeyMonitor: Any?
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -81,7 +82,7 @@ struct NotchStatusView: View {
     /// clearance fit (fallback to the configured cap).
     private var idleShownCount: Int {
         let config = NotchHUDConfig.shared
-        let count = eventManager.agents.count
+        let count = visibleAgents.count
         guard !isCenteredIdle, config.avoidMenuBarIcons else {
             return IslandMetrics.idleShownChips(
                 agentCount: count, maxChips: config.clampedIdleMaxChips)
@@ -92,7 +93,7 @@ struct NotchStatusView: View {
             auxLeft: AppDelegate.auxLeftWidth, auxRight: AppDelegate.auxRightWidth)
         return IslandMetrics.idleFitChips(
             agentCount: count, maxChips: config.clampedIdleMaxChips,
-            nameLengths: eventManager.agents.map(\.source.count),
+            nameLengths: visibleAgents.map(\.source.count),
             availableWidth: max(clearance - IslandMetrics.idleOverflowPad, 0))
     }
 
@@ -150,12 +151,25 @@ struct NotchStatusView: View {
         isCenteredIdle ? IslandMetrics.windowSize().width : islandWidth
     }
 
-    /// Agents currently blocked on an approval — pinned at the top of the
-    /// expanded control plane.
+    /// Agents blocked on an approval — pinned at the top of the expanded
+    /// control plane. Muted sources are excluded so they cannot queue up.
     private var approvalQueueAgents: [AgentSnapshot] {
-        eventManager.agents.filter {
+        mergedRoster.filter {
             $0.kind == .accessRequest || $0.kind == .waiting
         }
+    }
+
+    /// Roster minus muted sources; everything user-visible derives from this.
+    private var visibleAgents: [AgentSnapshot] {
+        let muted = NotchHUDConfig.shared.mutedSources
+        guard !muted.isEmpty else { return eventManager.agents }
+        return eventManager.agents.filter { !muted.contains($0.source) }
+    }
+
+    /// The roster as rendered: muted sources dropped, approval variance and
+    /// choices attached from the manager's pending-approval bookkeeping.
+    private var mergedRoster: [AgentSnapshot] {
+        eventManager.mergeApprovals(into: visibleAgents)
     }
 
     private var cornerRad: CGFloat { IslandMetrics.cornerRadius(expanded: isExpanded) }
@@ -202,13 +216,21 @@ struct NotchStatusView: View {
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
         .animation(morphAnimation, value: eventManager.agents.count)
-        .onAppear(perform: handleAppear)
-        .onChange(of: isExpanded) {
+        .onAppear {
+            if !ProcessInfo.processInfo.isOperatingSystemAtLeast(
+                .init(majorVersion: 14, minorVersion: 0, patchVersion: 0))
+            {
+                installLegacyKeyMonitor()
+            }
+            handleAppear()
+        }
+        .onDisappear { removeLegacyKeyMonitor() }
+        .onChange(of: isExpanded) { _ in
             if !isExpanded { cancelComposing() }
             eventManager.setActive(isExpanded)
         }
-        .onChange(of: eventManager.currentEvent) { handleEventChange() }
-        .onChange(of: eventManager.agents) { handleAgentsChange() }
+        .onChange(of: eventManager.currentEvent) { _ in handleEventChange() }
+        .onChange(of: eventManager.agents) { _ in handleAgentsChange() }
         .onReceive(
             NotificationCenter.default.publisher(for: .notchVisibilityChanged)
         ) { _ in
@@ -220,20 +242,20 @@ struct NotchStatusView: View {
             now = date
             pollClipboard(at: date)
         }
-        .onChange(of: hasSeenOnboarding) { _, seen in
+        .onChange(of: hasSeenOnboarding) { seen in
             if !seen { showWelcome = true }
         }
         .focusable()
-        .focusEffectDisabled()
-        .onKeyPress { press in
-            guard let char = press.characters.first,
-                let shortcut = IslandMetrics.shortcutKey(for: char)
-            else {
-                return .ignored
+        .modifier(FocusEffectDisabledCompat())
+        .modifier(
+            ShortcutKeyPressModifier { char in
+                guard let shortcut = IslandMetrics.shortcutKey(for: char) else {
+                    return false
+                }
+                handleShortcut(shortcut)
+                return true
             }
-            handleShortcut(shortcut)
-            return .handled
-        }
+        )
         .onReceive(
             NotificationCenter.default.publisher(for: .notchHotkeyPressed)
         ) { _ in
@@ -294,6 +316,80 @@ struct NotchStatusView: View {
                     queueSelections[paneId] ?? [], index: number - 1)
             } else {
                 adapter.approveChoice(paneId: paneId, choice: number)
+            }
+        }
+    }
+
+    /// macOS 13 fallback for the single-key roster shortcuts: `.onKeyPress`
+    /// is macOS 14+. Mirrors its scope (panel key, expanded, not composing).
+    private func installLegacyKeyMonitor() {
+        guard legacyKeyMonitor == nil else { return }
+        legacyKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window === AppDelegate.window,
+                isExpanded,
+                composingPaneId == nil,
+                NotchHUDConfig.shared.keyboardShortcuts,
+                let char = event.charactersIgnoringModifiers?.first,
+                let shortcut = IslandMetrics.shortcutKey(for: char)
+            else {
+                return event
+            }
+            handleShortcut(shortcut)
+            return nil
+        }
+    }
+
+    private func removeLegacyKeyMonitor() {
+        if let monitor = legacyKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            legacyKeyMonitor = nil
+        }
+    }
+
+    /// Cancels composing on Escape. `.onKeyPress` is macOS 14+; on older
+    /// systems the compose row's ✕ button remains the cancel affordance.
+    private struct EscapeCancelsModifier: ViewModifier {
+        var onEscape: () -> Void
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if #available(macOS 14.0, *) {
+                content.onKeyPress(.escape) {
+                    onEscape()
+                    return .handled
+                }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// Hides the focus ring around the island (macOS 14+).
+    private struct FocusEffectDisabledCompat: ViewModifier {
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if #available(macOS 14.0, *) {
+                content.focusEffectDisabled()
+            } else {
+                content
+            }
+        }
+    }
+
+    /// Single-key roster shortcuts via `.onKeyPress` on macOS 14+. On older
+    /// systems the local key monitor (installed in onAppear) covers them.
+    private struct ShortcutKeyPressModifier: ViewModifier {
+        var handle: (_ character: Character) -> Bool
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if #available(macOS 14.0, *) {
+                content.onKeyPress { press in
+                    guard let char = press.characters.first, handle(char) else {
+                        return .ignored
+                    }
+                    return .handled
+                }
+            } else {
+                content
             }
         }
     }
@@ -367,7 +463,7 @@ struct NotchStatusView: View {
                     if let paneId = event.paneId { adapter.paneFocus(paneId: paneId) }
                 }
             )
-            .onChange(of: event.id) {
+            .onChange(of: event.id) { _ in
                 showDetail = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     withAnimation(.easeInOut(duration: 0.3)) { showDetail = true }
@@ -684,7 +780,7 @@ struct NotchStatusView: View {
 
     private var expandedList: some View {
         let counts = IslandMetrics.agentCounts(
-            kinds: eventManager.agents.map(\.kind))
+            kinds: visibleAgents.map(\.kind))
         let queue = approvalQueueAgents
         let queueSplit = expandedQueueSplit
         return VStack(spacing: 0) {
@@ -726,7 +822,7 @@ struct NotchStatusView: View {
                 }
             }
 
-            if eventManager.agents.isEmpty {
+            if visibleAgents.isEmpty {
                 Text("No active agents")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(.white.opacity(0.4))
@@ -734,15 +830,34 @@ struct NotchStatusView: View {
                     .frame(height: IslandMetrics.rowHeight)
             }
 
-            if NotchHUDConfig.shared.expandedGroupByState {
-                groupedAgentRows
-            } else {
-                flatAgentRows
+            ScrollView(.vertical) {
+                VStack(spacing: 0) {
+                    if NotchHUDConfig.shared.expandedGroupByState {
+                        groupedAgentRows
+                    } else {
+                        flatAgentRows
+                    }
+                }
             }
+            .frame(height: rosterScrollHeight)
+            .scrollIndicators(.hidden)
 
             Spacer(minLength: 0)
             footerBar(counts: counts, queueCount: queue.count)
         }
+    }
+
+    /// Roster scroll area: natural row height, capped so header/tabs/footer
+    /// always stay visible inside the island (scrolls when 6+ rows overflow).
+    private var rosterScrollHeight: CGFloat {
+        let natural = CGFloat(eventManager.agents.count) * IslandMetrics.rowHeight
+        let chrome =
+            IslandMetrics.headerHeight + IslandMetrics.footerHeight
+            + (NotchHUDConfig.shared.showShelfTab
+                ? IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight : 0)
+        let available =
+            IslandMetrics.maxExpandedHeight - chipTopOffset - chrome - IslandMetrics.contentSpacing
+        return max(min(natural, available), 0)
     }
 
     private var shelfTabBar: some View {
@@ -1023,7 +1138,7 @@ struct NotchStatusView: View {
     }
 
     private var groupedAgentRows: some View {
-        let grouped = Dictionary(grouping: eventManager.agents) { agent in
+        let grouped = Dictionary(grouping: mergedRoster) { agent in
             IslandMetrics.expandedGroupRank(agent.kind)
         }
         return VStack(spacing: 0) {
@@ -1040,7 +1155,7 @@ struct NotchStatusView: View {
 
     private var flatAgentRows: some View {
         VStack(spacing: 0) {
-            ForEach(eventManager.agents) { agent in
+            ForEach(mergedRoster) { agent in
                 agentRow(agent: agent)
             }
         }
@@ -1130,10 +1245,9 @@ struct NotchStatusView: View {
                     .foregroundColor(.white)
                     .focused($promptFocused)
                     .onSubmit { submitPrompt() }
-                    .onKeyPress(.escape) {
-                        cancelComposing()
-                        return .handled
-                    }
+                    .modifier(
+                        EscapeCancelsModifier { cancelComposing() }
+                    )
                     .padding(.horizontal, 6)
                     .frame(maxWidth: .infinity)
                     .frame(height: 20)
@@ -1209,6 +1323,42 @@ struct NotchStatusView: View {
         .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering in hoveredRow = hovering ? agent.id : nil }
+        .contextMenu {
+            if let paneId = agent.paneId {
+                Button("Focus Pane") { adapter.focusPane(paneId: paneId) }
+            }
+            if let title = agent.title {
+                Button("Copy Title") { copyToClipboard(title) }
+            }
+            if let workspaceId = agent.workspaceId {
+                Button("Open Workspace in Finder") {
+                    openWorkspaceInFinder(workspaceId)
+                }
+            }
+            Divider()
+            if NotchHUDConfig.shared.mutedSources.contains(agent.source) {
+                Button("Unmute \(agent.source)") {
+                    NotchHUDConfig.shared.mutedSources.remove(agent.source)
+                }
+            } else {
+                Button("Mute \(agent.source)") {
+                    NotchHUDConfig.shared.mutedSources.insert(agent.source)
+                }
+            }
+        }
+    }
+
+    /// Best-effort: reveal the workspace directory in Finder. Falls back to
+    /// the home directory when the workspace id is not a path.
+    private func openWorkspaceInFinder(_ workspaceId: String) {
+        var url: URL?
+        if workspaceId.hasPrefix("/") {
+            url = URL(fileURLWithPath: workspaceId)
+        } else if let cwd = ProcessInfo.processInfo.environment["PWD"] {
+            url = URL(fileURLWithPath: cwd)
+        }
+        let target = url ?? URL(fileURLWithPath: NSHomeDirectory())
+        NSWorkspace.shared.activateFileViewerSelecting([target])
     }
 
     // MARK: - Behavior
@@ -1271,9 +1421,6 @@ struct NotchStatusView: View {
     private func updateIslandVisibility() {
         let config = NotchHUDConfig.shared
         let hasWork = eventManager.currentEvent != nil || !eventManager.agents.isEmpty
-        let hiddenAtStart =
-            config.hideAtStartup && !AppDelegate.didShowOnce
-            && eventManager.currentEvent?.kind != .accessRequest
         let shouldShow = IslandMetrics.VisibilityPolicy.shouldShow(
             islandEnabled: config.islandEnabled,
             snoozed: config.isSnoozed,

@@ -49,6 +49,48 @@ enum ClaudeHookInstaller {
         return merged
     }
 
+    /// Remove only the Bantay-owned hook entries from a settings dictionary.
+    /// Identified by command shape (`http://127.0.0.1:<port>/events`), so
+    /// hooks installed by other tools (e.g. herdr's Claude integration) are
+    /// preserved no matter which port Bantay used at install time. If the
+    /// `hooks` key ends up empty it is removed entirely.
+    static func removingBantayHooks(from settings: [String: Any]) -> [String: Any] {
+        guard var hooks = settings["hooks"] as? [String: Any] else { return settings }
+        var changed = false
+        var emptyEvents: [String] = []
+        for (event, entries) in hooks {
+            guard var list = entries as? [[String: Any]] else { continue }
+            let before = list.count
+            list.removeAll { entry in
+                guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return false }
+                return entryHooks.contains { hook in
+                    guard let command = hook["command"] as? String else { return false }
+                    return command.contains("http://127.0.0.1:")
+                        && command.contains("/events")
+                }
+            }
+            if list.count != before {
+                changed = true
+                if list.isEmpty {
+                    emptyEvents.append(event)
+                } else {
+                    hooks[event] = list
+                }
+            }
+        }
+        guard changed else { return settings }
+        for event in emptyEvents {
+            hooks.removeValue(forKey: event)
+        }
+        var merged = settings
+        if hooks.isEmpty {
+            merged.removeValue(forKey: "hooks")
+        } else {
+            merged["hooks"] = hooks
+        }
+        return merged
+    }
+
     /// Maps a Claude Code hook payload (stdin JSON) to a Bantay event payload
     /// dictionary, or nil when the event is not one we act on.
     static func mapToEventPayload(_ json: [String: Any]) -> [String: Any]? {

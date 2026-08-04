@@ -137,6 +137,10 @@ final class NotchHUDConfig {
     var claudeHookInstalled = false {
         didSet { defaults.set(claudeHookInstalled, forKey: "claudeHookInstalled") }
     }
+    /// Agent sources the user muted via row context menus (skipped in roster).
+    var mutedSources: Set<String> = [] {
+        didSet { defaults.set(Array(mutedSources), forKey: "mutedSources") }
+    }
 
     var isSnoozed: Bool {
         if snoozeUntilRestart { return true }
@@ -264,6 +268,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "claudeHookInstalled") as? Bool {
             claudeHookInstalled = v
+        }
+        if let v = defaults.array(forKey: "mutedSources") as? [String] {
+            mutedSources = Set(v)
         }
     }
 }

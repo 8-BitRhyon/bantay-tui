@@ -212,6 +212,13 @@ final class AgentEventManager: ObservableObject {
     }
 
     private func showEvent(_ event: AgentEvent) {
+        // Muted sources are fully suppressed: no pill, no sound, no
+        // bookkeeping. They only reappear after an unmute (Settings).
+        if let source = event.source,
+            NotchHUDConfig.shared.mutedSources.contains(source)
+        {
+            return
+        }
         let key = event.identityKey
         if event.kind == .accessRequest || event.kind == .waiting {
             pendingApprovals[key] = (variance: event.variance, choices: event.choices)
@@ -596,7 +603,9 @@ extension AgentEventManager {
     /// working-burst start time to roster rows so the control plane renders
     /// the full interactive surface and elapsed timers.
     func mergeApprovals(into roster: [AgentSnapshot]) -> [AgentSnapshot] {
-        roster.map { agent in
+        let muted = NotchHUDConfig.shared.mutedSources
+        return roster.compactMap { agent in
+            guard !muted.contains(agent.source) else { return nil }
             let key = agent.paneId ?? agent.source
             var variance = agent.variance
             var choices = agent.choices
