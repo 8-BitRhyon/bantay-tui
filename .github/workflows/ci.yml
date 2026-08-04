@@ -25,8 +25,12 @@ jobs:
   build:
     name: Layer 2 · Compile
     needs: format
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-13]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: swift build
@@ -35,8 +39,12 @@ jobs:
   test:
     name: Layer 3 · Tests
     needs: build
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-13]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: swift test
@@ -45,8 +53,12 @@ jobs:
   logic:
     name: Layer 3.5 · Logic checks
     needs: build
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-13]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: swiftc logic harness
@@ -68,6 +80,29 @@ jobs:
             Sources/BantayTUI/LaunchAgent.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check
+
+  smoke:
+    name: Layer 4.5 · Launch smoke
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: swift build
+        run: swift build
+      - name: Launch app for 10s
+        run: |
+          ./.build/debug/bantay 2>/tmp/bantay-smoke.err & PID=$!
+          sleep 10
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "app exited early (startup crash?)"
+            cat /tmp/bantay-smoke.err
+            exit 1
+          fi
+          kill $PID
+          sleep 1
+          if kill -0 $PID 2>/dev/null; then kill -9 $PID; fi
+          echo "app stayed alive 10s — ok"
 
   release:
     name: Layer 4 · Release
