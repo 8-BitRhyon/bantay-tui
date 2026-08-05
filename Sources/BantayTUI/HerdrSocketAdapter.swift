@@ -331,16 +331,33 @@ private struct HerdrPaneListResult: Decodable {
     let panes: [PaneInfo]?
 }
 
-struct PaneInfo: Decodable {
+struct PaneInfo: Decodable, Sendable {
     let id: String
     let title: String?
     let cwd: String?
     let workspaceId: String?
+    /// tmux adapter (plan 017 WI-1): composed `session:window.pane` id
+    /// members plus per-pane detail from the `-F` template. Optional, so
+    /// herdr's JSON panes decode unchanged.
+    var session: String?
+    var windowIndex: Int?
+    var paneIndex: Int?
+    var tty: String?
+    var pid: Int?
+    var currentCommand: String?
+    var currentPath: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case title
         case cwd
         case workspaceId = "workspace_id"
+        case session
+        case windowIndex = "window_index"
+        case paneIndex = "pane_index"
+        case tty
+        case pid
+        case currentCommand = "current_command"
+        case currentPath = "current_path"
     }
 }

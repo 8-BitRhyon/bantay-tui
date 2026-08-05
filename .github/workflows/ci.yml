@@ -69,6 +69,7 @@ jobs:
             Sources/BantayTUI/EventIngestServer.swift \
             Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
             Sources/BantayTUI/TerminalFocusser.swift \
+            Sources/BantayTUI/TmuxAdapter.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             Sources/BantayTUI/ProcessRunner.swift \
             .kilo/LogicCheck.swift
@@ -156,6 +157,7 @@ jobs:
             Sources/BantayTUI/EventIngestServer.swift \
             Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
             Sources/BantayTUI/TerminalFocusser.swift \
+            Sources/BantayTUI/TmuxAdapter.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             Sources/BantayTUI/ProcessRunner.swift \
             .kilo/LogicCheck.swift
