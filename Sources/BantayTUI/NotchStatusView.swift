@@ -20,7 +20,10 @@ struct NotchStatusView: View {
     @State private var now = Date()
     @State private var showShelf = false
     @State private var showAttention = false
-    @State private var isPinned = false
+    /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
+    /// icon stays reactive; the config is the single behavioral source of
+    /// truth (all logic reads it, and it is the only writer of the defaults).
+    @AppStorage("panelPinned") private var panelPinned = false
     /// Live "peek" tail for a hovered/expanded agent — shows what the agent is
     /// actually doing inline (the core promise of the control plane).
     @State private var peekingPaneId: String?
@@ -1150,17 +1153,17 @@ struct NotchStatusView: View {
                     .frame(maxWidth: 200, alignment: .trailing)
             }
             Button {
-                isPinned.toggle()
+                NotchHUDConfig.shared.panelPinned.toggle()
             } label: {
-                Image(systemName: isPinned ? "pin.fill" : "pin")
+                Image(systemName: panelPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(isPinned ? .white : .white.opacity(0.5))
+                    .foregroundStyle(panelPinned ? .white : .white.opacity(0.5))
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(isPinned ? "Unpin panel" : "Pin panel open")
-            .accessibilityLabel(isPinned ? "Unpin panel" : "Pin panel open")
+            .help(panelPinned ? "Unpin panel" : "Pin panel open")
+            .accessibilityLabel(panelPinned ? "Unpin panel" : "Pin panel open")
         }
         .padding(.horizontal, 16)
         .frame(height: IslandMetrics.headerHeight)
@@ -1651,6 +1654,23 @@ struct NotchStatusView: View {
             AppDelegate.pendingWelcome = false
             showWelcome = true
         }
+        // F11 1b: a latched pin re-expands across relaunch, but only while
+        // agents exist and the visibility policy actually shows the island —
+        // a pinned panel must not force-show while hidden at startup/snoozed.
+        let config = NotchHUDConfig.shared
+        if config.panelPinned
+            && IslandMetrics.pinShouldExpand(hasAgents: !eventManager.agents.isEmpty)
+            && IslandMetrics.VisibilityPolicy.shouldShow(
+                islandEnabled: config.islandEnabled,
+                snoozed: config.isSnoozed,
+                hideAtStartup: config.hideAtStartup,
+                didShowOnce: AppDelegate.didShowOnce,
+                hasWork: true,
+                showWhenIdle: config.showIslandWhenIdle,
+                forced: AppDelegate.isForcedVisible)
+        {
+            expandTo(true)
+        }
         updateIslandVisibility()
         withAnimation(.easeInOut(duration: 0.25)) { opacity = 1 }
         if eventManager.currentEvent != nil {
@@ -1663,7 +1683,6 @@ struct NotchStatusView: View {
     private func expandTo(_ expanded: Bool) {
         withAnimation(morphAnimation) {
             isExpanded = expanded
-            if !expanded { isPinned = false }
         }
     }
 
@@ -1677,12 +1696,15 @@ struct NotchStatusView: View {
                 expandTo(true)
             }
         } else if IslandMetrics.shouldCollapseOnHoverExit(
-            isExpanded: isExpanded, isComposing: composingPaneId != nil, isPinned: isPinned)
+            isExpanded: isExpanded, isComposing: composingPaneId != nil,
+            isPinned: NotchHUDConfig.shared.panelPinned)
         {
             hoverTask = Task { @MainActor in
                 try? await Task.sleep(
                     for: .milliseconds(Int(IslandMetrics.hoverExitGrace * 1000)))
-                guard !Task.isCancelled, !isHovered, !isPinned else { return }
+                guard !Task.isCancelled, !isHovered,
+                    !NotchHUDConfig.shared.panelPinned
+                else { return }
                 expandTo(false)
             }
         }
@@ -1759,6 +1781,11 @@ struct NotchStatusView: View {
         if IslandMetrics.shouldCollapse(
             isExpanded: isExpanded, hasAgents: !eventManager.agents.isEmpty)
         {
+            // Zero agents is a pin-clearing collapse (nothing left to pin).
+            let config = NotchHUDConfig.shared
+            config.panelPinned = IslandMetrics.pinAfterCollapse(
+                reason: .agentsEmpty, wasPinned: config.panelPinned,
+                persistAcrossCollapse: true)
             expandTo(false)
         }
         if let composingPaneId,

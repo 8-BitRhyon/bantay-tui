@@ -2731,6 +2731,70 @@ struct LogicCheckMain {
             )
         }
 
+        // L42. F11 pin persistence: user-driven collapse (hover exit, hotkey
+        // toggle, display re-anchor) keeps the pin; zero agents and explicit
+        // unpin clear it; persistence can be opted out wholesale; the pin
+        // never resurrects an empty expanded panel; config facet defaults off
+        // and round-trips through UserDefaults.
+        do {
+            let persist = true
+            check(
+                IslandMetrics.pinAfterCollapse(
+                    reason: .hoverExit, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin persists on hover exit")
+            check(
+                IslandMetrics.pinAfterCollapse(
+                    reason: .hotkeyToggle, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin persists on hotkey toggle")
+            check(
+                IslandMetrics.pinAfterCollapse(
+                    reason: .displayReanchor, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin persists on display re-anchor")
+            check(
+                !IslandMetrics.pinAfterCollapse(
+                    reason: .agentsEmpty, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin clears on zero agents")
+            check(
+                !IslandMetrics.pinAfterCollapse(
+                    reason: .explicitUnpin, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin clears on explicit unpin")
+            check(
+                !IslandMetrics.pinAfterCollapse(
+                    reason: .agentsEmpty, wasPinned: false, persistAcrossCollapse: persist),
+                "L42 already-unpinned stays unpinned on agents empty")
+            for reason: IslandMetrics.PinCollapseReason in [
+                .hoverExit, .hotkeyToggle, .displayReanchor, .agentsEmpty, .explicitUnpin,
+            ] {
+                check(
+                    !IslandMetrics.pinAfterCollapse(
+                        reason: reason, wasPinned: true, persistAcrossCollapse: false),
+                    "L42 persistence-off clears pin on \(reason)")
+            }
+            check(
+                IslandMetrics.pinShouldExpand(hasAgents: true),
+                "L42 pin expands when agents exist")
+            check(
+                !IslandMetrics.pinShouldExpand(hasAgents: false),
+                "L42 pin never resurrects an empty panel")
+        }
+
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.panelPinned
+            defaults.removeObject(forKey: "panelPinned")
+            cfg.panelPinned = false
+            check(cfg.panelPinned == false, "L42 panelPinned default off")
+            cfg.panelPinned = true
+            check(defaults.bool(forKey: "panelPinned"), "L42 panelPinned persisted")
+            cfg.panelPinned = false
+            check(
+                defaults.bool(forKey: "panelPinned") == false,
+                "L42 panelPinned unpin persisted")
+            cfg.panelPinned = orig
+            defaults.removeObject(forKey: "panelPinned")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

@@ -694,6 +694,41 @@ public enum IslandMetrics: Sendable {
         isExpanded && !isComposing && !isPinned
     }
 
+    // MARK: - Pin state machine (F11, plan 016 1b)
+
+    /// Why a panel is collapsing. User-driven reasons (hover exit, hotkey
+    /// toggle, display re-anchor) keep the pin latched; `agentsEmpty` and
+    /// `explicitUnpin` clear it.
+    public enum PinCollapseReason: Sendable {
+        case hoverExit
+        case hotkeyToggle
+        case agentsEmpty
+        case displayReanchor
+        case explicitUnpin
+    }
+
+    /// Pure pin transition on collapse. The pin survives a collapse for
+    /// user-driven reasons when `persistAcrossCollapse` is on; zero agents and
+    /// an explicit unpin always clear it; persistence can be opted out
+    /// wholesale (future `persistAcrossCollapse` flag → everything clears).
+    public static func pinAfterCollapse(
+        reason: PinCollapseReason, wasPinned: Bool, persistAcrossCollapse: Bool
+    ) -> Bool {
+        guard persistAcrossCollapse else { return false }
+        switch reason {
+        case .hoverExit, .hotkeyToggle, .displayReanchor:
+            return wasPinned
+        case .agentsEmpty, .explicitUnpin:
+            return false
+        }
+    }
+
+    /// A latched pin may re-expand the panel only while agents exist — it
+    /// never resurrects an empty expanded panel.
+    public static func pinShouldExpand(hasAgents: Bool) -> Bool {
+        hasAgents
+    }
+
     public static func requiresApproval(_ kind: String) -> Bool {
         kind == "accessRequest" || kind == "access_request"
     }

@@ -140,6 +140,11 @@ final class NotchHUDConfig {
     var showShelfTab = true {
         didSet { defaults.set(showShelfTab, forKey: "showShelfTab") }
     }
+    /// "Keep expanded" intent (F11). Survives user-driven collapse and
+    /// relaunch; clears on explicit unpin and on zero agents.
+    var panelPinned = false {
+        didSet { defaults.set(panelPinned, forKey: "panelPinned") }
+    }
     var shelfLimit: Int = 20 {
         didSet {
             shelfLimit = min(max(shelfLimit, 1), 50)
@@ -292,6 +297,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "showShelfTab") as? Bool {
             showShelfTab = v
+        }
+        if let v = defaults.object(forKey: "panelPinned") as? Bool {
+            panelPinned = v
         }
         if let v = defaults.object(forKey: "shelfLimit") as? NSNumber {
             shelfLimit = min(max(v.intValue, 1), 50)
