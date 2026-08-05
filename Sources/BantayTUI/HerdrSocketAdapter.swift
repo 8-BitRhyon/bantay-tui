@@ -253,6 +253,34 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
             timeout: 2.0)
     }
 
+    /// `git diff --stat` preview for an agent's working directory, built on
+    /// the non-blocking `ProcessRunner` (plan 016 1c). Returns nil for a
+    /// non-repo or a clean tree (git exits nonzero / prints nothing), so the
+    /// peek overlay just hides the preview. The per-file rows are capped at
+    /// `pathLimit` with a "+N more" marker; the trailing summary line is kept.
+    func captureDiff(cwd: String, pathLimit: Int = 10) async -> String? {
+        guard !cwd.isEmpty else { return nil }
+        let result = await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/git"),
+            arguments: ["-C", cwd, "diff", "--stat"],
+            timeout: 3.0)
+        guard result.status == 0 else { return nil }
+        let lines = result.stdout.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return nil }
+        let cap = max(pathLimit, 1)
+        if lines.count <= cap + 1 {
+            return lines.joined(separator: "\n")
+        }
+        let summary = lines.last ?? ""
+        let files = lines.prefix(cap).joined(separator: "\n")
+        let overflow = lines.count - 1 - cap
+        return overflow > 0
+            ? "\(files)\n+\(overflow) more\n\(summary)"
+            : "\(files)\n\(summary)"
+    }
+
     func sendLine(paneId: String, text: String) {
         Task.detached { [self] in
             _ = await runHerdrAsync(["pane", "run", paneId, text], timeout: 1.0)

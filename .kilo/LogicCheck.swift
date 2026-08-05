@@ -3191,6 +3191,100 @@ struct LogicCheckMain {
                 isVisible: false, windowFrame: ghostPill, screens: [smallScreen, bigScreen]),
             "L48 hidden ghost pill needs no re-anchor")
 
+        // L45. Plan 016 §3a — peek panel overlay: pure tail cleaner + panel
+        // placement. `LogFormatter.cleanedTail` must be safe against the
+        // adversarial `pane read` cases (oversized single lines, ANSI/binary
+        // garbage) while preserving CJK/emoji; `peekFrame` must dock beside
+        // the island, clamp inside the screen, never overlap the island, and
+        // align to the backing pixel grid.
+
+        // cleanedTail: a 1000-line input suffixes to exactly maxLines (the
+        // newest lines win).
+        let thousandLines = (1...1000).map { "line \($0)" }.joined(separator: "\n")
+        let tail6 = LogFormatter.cleanedTail(thousandLines, maxLines: 6, maxLineLength: 200)
+        check(tail6.count == 6, "L45 tail suffixes to maxLines (got \(tail6.count))")
+        check(tail6.last == "line 1000", "L45 tail keeps the newest line last")
+        check(tail6.first == "line 995", "L45 tail keeps the newest 6 lines (got \(tail6.first ?? "nil"))")
+        let tail200 = LogFormatter.cleanedTail(thousandLines, maxLines: 200, maxLineLength: 200)
+        check(tail200.count == 200, "L45 tail at 200-line cap (got \(tail200.count))")
+
+        // Blank / whitespace-only lines are dropped before suffixing.
+        let padded = "  alpha  \n   \n\t\nbeta\n\n  \n\ngamma\n"
+        let cleanPadded = LogFormatter.cleanedTail(padded, maxLines: 10, maxLineLength: 200)
+        check(cleanPadded == ["alpha", "beta", "gamma"], "L45 whitespace-only lines dropped")
+
+        // A 100k-char single line truncates to maxLineLength without throwing
+        // (the A-corpus size from plan 006 Step 4).
+        let hugeLine = String(repeating: "x", count: 100_000)
+        let truncated = LogFormatter.cleanedTail(hugeLine, maxLines: 5, maxLineLength: 120)
+        check(
+            truncated.count == 1 && truncated[0].count == 120,
+            "L45 100k-char line truncated to maxLineLength (got \(truncated.first?.count ?? -1) chars)")
+
+        // ANSI escape sequences are stripped so terminal garbage can't render.
+        let ansi = "\u{1B}[31mred\u{1B}[0m \u{1B}[1;32mgreen\u{1B}[0m"
+        let cleanedAnsi = LogFormatter.cleanedTail(ansi, maxLines: 10, maxLineLength: 200)
+        check(cleanedAnsi == ["red green"], "L45 ANSI escapes stripped (got \(cleanedAnsi))")
+        // Bare control characters (binary garbage) are also stripped.
+        let binary = "ok\u{07}good\u{00}and"
+        let cleanedBinary = LogFormatter.cleanedTail(binary, maxLines: 10, maxLineLength: 200)
+        check(cleanedBinary == ["okgoodand"], "L45 control chars stripped (got \(cleanedBinary))")
+        let twoCharEscape = LogFormatter.cleanedTail("\u{1B}7 hello", maxLines: 10, maxLineLength: 200)
+        check(twoCharEscape == ["hello"], "L45 two-char escape stripped (got \(twoCharEscape))")
+
+        // CJK/emoji survive both cleaning and hard truncation (truncation
+        // stays on grapheme-cluster boundaries).
+        let unicodeLine = "你好世界 🚀 test 日本語"
+        let cleanedUnicode = LogFormatter.cleanedTail(unicodeLine, maxLines: 10, maxLineLength: 200)
+        check(
+            cleanedUnicode == ["你好世界 🚀 test 日本語"],
+            "L45 CJK/emoji preserved (got \(cleanedUnicode))")
+        let unicodeTrunc = LogFormatter.cleanedTail("🚀🚀🚀🚀🚀", maxLines: 10, maxLineLength: 3)
+        check(unicodeTrunc == ["🚀🚀🚀"], "L45 emoji truncation keeps whole graphemes (got \(unicodeTrunc))")
+
+        // peekFrame: docks beside the island, clamps inside a 400×300 screen,
+        // never overlaps the island, aligns to the backing pixel grid.
+        let peekScreen = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let peekIsland = CGRect(x: 100, y: 0, width: 200, height: 36)
+        let peek = IslandMetrics.peekFrame(
+            anchor: peekIsland, screenFrame: peekScreen, size: CGSize(width: 380, height: 200))
+        check(!peek.intersects(peekIsland), "L45 peek never overlaps the island (frame \(peek))")
+        check(
+            peek.minX >= peekScreen.minX && peek.minY >= peekScreen.minY
+                && peek.maxX <= peekScreen.maxX && peek.maxY <= peekScreen.maxY,
+            "L45 peek clamps inside 400x300 (frame \(peek))")
+        check(
+            peek.minX == peekIsland.maxX + IslandMetrics.peekGap,
+            "L45 peek docks beside the island (frame \(peek))")
+
+        // Left dock when the right side lacks room.
+        let rightEdgeIsland = CGRect(x: 300, y: 0, width: 92, height: 36)
+        let leftPeek = IslandMetrics.peekFrame(
+            anchor: rightEdgeIsland, screenFrame: peekScreen, size: CGSize(width: 380, height: 200))
+        check(
+            leftPeek.maxX <= rightEdgeIsland.minX,
+            "L45 peek docks left when right has no room (frame \(leftPeek))")
+        check(!leftPeek.intersects(rightEdgeIsland), "L45 left-docked peek avoids the island")
+
+        // No side room: stacks below the island, still on-screen + disjoint.
+        let fullWidthIsland = CGRect(x: 0, y: 0, width: 400, height: 36)
+        let belowPeek = IslandMetrics.peekFrame(
+            anchor: fullWidthIsland, screenFrame: peekScreen, size: CGSize(width: 380, height: 200))
+        check(!belowPeek.intersects(fullWidthIsland), "L45 below-stacked peek avoids the island")
+        check(
+            belowPeek.minX >= 0 && belowPeek.minY >= 0
+                && belowPeek.maxX <= 400 && belowPeek.maxY <= 300,
+            "L45 below-stacked peek stays on-screen (frame \(belowPeek))")
+
+        // Scale alignment: fractional inputs snap to the backing pixel grid.
+        let fractionalIsland = CGRect(x: 100.5, y: 3.25, width: 200, height: 36)
+        let alignedPeek = IslandMetrics.peekFrame(
+            anchor: fractionalIsland, screenFrame: peekScreen,
+            size: CGSize(width: 95.25, height: 201), scale: 2)
+        check(alignedPeek.minY == 3.5, "L45 peek aligns to the 2x pixel grid (got \(alignedPeek.minY))")
+        check(alignedPeek.maxY == 204.5, "L45 peek maxY aligns to the 2x grid (got \(alignedPeek.maxY))")
+        check(!alignedPeek.intersects(fractionalIsland), "L45 aligned peek still avoids the island")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
