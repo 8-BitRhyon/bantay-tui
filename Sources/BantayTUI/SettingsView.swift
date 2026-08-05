@@ -123,6 +123,17 @@ struct SettingsView: View {
                 Text("Remote hook: ssh -R \(ingestPort):localhost:\(ingestPort) devbox")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.secondary)
+                Text("Then POST with the token:")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Text(
+                    "curl -s -X POST --data-binary @- "
+                        + "\"http://127.0.0.1:\(ingestPort)/events?token="
+                        + "\(NotchHUDConfig.shared.ingestToken)\""
+                )
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(.secondary)
+                .textSelection(.enabled)
             }
             Section("Claude Code hook") {
                 Toggle("Install Claude Code hook", isOn: $claudeHookInstalled)
@@ -550,7 +561,8 @@ struct SettingsView: View {
         let merged =
             enabled
             ? ClaudeHookInstaller.mergedSettings(
-                existing: settings, port: NotchHUDConfig.shared.ingestPort)
+                existing: settings, port: NotchHUDConfig.shared.ingestPort,
+                token: NotchHUDConfig.shared.ingestToken)
             : ClaudeHookInstaller.removingBantayHooks(from: settings)
         switch ClaudeHookWriteDecision.decide(
             fileExists: fileExists, parsed: parsed, merged: merged)
@@ -572,7 +584,19 @@ struct SettingsView: View {
                 return
             }
             do {
-                try data.write(to: settingsURL)
+                // Atomic write: `.atomic` writes to a temp file in the same
+                // directory and renames over the target, so a crash or a
+                // concurrent Claude Code process can never leave a truncated/
+                // interleaved settings.json.
+                try data.write(to: settingsURL, options: [.atomic])
+                // Preserve the existing file's permissions (or default to 600
+                // on a fresh install) — settings.json is user-private.
+                let current =
+                    try? FileManager.default.attributesOfItem(
+                        atPath: settingsURL.path)[.posixPermissions] as? NSNumber
+                let perms = current ?? NSNumber(value: 0o600)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: perms], ofItemAtPath: settingsURL.path)
             } catch {
                 claudeHookRevertFailure(enabled)
                 AppDelegate.dbg(

@@ -5,15 +5,22 @@ import Foundation
 /// payload shape. Kept free of file I/O so the harness can test it.
 enum ClaudeHookInstaller {
     /// The hook command that streams the hook's stdin JSON to Bantay's local
-    /// ingest server. `curl` ships with macOS.
-    static func hookCommand(port: Int) -> String {
-        "curl -s -X POST --data-binary @- http://127.0.0.1:\(port)/events"
+    /// ingest server. `curl` ships with macOS. When a `token` is supplied it
+    /// is appended as the `?token=` query param, which the ingest server
+    /// requires; token-less form is retained so legacy/foreign detection stays
+    /// stable and old installs remain removable.
+    static func hookCommand(port: Int, token: String? = nil) -> String {
+        if let token {
+            return
+                "curl -s -X POST --data-binary @- http://127.0.0.1:\(port)/events?token=\(token)"
+        }
+        return "curl -s -X POST --data-binary @- http://127.0.0.1:\(port)/events"
     }
 
     /// The Claude settings.json `hooks` section Bantay installs. We only
     /// touch `PermissionPrompt` and `Stop` — everything else is preserved.
-    static func hooksSection(port: Int) -> [String: Any] {
-        let command = hookCommand(port: port)
+    static func hooksSection(port: Int, token: String? = nil) -> [String: Any] {
+        let command = hookCommand(port: port, token: token)
         return [
             "hooks": [
                 "PermissionPrompt": [
@@ -47,7 +54,7 @@ enum ClaudeHookInstaller {
     static func isBantayHook(_ hook: [String: Any]) -> Bool {
         guard let command = hook["command"] as? String else { return false }
         let pattern =
-            #"^\s*curl\b.*\s--data-binary\s+@-\s+http://127\.0\.0\.1:\d+/events\b\s*$"#
+            #"^\s*curl\b.*\s--data-binary\s+@-\s+http://127\.0\.0\.1:\d+/events(?:\?[^\s]*)?\s*$"#
         return command.range(of: pattern, options: .regularExpression) != nil
     }
 
@@ -60,7 +67,7 @@ enum ClaudeHookInstaller {
     static func isLegacyBantayHook(_ hook: [String: Any]) -> Bool {
         guard let command = hook["command"] as? String else { return false }
         let pattern =
-            #"^\s*curl\b.*\s-{1,2}(?:d|data(?:-binary)?)\s+@-\s+http://127\.0\.0\.1:\d+/events\b"#
+            #"^\s*curl\b.*\s-{1,2}(?:d|data(?:-binary)?)\s+@-\s+http://127\.0\.0\.1:\d+/events(?:\?[^\s]*)?\b"#
         return command.range(of: pattern, options: .regularExpression) != nil
     }
 
@@ -87,13 +94,16 @@ enum ClaudeHookInstaller {
     /// opaque and returned unchanged — never fabricated or replaced. A
     /// non-conforming value for a single event is preserved untouched too,
     /// even at the cost of skipping that event's Bantay hook.
-    static func mergedSettings(existing: [String: Any], port: Int) -> [String: Any] {
+    static func mergedSettings(
+        existing: [String: Any], port: Int, token: String? = nil
+    ) -> [String: Any] {
         guard existing["hooks"] == nil || existing["hooks"] is [String: Any] else {
             return existing
         }
         var merged = existing
         var hooks = (existing["hooks"] as? [String: Any]) ?? [:]
-        let bantayHooks = (hooksSection(port: port)["hooks"] as? [String: Any]) ?? [:]
+        let bantayHooks =
+            (hooksSection(port: port, token: token)["hooks"] as? [String: Any]) ?? [:]
         for (event, bantayEntries) in bantayHooks {
             guard let fresh = bantayEntries as? [[String: Any]] else { continue }
             guard let existingEntries = hooks[event] as? [[String: Any]] else {

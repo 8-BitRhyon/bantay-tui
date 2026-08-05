@@ -153,6 +153,34 @@ final class NotchHUDConfig {
             defaults.set(ingestPort, forKey: "ingestPort")
         }
     }
+    /// Shared secret required on every ingest request (`/events?token=…`).
+    /// Generated once at first run and persisted; the Claude hook and the
+    /// remote `ssh -R` hint embed it, so a local process cannot forge events
+    /// or keystroke-inject approvals without it.
+    var ingestToken: String {
+        if let existing = defaults.string(forKey: "ingestToken"), !existing.isEmpty {
+            return existing
+        }
+        let fresh = Self.generateIngestToken()
+        defaults.set(fresh, forKey: "ingestToken")
+        return fresh
+    }
+
+    /// 32 random hex chars (128 bits) — strong enough for a localhost auth
+    /// gate; never persisted to logs.
+    static func generateIngestToken() -> String {
+        (0..<32).map { _ in String("0123456789abcdef".randomElement()!) }.joined()
+    }
+
+    /// Constant-time comparison of the presented ingest token.
+    nonisolated static func tokenMatches(_ presented: String, expected: String) -> Bool {
+        guard presented.utf8.count == expected.utf8.count else { return false }
+        var diff: UInt8 = 0
+        for (a, b) in zip(presented.utf8, expected.utf8) {
+            diff |= a ^ b
+        }
+        return diff == 0
+    }
     var showShelfTab = true {
         didSet { defaults.set(showShelfTab, forKey: "showShelfTab") }
     }
