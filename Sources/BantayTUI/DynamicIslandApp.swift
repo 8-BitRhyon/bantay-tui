@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var didLogHotkeyPermissionWarning = false
     private var badgeTimer: Timer?
     private var ingestServer: EventIngestServer?
+    private var controlGateway: ControlGatewayServer?
     /// The "Remove Bantay-TUI…" menu item; disabled while the uninstall
     /// script runs so the action can't double-fire.
     @MainActor private var uninstallMenuItem: NSMenuItem?
@@ -134,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateGlobalHotkeyMonitor()
         startBadgeTimer()
         updateIngestServer()
+        updateControlGateway()
         Self.dbg(
             "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
@@ -547,6 +549,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Self.dbg(
             "ingest: listening on 127.0.0.1:\(config.ingestPort) "
                 + "(ssh -R \(config.ingestPort):localhost:\(config.ingestPort))")
+    }
+
+    /// Start/stop the local control gateway (W1 wire contract) per config.
+    /// A Unix-domain socket owned by the current user is not a network
+    /// exposure, so the facet defaults ON; the stale-socket probe on start
+    /// unlinks leftovers from a crash.
+    @MainActor
+    func updateControlGateway() {
+        controlGateway?.stop()
+        controlGateway = nil
+        let config = NotchHUDConfig.shared
+        guard config.gatewayEnabled else { return }
+        let path = ControlGateway.socketPath(
+            env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+        let server = ControlGatewayServer(socketPath: path, adapter: HerdrSocketAdapter())
+        server.start()
+        controlGateway = server
+        Self.dbg("gateway: listening on \(path)")
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

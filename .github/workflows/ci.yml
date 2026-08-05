@@ -61,6 +61,7 @@ jobs:
             Sources/BantayTUI/NotchHUDConfig.swift \
             Sources/BantayTUI/HerdrSocketAdapter.swift \
             Sources/BantayTUI/HerdrSocketClient.swift \
+            Sources/BantayTUI/ControlGateway.swift \
             Sources/BantayTUI/IslandMetrics.swift \
             Sources/BantayTUI/PlexerAdapter.swift \
             Sources/BantayTUI/AgentEventManager.swift \
@@ -147,6 +148,7 @@ jobs:
             Sources/BantayTUI/NotchHUDConfig.swift \
             Sources/BantayTUI/HerdrSocketAdapter.swift \
             Sources/BantayTUI/HerdrSocketClient.swift \
+            Sources/BantayTUI/ControlGateway.swift \
             Sources/BantayTUI/IslandMetrics.swift \
             Sources/BantayTUI/PlexerAdapter.swift \
             Sources/BantayTUI/AgentEventManager.swift \

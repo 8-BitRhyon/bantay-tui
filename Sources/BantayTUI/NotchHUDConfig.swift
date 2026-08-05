@@ -147,6 +147,13 @@ final class NotchHUDConfig {
     var ingestEnabled = false {
         didSet { defaults.set(ingestEnabled, forKey: "ingestEnabled") }
     }
+    /// Local control gateway (W1 wire contract): a Unix-domain socket owned
+    /// by the current user, not a network exposure — so it defaults ON unlike
+    /// the TCP ingest port. A stale socket file from a crash is probed and
+    /// unlinked on start.
+    var gatewayEnabled = true {
+        didSet { defaults.set(gatewayEnabled, forKey: "gatewayEnabled") }
+    }
     var ingestPort: Int = 41817 {
         didSet {
             ingestPort = Int(IngestHTTP.clampedPort(ingestPort))
@@ -347,6 +354,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "ingestEnabled") as? Bool {
             ingestEnabled = v
+        }
+        if let v = defaults.object(forKey: "gatewayEnabled") as? Bool {
+            gatewayEnabled = v
         }
         if let v = defaults.object(forKey: "ingestPort") as? NSNumber {
             ingestPort = Int(IngestHTTP.clampedPort(v.intValue))
