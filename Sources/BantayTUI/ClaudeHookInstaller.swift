@@ -51,10 +51,31 @@ enum ClaudeHookInstaller {
         return command.range(of: pattern, options: .regularExpression) != nil
     }
 
-    /// True when an entry's hooks include at least one Bantay hook.
+    /// Legacy matcher for hooks installed by older Bantay builds whose curl
+    /// invocation did not use `--data-binary @-` (e.g. `-d @-` or `--data
+    /// @-`). `removingBantayHooks` must still remove them, but the matcher
+    /// keeps the safety bar of the current shape: a `curl` command whose
+    /// argument is stdin (`@-`) targeting the localhost ingest path. A foreign
+    /// command that merely mentions a localhost URL still never matches.
+    static func isLegacyBantayHook(_ hook: [String: Any]) -> Bool {
+        guard let command = hook["command"] as? String else { return false }
+        let pattern =
+            #"^\s*curl\b.*\s-{1,2}(?:d|data(?:-binary)?)\s+@-\s+http://127\.0\.0\.1:\d+/events\b"#
+        return command.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// True when an entry's hooks include at least one Bantay hook (current or
+    /// legacy shape). Used for merge de-dup and removal so old-format installs
+    /// stay removable.
     static func isBantayEntry(_ entry: [String: Any]) -> Bool {
         guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return false }
-        return entryHooks.contains(where: isBantayHook)
+        return entryHooks.contains(where: { isBantayHook($0) || isLegacyBantayHook($0) })
+    }
+
+    /// True when a single hook command is Bantay-owned in either the current or
+    /// the legacy shape.
+    static func isOwnedBantayHook(_ hook: [String: Any]) -> Bool {
+        isBantayHook(hook) || isLegacyBantayHook(hook)
     }
 
     /// Merge the Bantay hooks into an existing settings dictionary, preserving
@@ -107,7 +128,7 @@ enum ClaudeHookInstaller {
                     return entry
                 }
                 let before = entryHooks.count
-                entryHooks.removeAll(where: isBantayHook)
+                entryHooks.removeAll(where: isOwnedBantayHook)
                 guard entryHooks.count != before else { return entry }
                 changed = true
                 guard !entryHooks.isEmpty else { return nil }
@@ -183,10 +204,10 @@ enum ClaudeHookWriteDecision {
     case abort
 
     /// `abort` whenever `fileExists && !parsed`; otherwise `write(merged)`.
-    /// `enabled` is carried for the caller's context; the abort is independent
-    /// of install vs removal intent.
+    /// The decision is independent of install vs removal intent: writing over
+    /// a file that exists but could not be parsed is never safe.
     static func decide(
-        enabled: Bool, fileExists: Bool, parsed: Bool, merged: [String: Any]
+        fileExists: Bool, parsed: Bool, merged: [String: Any]
     ) -> ClaudeHookWriteDecision {
         guard !(fileExists && !parsed) else { return .abort }
         return .write(merged)
