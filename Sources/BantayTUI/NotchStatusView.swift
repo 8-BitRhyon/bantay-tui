@@ -376,16 +376,16 @@ struct NotchStatusView: View {
     /// Fetch a live output tail for `paneId` off the main actor and show it in
     /// the peek region. Debounced by `peekingPaneId` so rapid hovers don't
     /// stack fetches; the adapter does blocking I/O, hence the detached task.
+    /// The inline cleaner is the hoisted pure `LogFormatter.cleanedTail`
+    /// (plan 016 3a), so the 6-line hover tail and the full overlay share one
+    /// tested cleaner.
     private func fetchPeek(paneId: String) {
         guard peekingPaneId != paneId else { return }
         peekingPaneId = paneId
         peekTask?.cancel()
         peekTask = Task.detached { [adapter] in
             let tail = await adapter.captureTail(paneId: paneId, lines: 6)
-            let cleaned = tail.split(whereSeparator: \.isNewline)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-                .suffix(6)
+            let cleaned = LogFormatter.cleanedTail(tail, maxLines: 6, maxLineLength: 120)
                 .joined(separator: "\n")
             await MainActor.run {
                 if self.peekingPaneId == paneId {
@@ -901,6 +901,24 @@ struct NotchStatusView: View {
         .disabled(disabled)
     }
 
+    /// ▸ affordance that opens the full-log + diff preview overlay (plan 016
+    /// 3a). One overlay at a time; the controller cancels any in-flight fetch
+    /// when the overlay is dismissed.
+    private func peekButton(agent: AgentSnapshot) -> some View {
+        Button {
+            PeekPanelController.shared.show(agent: agent, adapter: adapter)
+        } label: {
+            Text("▸")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(.white.opacity(0.55))
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Peek full log + diff preview")
+        .accessibilityLabel("Peek log for \(agent.source)")
+    }
+
     private var expandedList: some View {
         let counts = IslandMetrics.agentCounts(
             kinds: visibleAgents.map(\.kind))
@@ -1219,6 +1237,8 @@ struct NotchStatusView: View {
                         Task { await eventManager.pollHerdrAgents() }
                     }
                     .layoutPriority(1)
+                    peekButton(agent: agent)
+                        .layoutPriority(1)
                 }
             }
             .padding(.horizontal, 16)
@@ -1629,6 +1649,8 @@ struct NotchStatusView: View {
                     .help("Stop (Ctrl-C)")
                     .accessibilityLabel("Stop \(agent.source)")
                     .layoutPriority(1)
+                    peekButton(agent: agent)
+                        .layoutPriority(1)
                 }
             }
         }

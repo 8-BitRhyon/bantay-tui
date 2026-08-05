@@ -813,4 +813,122 @@ public enum IslandMetrics: Sendable {
             cache.filter { liveKeys.contains($0.key) }
         }
     }
+
+    // MARK: - Peek overlay (plan 016 3a)
+
+    /// Gap between the island edge and a peek panel docked beside it.
+    public static let peekGap: CGFloat = 8
+
+    /// Placement for the peek overlay panel: prefers docking beside the
+    /// island (right first, left when the right side lacks room), falls back
+    /// to stacking below the island, always clamps inside the screen, and
+    /// never overlaps the island except in the degenerate case where the
+    /// island itself fills the whole display. Mirrors the `windowFrame`
+    /// clamp discipline and reuses `alignedToBackingPixelGrid` so the panel
+    /// lands on the backing pixel grid for `scale`.
+    public static func peekFrame(
+        anchor islandFrame: CGRect, screenFrame: CGRect, size: CGSize, scale: CGFloat = 1
+    ) -> CGRect {
+        let w = min(max(size.width, 0), screenFrame.width)
+        let h = min(max(size.height, 0), screenFrame.height)
+        guard w > 0, h > 0 else {
+            return alignedToBackingPixelGrid(.zero, scale: scale)
+        }
+        var x: CGFloat
+        var y: CGFloat
+        var width = w
+        var height = h
+
+        let rightRoom = screenFrame.maxX - (islandFrame.maxX + peekGap)
+        let leftRoom = islandFrame.minX - peekGap - screenFrame.minX
+        if rightRoom > 0, rightRoom >= leftRoom {
+            x = islandFrame.maxX + peekGap
+            width = min(w, rightRoom)
+            y = islandFrame.minY
+        } else if leftRoom > 0 {
+            x = islandFrame.minX - peekGap - min(w, leftRoom)
+            width = min(w, leftRoom)
+            y = islandFrame.minY
+        } else {
+            let roomBelow = screenFrame.maxY - (islandFrame.maxY + peekGap)
+            if roomBelow > 0 { height = min(h, roomBelow) }
+            x = islandFrame.midX - w / 2
+            y = islandFrame.maxY + peekGap
+        }
+
+        x = min(max(x, screenFrame.minX), screenFrame.maxX - width)
+        y = min(max(y, screenFrame.minY), screenFrame.maxY - height)
+        return alignedToBackingPixelGrid(
+            CGRect(x: x, y: y, width: width, height: height), scale: scale)
+    }
+}
+
+/// Pure cleaner for raw `pane read` output feeding the peek overlay and the
+/// inline hover tail. Whitespace-trims every line, drops blanks, strips ANSI
+/// escapes and control characters (so binary/ANSI garbage can never render),
+/// hard-truncates over-long lines, and suffixes to `maxLines`. Truncation
+/// happens on grapheme-cluster boundaries, so CJK and emoji survive intact,
+/// and a pathological single line (the 100k-char adversarial case) is handled
+/// without throwing.
+public enum LogFormatter: Sendable {
+    public static func cleanedTail(
+        _ raw: String, maxLines: Int, maxLineLength: Int
+    ) -> [String] {
+        let lineCap = max(maxLines, 1)
+        let lengthCap = max(maxLineLength, 1)
+        return raw.split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map(stripControlCharacters)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { $0.count > lengthCap ? String($0.prefix(lengthCap)) : $0 }
+            .suffix(lineCap)
+            .map { $0 }
+    }
+
+    /// Remove ANSI escape sequences (CSI, OSC, and bare two-char escapes) and
+    /// any remaining C0/C1 control characters. Newlines never reach here (the
+    /// input is already split), so every control scalar below 0x20 or in
+    /// 0x7F...0x9F is dropped; CJK (U+4E00+) and emoji (U+1F300+) are untouched.
+    private static func stripControlCharacters(_ text: String) -> String {
+        var result = String()
+        result.reserveCapacity(text.count)
+        enum State {
+            case normal, escape, csi, osc, oscEsc
+        }
+        var state: State = .normal
+        for char in text {
+            guard let scalar = char.unicodeScalars.first else { continue }
+            let value = scalar.value
+            switch state {
+            case .normal:
+                if char == "\u{1B}" {
+                    state = .escape
+                } else if value < 0x20 || (0x7F...0x9F).contains(value) {
+                    continue
+                } else {
+                    result.append(char)
+                }
+            case .escape:
+                if char == "[" {
+                    state = .csi
+                } else if char == "]" {
+                    state = .osc
+                } else {
+                    state = .normal  // bare two-char escape consumed
+                }
+            case .csi:
+                if (0x40...0x7E).contains(value) { state = .normal }
+            case .osc:
+                if char == "\u{1B}" { state = .oscEsc }
+            case .oscEsc:
+                if char == "\\" {
+                    state = .normal
+                } else if char != "\u{1B}" {
+                    state = .osc
+                }
+            }
+        }
+        return result
+    }
 }
