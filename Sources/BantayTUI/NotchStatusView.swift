@@ -1442,6 +1442,21 @@ struct NotchStatusView: View {
                 Text(UsageTracker.compactTokens(usage.totalTokens))
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.55))
+                if usage.totalTokens > 0,
+                    let tokensPerMinute = eventManager.usageRate.tokensPerMinute
+                {
+                    let rateLevel = UsageTracker.rateLevel(
+                        rate: tokensPerMinute, warn: config.usageRateWarnTokensPerMin)
+                    let rateColor: Color =
+                        rateLevel == .red
+                        ? Color(hex: "#ff6b6b")
+                        : rateLevel == .warn
+                            ? Color(hex: "#ffe066")
+                            : .white.opacity(0.55)
+                    Text("· \(UsageTracker.compactTokens(Int(tokensPerMinute)))/min")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(rateColor)
+                }
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.white.opacity(0.12))

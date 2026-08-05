@@ -108,6 +108,9 @@ final class AgentEventManager: ObservableObject {
     @Published private(set) var recentCompletions: [RecentCompletion] = []
     /// Aggregate token/cost usage from agent transcripts (gauge in footer).
     @Published private(set) var usage: UsageSnapshot = .zero
+    /// Tokens/min over the last minute of transcript activity (rate segment).
+    @Published private(set) var usageRate: UsageRate = UsageRate(
+        tokensPerMinute: nil, lastSeen: nil)
     private var watchTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     private var waitProcesses: [String: Process] = [:]
@@ -579,10 +582,15 @@ extension AgentEventManager {
                     )
                 }
         }.value
-        self.usage = await Task.detached(priority: .utility) {
-            UsageTracker.latestUsage(
-                home: NSHomeDirectory(), names: agents.map { $0.agent })
+        let usageAndRate = await Task.detached(priority: .utility) {
+            UsageTracker.latestUsageAndRate(
+                home: NSHomeDirectory(),
+                names: agents.map { $0.agent },
+                now: Date(),
+                window: 60)
         }.value
+        self.usage = usageAndRate.usage
+        self.usageRate = usageAndRate.rate
         let liveStatuses: [String: String] = Dictionary(
             uniqueKeysWithValues: agents.compactMap {
                 (agent: HerdrAgentInfo) -> (String, String)? in
