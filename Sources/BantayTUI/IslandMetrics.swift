@@ -596,10 +596,39 @@ public enum IslandMetrics: Sendable {
         return max(min(max(natural, rowHeight), max(availableHeight, 0)), 0)
     }
 
+    /// Whether a display has a hardware notch, centralizing the heuristic that
+    /// used to be inlined at three call sites (`islandScreen`, `islandFrame`,
+    /// `notchWidth`). One tested function drives all three.
+    ///
+    /// Certified heuristic — a display is NOTCHED only when the safe-area top
+    /// is positive (menu bar and/or notch present) AND at least one auxiliary
+    /// menu-bar area is reported:
+    ///
+    ///     safeTop > 0 && (auxLeft > 0 || auxRight > 0)
+    ///
+    /// Per-row rationale:
+    ///   - safeTop 0 + aux (any)      -> false. A notch-less display (external,
+    ///     or a MacBook with no notch) has a zero safe-area top. Aux-area
+    ///     nil-ness alone is unreliable — macOS 13 vs 14 report auxiliary
+    ///     areas differently on notch-less hardware.
+    ///   - safeTop 37 + aux both 0    -> false. safeTop alone (menu bar +
+    ///     notch height) is not proof of a notch when the OS reports no
+    ///     auxiliary areas (e.g. Stage Manager / iPad-in-Clamshell); the
+    ///     fallback pill geometry engages.
+    ///   - safeTop 24/37 + any aux>0  -> true. A positive safe top plus a real
+    ///     auxiliary icon cluster certifies a notch flanked by menu-bar
+    ///     regions.
+    public static func hasNotch(safeTop: CGFloat, auxLeft: CGFloat, auxRight: CGFloat) -> Bool {
+        safeTop > 0 && (auxLeft > 0 || auxRight > 0)
+    }
+
     public static func notchWidth(
         screenWidth: CGFloat, auxLeft: CGFloat, auxRight: CGFloat, safeTop: CGFloat
     ) -> CGFloat {
-        guard safeTop > 0, auxLeft > 0, auxRight > 0 else { return notchlessFallbackWidth }
+        guard
+            hasNotch(safeTop: safeTop, auxLeft: auxLeft, auxRight: auxRight),
+            auxLeft > 0, auxRight > 0
+        else { return notchlessFallbackWidth }
         let w = screenWidth - auxLeft - auxRight + 2
         return w > 100 ? w : notchlessFallbackWidth
     }
