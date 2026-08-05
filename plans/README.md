@@ -18,13 +18,17 @@ adversarial corpus (`try to break it`) grows with every plan.
 | 000  | UX research & usability baseline (study write-up) |  -  | M |  -  | DONE |
 | 001  | Lifecycle controls: hide/disable/snooze, quit, restart in menu bar | P1 | S |  -  | DONE |
 | 002  | Real Settings window (replace `EmptyView()`) + onboarding | P1 | M | 001 | DONE |
-| 003  | Auto-update via Sparkle | P2 | M | 002 | TODO |
+| 003  | Auto-update via Sparkle | P2 | M | 002 | FOLDED INTO 016 (item 2) — mechanism spec stays canonical; execution in Phase 1 |
 | 004  | Clean uninstall (script `--uninstall` + in-app path) | P2 | S |  -  | DONE |
 | 005  | Quiet hours + per-source mute + snooze persistence | P2 | S | 002 | DONE — mute + quiet hours shipped 2026-08-04 (4ce9fc0) |
 | 006  | Spec-driven discipline + adversarial test suite (RED→GREEN) | P1 | M |  -  | IN PROGRESS |
 | 010  | In-app integration: LaunchAgent self-install + events bootstrap | P2 | S |  -  | DONE — no setup.sh needed for launch-at-login (2026-08-04) |
 | 011  | Hidden-island approval notifications (Notification Center fallback) | P3 | S |  -  | DONE — opt-in, approvals never missed silently (2026-08-04) |
 | 014  | UI/UX audit: glanceable agent control plane (F1–F14) | P1 | L |  -  | DONE — all F1–F14 shipped; wave 3 (F8/F9/F11/F13) merged 2026-08-04 via PR #21 |
+| 015  | Ecosystem architecture & language boundaries (Swift/Go/wire contract) | P1 | M |  -  | DONE — decisions locked 2026-08-04; master doc for 016–018 |
+| 016  | Phase 1: macOS completion & hardening (stability, Sparkle, deeper UI, multi-display/a11y) | P1 | L | 015 | PROPOSED — plan written 2026-08-04, RED tests pending |
+| 017  | Phase 2: multiplexer adapters, universal hook SDK, standalone Go TUI | P1 | L | 015, 016 | PROPOSED — plan written 2026-08-04, RED tests pending |
+| 018  | Phase 3: remote devbox bridge, cross-platform overlays, web & mobile companion | P2 | L | 015, 016, 017 | PROPOSED — plan written 2026-08-04, RED tests pending |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale  -  finding fixed independently or approach
