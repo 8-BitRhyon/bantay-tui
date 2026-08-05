@@ -49,29 +49,20 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         return candidates
     }
 
-    private func runHerdr(_ arguments: [String], timeout: TimeInterval = 3.0) -> String {
+    /// CLI fallback: run herdr through the non-blocking `ProcessRunner`.
+    /// Never blocks the caller; `ProcessRunner.run` drains output
+    /// concurrently and terminates on timeout.
+    private func runHerdrAsync(_ arguments: [String], timeout: TimeInterval = 3.0) async -> String {
         guard let url = herdrExecutableURL() else { return "" }
-        let process = Process()
-        process.executableURL = url
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-            if process.isRunning {
-                process.terminate()
-            }
-        }
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
+        let result = await ProcessRunner.run(
+            executableURL: url, arguments: arguments, timeout: timeout)
+        return result.stdout
     }
 
     func paneFocus(paneId: String) {
-        Task {
+        Task.detached { [self] in
             if await socketCall("agent.focus", params: ["pane_id": paneId]) { return }
-            _ = runHerdr(["agent", "focus", paneId], timeout: 1.0)
+            _ = await runHerdrAsync(["agent", "focus", paneId], timeout: 1.0)
         }
     }
 
@@ -79,19 +70,19 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         paneFocus(paneId: paneId)
     }
 
-    func agentPrompt(paneId: String, text: String) {
-        _ = runHerdr(["agent", "prompt", paneId, text], timeout: 1.0)
+    func agentPrompt(paneId: String, text: String) async {
+        _ = await runHerdrAsync(["agent", "prompt", paneId, text], timeout: 1.0)
     }
 
     /// Sends raw key presses to an agent's terminal. Works without focus.
     func sendKeys(paneId: String, keys: [String]) {
-        Task {
+        Task.detached { [self] in
             if await socketCall("agent.send_keys", params: ["pane_id": paneId, "keys": keys]) {
                 return
             }
             var arguments = ["agent", "send-keys", paneId]
             arguments.append(contentsOf: keys)
-            _ = runHerdr(arguments, timeout: 1.0)
+            _ = await runHerdrAsync(arguments, timeout: 1.0)
         }
     }
 
@@ -148,9 +139,10 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         ]
     }
 
-    func listPanes() -> [PaneInfo] {
+    /// Async workhorse behind the sync `listPanes()` protocol seam.
+    nonisolated func listPanesAsync() async -> [PaneInfo] {
         for args in Self.paneListCommandVariants() {
-            let output = runHerdr(args)
+            let output = await runHerdrAsync(args)
             guard !output.isEmpty else { continue }
             let decoder = JSONDecoder()
             guard let jsonData = output.data(using: .utf8),
@@ -163,15 +155,30 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         return []
     }
 
+    /// Sync protocol seam (PlexerAdapter) — the D2 boundary for the future
+    /// tmux/zellij adapters (plan 017), so its signature must stay put. No
+    /// app caller today; the fetch runs on a background task and the calling
+    /// thread waits on the result, so a hypothetical main-actor caller never
+    /// holds `waitUntilExit` on the main thread.
+    func listPanes() -> [PaneInfo] {
+        final class Box: @unchecked Sendable {
+            var panes: [PaneInfo] = []
+        }
+        let box = Box()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached { [self] in
+            box.panes = await self.listPanesAsync()
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 4.0)
+        return box.panes
+    }
+
     nonisolated func listAgents() async -> [HerdrAgentInfo] {
         if let viaSocket = await listAgentsViaSocket() {
             return viaSocket
         }
-        // runHerdr blocks on a child process; hop off the caller's executor
-        // so a MainActor caller never stalls the UI thread.
-        let output = await Task.detached { [self] in
-            self.runHerdr(["agent", "list"])
-        }.value
+        let output = await runHerdrAsync(["agent", "list"])
         guard !output.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
@@ -241,13 +248,15 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
                 return text
             }
         }
-        return runHerdr(
+        return await runHerdrAsync(
             ["pane", "read", paneId, "--source", "recent", "--lines", "\(lines)"],
             timeout: 2.0)
     }
 
     func sendLine(paneId: String, text: String) {
-        _ = runHerdr(["pane", "run", paneId, text], timeout: 1.0)
+        Task.detached { [self] in
+            _ = await runHerdrAsync(["pane", "run", paneId, text], timeout: 1.0)
+        }
     }
 
     func stop(paneId: String) {

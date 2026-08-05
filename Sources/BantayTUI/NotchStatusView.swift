@@ -401,30 +401,26 @@ struct NotchStatusView: View {
 
     /// Compute a `git diff --shortstat` summary for the agent's cwd off the
     /// main actor and cache it by agent id. Cheap (one Process); only fetches
-    /// once per cwd change so the row isn't recomputing every poll.
+    /// once per cwd change so the row isn't recomputing every poll. Runs
+    /// through the non-blocking `ProcessRunner` with a timeout so a git
+    /// process in a huge/mounted repo can never hang the row.
     private func fetchDiffStats(_ agent: AgentSnapshot) {
         guard let cwd = agent.cwd, diffStats[agent.id] == nil else { return }
+        let id = agent.id
         Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            process.arguments = ["-C", cwd, "diff", "--shortstat"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            try? process.run()
-            process.waitUntilExit()
-            guard let data = try? pipe.fileHandleForReading.readToEnd(),
-                let raw = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                !raw.isEmpty
-            else { return }
+            let result = await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/usr/bin/git"),
+                arguments: ["-C", cwd, "diff", "--shortstat"],
+                timeout: 5.0)
+            let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { return }
             let added = raw.firstMatch(of: /(\d+) insertion/)?.1
             let removed = raw.firstMatch(of: /(\d+) deletion/)?.1
             let summary =
                 "+\(added ?? "0") −\(removed ?? "0")"
             await MainActor.run {
-                if self.diffStats[agent.id] == nil {
-                    self.diffStats[agent.id] = summary
+                if self.diffStats[id] == nil {
+                    self.diffStats[id] = summary
                 }
             }
         }
@@ -1805,7 +1801,9 @@ struct NotchStatusView: View {
     private func submitPrompt() {
         let text = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let paneId = composingPaneId, !text.isEmpty {
-            adapter.agentPrompt(paneId: paneId, text: text)
+            Task.detached { [adapter] in
+                await adapter.agentPrompt(paneId: paneId, text: text)
+            }
         }
         cancelComposing()
     }

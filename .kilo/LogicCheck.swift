@@ -710,14 +710,17 @@ struct LogicCheckMain {
                 && IslandMetrics.expandedGroupRank(.waiting) == 0,
             "L6 needs-input ranks first")
         check(
-            IslandMetrics.expandedGroupRank(.progress) < IslandMetrics.expandedGroupRank(.completed),
+            IslandMetrics.expandedGroupRank(.progress)
+                < IslandMetrics.expandedGroupRank(.completed),
             "L6 working before done")
         check(
             IslandMetrics.expandedGroupRank(.failed) < IslandMetrics.expandedGroupRank(.idle),
             "L6 failed before idle")
         let hNoQueue = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
         let hQueue = IslandMetrics.expandedSize(topInset: 47, agentCount: 3, queueCount: 2)
-        check(hQueue.height > hNoQueue.height, "L6 queue adds height (got \(hQueue.height) vs \(hNoQueue.height))")
+        check(
+            hQueue.height > hNoQueue.height,
+            "L6 queue adds height (got \(hQueue.height) vs \(hNoQueue.height))")
         check(
             hQueue.height <= IslandMetrics.maxExpandedHeight,
             "L6 queue-aware height capped (got \(hQueue.height))")
@@ -800,7 +803,9 @@ struct LogicCheckMain {
         check(yesNo.optionLabels.isEmpty, "L7 yes-no has no option buttons")
         let singleChoice = IslandMetrics.ApprovalControls.make(
             variance: .choices, choices: ["Build", "Test", "Skip"])
-        check(!singleChoice.isYesNo && !singleChoice.isMulti, "L7 choices is neither yes-no nor multi")
+        check(
+            !singleChoice.isYesNo && !singleChoice.isMulti, "L7 choices is neither yes-no nor multi"
+        )
         check(
             singleChoice.optionLabels == ["1", "2", "3"],
             "L7 choices renders numbered options (got \(singleChoice.optionLabels))")
@@ -877,17 +882,21 @@ struct LogicCheckMain {
         let base = Date(timeIntervalSince1970: 1_000_000)
         check(
             IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(14)) == "14s",
-            "L8 elapsed under a minute in seconds (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(14))))")
+            "L8 elapsed under a minute in seconds (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(14))))"
+        )
         check(
             IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(125)) == "2m",
-            "L8 elapsed in minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(125))))")
+            "L8 elapsed in minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(125))))"
+        )
         check(
             IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(3600)) == "1h",
-            "L8 elapsed exactly one hour (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(3600))))")
+            "L8 elapsed exactly one hour (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(3600))))"
+        )
         check(
             IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(4500))
                 == "1h15m",
-            "L8 elapsed hours+minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(4500))))")
+            "L8 elapsed hours+minutes (got \(IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(4500))))"
+        )
         check(
             IslandMetrics.elapsedLabel(since: base, now: base.addingTimeInterval(-5)) == "0s",
             "L8 negative elapsed clamps to 0s")
@@ -914,10 +923,12 @@ struct LogicCheckMain {
                 capture: false)
             let working = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
-                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
+                startedAt: nil)
             let done = AgentSnapshot(
                 id: "p2", source: "codex", kind: .completed, title: nil, message: nil,
-                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
+                startedAt: nil)
             let start = Date(timeIntervalSince1970: 500_000)
             manager.pendingApprovals["1-1"] = (variance: nil, choices: nil)
             let merged = manager.mergeApprovals(into: [working, done])
@@ -1027,12 +1038,12 @@ struct LogicCheckMain {
         let old = projects.appendingPathComponent("old.jsonl")
         let new = projects.appendingPathComponent("new.jsonl")
         try? """
-            {"type":"assistant","message":{"content":"first step"}}
-            {"type":"assistant","message":{"content":"second step"}}
-            """.write(to: old, atomically: true, encoding: .utf8)
+        {"type":"assistant","message":{"content":"first step"}}
+        {"type":"assistant","message":{"content":"second step"}}
+        """.write(to: old, atomically: true, encoding: .utf8)
         try? """
-            {"type":"assistant","message":{"content":"latest activity line"}}
-            """.write(to: new, atomically: true, encoding: .utf8)
+        {"type":"assistant","message":{"content":"latest activity line"}}
+        """.write(to: new, atomically: true, encoding: .utf8)
         let activity = AgentDetector.latestActivity(root: projects.path)
         check(
             activity?.contains("latest activity") == true,
@@ -1048,7 +1059,9 @@ struct LogicCheckMain {
             ProcessSample(pid: 303, name: "zsh", command: "zsh", environmentLines: []),
         ]
         let detected = StandaloneAgentScanner.detect(samples: samples, home: transcriptDir.path)
-        check(detected.count == 1, "L9 scanner keeps standalone claude only (got \(detected.map(\.name)))")
+        check(
+            detected.count == 1,
+            "L9 scanner keeps standalone claude only (got \(detected.map(\.name)))")
         check(detected.first?.name == "claude", "L9 detected agent name")
         check(detected.first?.pid == 101, "L9 detected agent pid")
         check(
@@ -1104,7 +1117,9 @@ struct LogicCheckMain {
             check(false, "L10 claude usage parses")
             fatalError()
         }
-        check(claudeUsage.inputTokens == 1000, "L10 claude input tokens (got \(claudeUsage.inputTokens))")
+        check(
+            claudeUsage.inputTokens == 1000,
+            "L10 claude input tokens (got \(claudeUsage.inputTokens))")
         check(claudeUsage.outputTokens == 200, "L10 claude output tokens")
         check(claudeUsage.cacheReadTokens == 300, "L10 claude cache read")
         check(claudeUsage.cacheCreationTokens == 50, "L10 claude cache creation")
@@ -1128,7 +1143,8 @@ struct LogicCheckMain {
             "L10 parseAll sums cost (got \(summed.costUSD))")
         check(
             UsageTracker.aggregate([claudeUsage, flatUsage]).totalTokens == 2150,
-            "L10 aggregate totals (got \(UsageTracker.aggregate([claudeUsage, flatUsage]).totalTokens))")
+            "L10 aggregate totals (got \(UsageTracker.aggregate([claudeUsage, flatUsage]).totalTokens))"
+        )
         check(
             abs(UsageTracker.fractionUsed(costUSD: 5, budgetUSD: 10) - 0.5) < 0.001,
             "L10 fraction half budget")
@@ -1139,7 +1155,9 @@ struct LogicCheckMain {
             abs(UsageTracker.fractionUsed(costUSD: -3, budgetUSD: 10) - 0) < 0.001,
             "L10 fraction clamps at 0")
         check(UsageTracker.fractionUsed(costUSD: 2, budgetUSD: 0) == 0, "L10 zero budget safe")
-        check(UsageTracker.compactTokens(1234) == "1.2k", "L10 compact k (got \(UsageTracker.compactTokens(1234)))")
+        check(
+            UsageTracker.compactTokens(1234) == "1.2k",
+            "L10 compact k (got \(UsageTracker.compactTokens(1234)))")
         check(UsageTracker.compactTokens(3_500_000) == "3.5m", "L10 compact m")
         check(UsageTracker.compactTokens(42) == "42", "L10 compact small")
 
@@ -1166,7 +1184,8 @@ struct LogicCheckMain {
 
         // L11. Remote ingest (SSH bridge): HTTP parsing, payload
         // validation, file append, port clamping, config persistence.
-        let postBody = #"{"type":"access_request","title":"remote prompt","paneId":"r1","variance":"choices","choices":["a","b"]}"#
+        let postBody =
+            #"{"type":"access_request","title":"remote prompt","paneId":"r1","variance":"choices","choices":["a","b"]}"#
         let postData = Data(
             ("POST /events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
                 + "Content-Length: \(postBody.utf8.count)\r\n\r\n\(postBody)").utf8)
@@ -1186,7 +1205,8 @@ struct LogicCheckMain {
                 == nil,
             "L11 non-POST rejected")
         check(
-            IngestHTTP.request(from: Data("POST /events HTTP/1.1\r\nContent-Length: 10\r\n\r\nab".utf8))
+            IngestHTTP.request(
+                from: Data("POST /events HTTP/1.1\r\nContent-Length: 10\r\n\r\nab".utf8))
                 == nil,
             "L11 truncated body rejected")
         check(IngestHTTP.clampedPort(80) == 1024, "L11 port floors at 1024")
@@ -1234,19 +1254,25 @@ struct LogicCheckMain {
         check(emptyClip.isEmpty, "L13 whitespace clipboard ignored")
         let c1 = ClipboardHistory.merging(existing: [], newText: "hello", now: t0, limit: 5)
         check(c1.count == 1 && c1[0].text == "hello", "L13 first clip added")
-        let c2 = ClipboardHistory.merging(existing: c1, newText: "world", now: t0.addingTimeInterval(5), limit: 5)
+        let c2 = ClipboardHistory.merging(
+            existing: c1, newText: "world", now: t0.addingTimeInterval(5), limit: 5)
         check(c2.count == 2 && c2[0].text == "world", "L13 newest first")
-        let c3 = ClipboardHistory.merging(existing: c2, newText: "hello", now: t0.addingTimeInterval(10), limit: 5)
-        check(c3.count == 2 && c3[0].text == "hello", "L13 re-copy moves to front (got \(c3.map(\.text)))")
+        let c3 = ClipboardHistory.merging(
+            existing: c2, newText: "hello", now: t0.addingTimeInterval(10), limit: 5)
+        check(
+            c3.count == 2 && c3[0].text == "hello",
+            "L13 re-copy moves to front (got \(c3.map(\.text)))")
         var capped = [ClipboardItem]()
         for i in 0..<10 {
             capped = ClipboardHistory.merging(
-                existing: capped, newText: "item\(i)", now: t0.addingTimeInterval(Double(i)), limit: 3)
+                existing: capped, newText: "item\(i)", now: t0.addingTimeInterval(Double(i)),
+                limit: 3)
         }
         check(capped.count == 3, "L13 clipboard capped at limit (got \(capped.count))")
         check(capped[0].text == "item9", "L13 cap keeps newest (got \(capped.map(\.text)))")
         let f0 = ShelfFile(url: URL(fileURLWithPath: "/tmp/a.txt"), createdAt: t0)
-        let f1 = ShelfFile(url: URL(fileURLWithPath: "/tmp/b.txt"), createdAt: t0.addingTimeInterval(1))
+        let f1 = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/b.txt"), createdAt: t0.addingTimeInterval(1))
         let shelf1 = ShelfFiles.adding([f0, f1], to: [], limit: 5)
         check(shelf1.count == 2 && shelf1[0].url == f1.url, "L13 files newest first")
         let shelfDup = ShelfFiles.adding([f0], to: shelf1, limit: 5)
@@ -1256,7 +1282,11 @@ struct LogicCheckMain {
         var filesCapped = [ShelfFile]()
         for i in 0..<8 {
             filesCapped = ShelfFiles.adding(
-                [ShelfFile(url: URL(fileURLWithPath: "/tmp/f\(i)"), createdAt: t0.addingTimeInterval(Double(i)))],
+                [
+                    ShelfFile(
+                        url: URL(fileURLWithPath: "/tmp/f\(i)"),
+                        createdAt: t0.addingTimeInterval(Double(i)))
+                ],
                 to: filesCapped, limit: 4)
         }
         check(filesCapped.count == 4, "L13 files capped (got \(filesCapped.count))")
@@ -1700,12 +1730,18 @@ struct LogicCheckMain {
         let tenChoices = IslandMetrics.ApprovalControls.make(
             variance: .multi, choices: Array(repeating: "x", count: 10))
         check(
-            tenChoices.displayedLabels().count == IslandMetrics.ApprovalControls.maxDisplayedOptions,
-            "L22 ten choices collapse to \(IslandMetrics.ApprovalControls.maxDisplayedOptions) buttons")
-        check(tenChoices.overflowCount() == 4, "L22 overflow shows +4 (got \(tenChoices.overflowCount()))")
+            tenChoices.displayedLabels().count
+                == IslandMetrics.ApprovalControls.maxDisplayedOptions,
+            "L22 ten choices collapse to \(IslandMetrics.ApprovalControls.maxDisplayedOptions) buttons"
+        )
+        check(
+            tenChoices.overflowCount() == 4,
+            "L22 overflow shows +4 (got \(tenChoices.overflowCount()))")
         let three = IslandMetrics.ApprovalControls.make(
             variance: .choices, choices: ["a", "b", "c"])
-        check(three.displayedLabels().count == 3 && three.overflowCount() == 0, "L22 under-cap shows all")
+        check(
+            three.displayedLabels().count == 3 && three.overflowCount() == 0,
+            "L22 under-cap shows all")
         let exact = IslandMetrics.ApprovalControls.make(
             variance: .choices, choices: Array(repeating: "x", count: 6))
         check(exact.overflowCount() == 0, "L22 exactly-cap has no overflow")
@@ -1713,7 +1749,8 @@ struct LogicCheckMain {
             IslandMetrics.ApprovalControls.maxDisplayedOptions >= 4
                 && IslandMetrics.ApprovalControls.maxDisplayedOptions <= 8,
             "L22 cap stays in sane range")
-        let small = IslandMetrics.ApprovalControls.make(variance: .multi, choices: Array(repeating: "x", count: 10))
+        let small = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: Array(repeating: "x", count: 10))
         check(
             small.displayedLabels(cap: 2).count == 2 && small.overflowCount(cap: 2) == 8,
             "L22 custom cap respected")
@@ -1804,10 +1841,12 @@ struct LogicCheckMain {
                 capture: false)
             let kilo = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
-                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
+                startedAt: nil)
             let codex = AgentSnapshot(
                 id: "p2", source: "codex", kind: .progress, title: nil, message: nil,
-                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil, startedAt: nil)
+                paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
+                startedAt: nil)
             let visible = manager.mergeApprovals(into: [kilo, codex])
             check(
                 visible.map(\.source) == ["kilo"],
@@ -1823,7 +1862,7 @@ struct LogicCheckMain {
         // HERDR_INSTALL_DIR, PATH, ~/.local/bin (official installer), both
         // Homebrew prefixes, and ~/.herdr/bin, deduped in priority order.
         let envNoHerdr = [
-            "PATH": "/usr/bin:/bin",
+            "PATH": "/usr/bin:/bin"
         ]
         let pathsNoOverride = HerdrSocketAdapter.candidateHerdrPaths(
             env: envNoHerdr, home: "/Users/someone")
@@ -1891,7 +1930,7 @@ struct LogicCheckMain {
                                     "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
                             ]
                         ],
-                    ],
+                    ]
                 ],
                 "PostToolUse": [
                     [
@@ -1899,7 +1938,7 @@ struct LogicCheckMain {
                         "hooks": [
                             ["type": "command", "command": "some-other-tool"]
                         ],
-                    ],
+                    ]
                 ],
             ],
         ]
@@ -1929,9 +1968,9 @@ struct LogicCheckMain {
                                     "curl -s -X POST --data-binary @- http://127.0.0.1:41817/events",
                             ]
                         ],
-                    ],
-                ],
-            ],
+                    ]
+                ]
+            ]
         ]
         let emptyHooks = ClaudeHookInstaller.removingBantayHooks(from: allBantay)
         check(
@@ -1951,13 +1990,15 @@ struct LogicCheckMain {
         ]
         let withForeign = ClaudeHookInstaller.mergedSettings(
             existing: ["hooks": ["PermissionPrompt": [foreignPermission]]], port: 41817)
-        let mergedPermission = (withForeign["hooks"] as? [String: Any])?["PermissionPrompt"]
+        let mergedPermission =
+            (withForeign["hooks"] as? [String: Any])?["PermissionPrompt"]
             as? [[String: Any]]
         check(
             mergedPermission?.count == 2,
             "L28b foreign + bantay entries coexist after merge")
         let remerged = ClaudeHookInstaller.mergedSettings(existing: withForeign, port: 41817)
-        let rePermission = (remerged["hooks"] as? [String: Any])?["PermissionPrompt"]
+        let rePermission =
+            (remerged["hooks"] as? [String: Any])?["PermissionPrompt"]
             as? [[String: Any]]
         check(
             rePermission?.count == 2,
@@ -1972,7 +2013,8 @@ struct LogicCheckMain {
         ]
         let strippedShared = ClaudeHookInstaller.removingBantayHooks(
             from: ["hooks": ["Stop": [sharedEntry]]])
-        let stopShared = (strippedShared["hooks"] as? [String: Any])?["Stop"]
+        let stopShared =
+            (strippedShared["hooks"] as? [String: Any])?["Stop"]
             as? [[String: Any]]
         check(
             stopShared?.count == 1,
@@ -2249,7 +2291,8 @@ struct LogicCheckMain {
             current: nil)
         check(
             second33.events.first?.source == "freebuff",
-            "L33 fallback promotes most severe (got \(String(describing: second33.events.first?.source)))")
+            "L33 fallback promotes most severe (got \(String(describing: second33.events.first?.source)))"
+        )
         check(
             second33.events.first?.playSound == false,
             "L33 fallback reshow is silent")
@@ -2326,10 +2369,12 @@ struct LogicCheckMain {
                 !content.contains(adapterPath + "\"\"]"),
                 "L35 manifest has no doubled quote")
             check(
-                !content.contains("scripts/setup.sh") && !content.contains("scripts/event-adapter.mjs"),
+                !content.contains("scripts/setup.sh")
+                    && !content.contains("scripts/event-adapter.mjs"),
                 "L35 manifest has no repo-relative script references")
 
-            if let repo = FileManager.default.contents(atPath: FileManager.default.currentDirectoryPath + "/scripts/event-adapter.mjs"),
+            if let repo = FileManager.default.contents(
+                atPath: FileManager.default.currentDirectoryPath + "/scripts/event-adapter.mjs"),
                 let repoText = String(data: repo, encoding: .utf8)
             {
                 check(
@@ -2451,7 +2496,9 @@ struct LogicCheckMain {
                 let orig = cfg.attentionFilterEnabled
                 check(cfg.attentionFilterEnabled == false, "L37 attention tab default off")
                 cfg.attentionFilterEnabled = true
-                check(defaults.bool(forKey: "attentionFilterEnabled"), "L37 attention toggle persisted")
+                check(
+                    defaults.bool(forKey: "attentionFilterEnabled"),
+                    "L37 attention toggle persisted")
                 cfg.attentionFilterEnabled = orig
                 defaults.removeObject(forKey: "attentionFilterEnabled")
             }
@@ -2469,7 +2516,8 @@ struct LogicCheckMain {
             for index in 0..<7 {
                 manager.publishEventForTesting(
                     AgentEvent(
-                        source: "agent-\(index)", kind: index.isMultiple(of: 2) ? .completed : .failed,
+                        source: "agent-\(index)",
+                        kind: index.isMultiple(of: 2) ? .completed : .failed,
                         title: "result \(index)", message: nil, paneId: "p\(index)",
                         workspaceId: nil, variance: nil, choices: nil,
                         playSound: false, persistent: false))
@@ -2526,6 +2574,70 @@ struct LogicCheckMain {
         check(
             IslandMetrics.hoverExitGrace >= 0.25,
             "L40 hover grace is at least 250ms")
+
+        // L42. F11 pin persistence: user-driven collapse (hover exit, hotkey
+        // toggle, display re-anchor) keeps the pin; zero agents and explicit
+        // unpin clear it; persistence can be opted out wholesale; the pin
+        // never resurrects an empty expanded panel; config facet defaults off
+        // and round-trips through UserDefaults.
+        do {
+            let persist = true
+            check(
+                IslandMetrics.pinAfterCollapse(
+                    reason: .hoverExit, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin persists on hover exit")
+            check(
+                IslandMetrics.pinAfterCollapse(
+                    reason: .hotkeyToggle, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin persists on hotkey toggle")
+            check(
+                IslandMetrics.pinAfterCollapse(
+                    reason: .displayReanchor, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin persists on display re-anchor")
+            check(
+                !IslandMetrics.pinAfterCollapse(
+                    reason: .agentsEmpty, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin clears on zero agents")
+            check(
+                !IslandMetrics.pinAfterCollapse(
+                    reason: .explicitUnpin, wasPinned: true, persistAcrossCollapse: persist),
+                "L42 pin clears on explicit unpin")
+            check(
+                !IslandMetrics.pinAfterCollapse(
+                    reason: .agentsEmpty, wasPinned: false, persistAcrossCollapse: persist),
+                "L42 already-unpinned stays unpinned on agents empty")
+            for reason: IslandMetrics.PinCollapseReason in [
+                .hoverExit, .hotkeyToggle, .displayReanchor, .agentsEmpty, .explicitUnpin,
+            ] {
+                check(
+                    !IslandMetrics.pinAfterCollapse(
+                        reason: reason, wasPinned: true, persistAcrossCollapse: false),
+                    "L42 persistence-off clears pin on \(reason)")
+            }
+            check(
+                IslandMetrics.pinShouldExpand(hasAgents: true),
+                "L42 pin expands when agents exist")
+            check(
+                !IslandMetrics.pinShouldExpand(hasAgents: false),
+                "L42 pin never resurrects an empty panel")
+        }
+
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.panelPinned
+            defaults.removeObject(forKey: "panelPinned")
+            cfg.panelPinned = false
+            check(cfg.panelPinned == false, "L42 panelPinned default off")
+            cfg.panelPinned = true
+            check(defaults.bool(forKey: "panelPinned"), "L42 panelPinned persisted")
+            cfg.panelPinned = false
+            check(
+                defaults.bool(forKey: "panelPinned") == false,
+                "L42 panelPinned unpin persisted")
+            cfg.panelPinned = orig
+            defaults.removeObject(forKey: "panelPinned")
+        }
 
         // L44. Plan 016 §1d — non-destructive Claude hook merging. The five
         // adversarial gaps: false-positive matcher, corrupt/foreign `hooks`
@@ -2731,69 +2843,30 @@ struct LogicCheckMain {
             )
         }
 
-        // L42. F11 pin persistence: user-driven collapse (hover exit, hotkey
-        // toggle, display re-anchor) keeps the pin; zero agents and explicit
-        // unpin clear it; persistence can be opted out wholesale; the pin
-        // never resurrects an empty expanded panel; config facet defaults off
-        // and round-trips through UserDefaults.
-        do {
-            let persist = true
-            check(
-                IslandMetrics.pinAfterCollapse(
-                    reason: .hoverExit, wasPinned: true, persistAcrossCollapse: persist),
-                "L42 pin persists on hover exit")
-            check(
-                IslandMetrics.pinAfterCollapse(
-                    reason: .hotkeyToggle, wasPinned: true, persistAcrossCollapse: persist),
-                "L42 pin persists on hotkey toggle")
-            check(
-                IslandMetrics.pinAfterCollapse(
-                    reason: .displayReanchor, wasPinned: true, persistAcrossCollapse: persist),
-                "L42 pin persists on display re-anchor")
-            check(
-                !IslandMetrics.pinAfterCollapse(
-                    reason: .agentsEmpty, wasPinned: true, persistAcrossCollapse: persist),
-                "L42 pin clears on zero agents")
-            check(
-                !IslandMetrics.pinAfterCollapse(
-                    reason: .explicitUnpin, wasPinned: true, persistAcrossCollapse: persist),
-                "L42 pin clears on explicit unpin")
-            check(
-                !IslandMetrics.pinAfterCollapse(
-                    reason: .agentsEmpty, wasPinned: false, persistAcrossCollapse: persist),
-                "L42 already-unpinned stays unpinned on agents empty")
-            for reason: IslandMetrics.PinCollapseReason in [
-                .hoverExit, .hotkeyToggle, .displayReanchor, .agentsEmpty, .explicitUnpin,
-            ] {
-                check(
-                    !IslandMetrics.pinAfterCollapse(
-                        reason: reason, wasPinned: true, persistAcrossCollapse: false),
-                    "L42 persistence-off clears pin on \(reason)")
-            }
-            check(
-                IslandMetrics.pinShouldExpand(hasAgents: true),
-                "L42 pin expands when agents exist")
-            check(
-                !IslandMetrics.pinShouldExpand(hasAgents: false),
-                "L42 pin never resurrects an empty panel")
-        }
-
-        MainActor.assumeIsolated {
-            let defaults = UserDefaults.standard
-            let cfg = NotchHUDConfig.shared
-            let orig = cfg.panelPinned
-            defaults.removeObject(forKey: "panelPinned")
-            cfg.panelPinned = false
-            check(cfg.panelPinned == false, "L42 panelPinned default off")
-            cfg.panelPinned = true
-            check(defaults.bool(forKey: "panelPinned"), "L42 panelPinned persisted")
-            cfg.panelPinned = false
-            check(
-                defaults.bool(forKey: "panelPinned") == false,
-                "L42 panelPinned unpin persisted")
-            cfg.panelPinned = orig
-            defaults.removeObject(forKey: "panelPinned")
-        }
+        // L43. ProcessRunner timeout clamp (plan 016 1c): negative and zero
+        // request the 0.5s floor, enormous values cap at 120s, and the pane
+        // list variants stay exact after the async migration.
+        check(
+            ProcessRunner.clampedTimeout(-5) == 0.5,
+            "L43 negative timeout clamps to floor")
+        check(
+            ProcessRunner.clampedTimeout(0) == 0.5,
+            "L43 zero timeout clamps to floor")
+        check(
+            ProcessRunner.clampedTimeout(0.75) == 0.75,
+            "L43 in-range timeout unchanged")
+        check(
+            ProcessRunner.clampedTimeout(3600) == 120,
+            "L43 huge timeout clamps to cap")
+        check(
+            ProcessRunner.clampedTimeout(-Double.infinity) == 0.5,
+            "L43 -inf timeout clamps to floor")
+        let variantsAfterMigration = HerdrSocketAdapter.paneListCommandVariants()
+        check(
+            variantsAfterMigration
+                == [["pane", "list", "--format", "json"], ["pane", "list"]],
+            "L43 pane list variants unchanged after async migration (got \(variantsAfterMigration))"
+        )
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
