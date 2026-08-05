@@ -895,6 +895,26 @@ public enum IslandMetrics: Sendable {
         return alignedToBackingPixelGrid(
             CGRect(x: x, y: y, width: width, height: height), scale: scale)
     }
+
+    // MARK: - Keyboard row navigation (plan 016 4b)
+
+    /// Next focusable row index after `current`, or nil when `current` is the
+    /// last row (or the roster has fewer than two rows). Never wraps. The UI
+    /// seeds `current` with -1 when nothing is focused yet so the first
+    /// arrow-down focuses row 0.
+    public static func rowIndex(after current: Int, count: Int) -> Int? {
+        let next = current + 1
+        return next >= 0 && next < count ? next : nil
+    }
+
+    /// Previous focusable row index before `current`, or nil when `current`
+    /// is the first row (or the roster has fewer than two rows). Never wraps.
+    /// The UI seeds `current` with `count` when nothing is focused yet so the
+    /// first arrow-up focuses the last row.
+    public static func rowIndex(before current: Int, count: Int) -> Int? {
+        let prev = current - 1
+        return prev >= 0 && prev < count ? prev : nil
+    }
 }
 
 /// Pure cleaner for raw `pane read` output feeding the peek overlay and the
