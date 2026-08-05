@@ -101,8 +101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let infos = NSScreen.screens.map { screen in
             IslandMetrics.ScreenInfo(
                 frame: screen.frame,
-                hasNotch: screen.auxiliaryTopLeftArea != nil
-                    || screen.auxiliaryTopRightArea != nil,
+                hasNotch: IslandMetrics.hasNotch(
+                    safeTop: screen.safeAreaInsets.top,
+                    auxLeft: screen.auxiliaryTopLeftArea?.width ?? 0,
+                    auxRight: screen.auxiliaryTopRightArea?.width ?? 0),
                 containsMouse: screen.frame.contains(NSEvent.mouseLocation))
         }
         guard
@@ -194,9 +196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let target else {
             return NSRect(origin: .zero, size: size)
         }
-        let hasNotch =
-            target.auxiliaryTopLeftArea != nil
-            || target.auxiliaryTopRightArea != nil
+        let hasNotch = IslandMetrics.hasNotch(
+            safeTop: target.safeAreaInsets.top,
+            auxLeft: target.auxiliaryTopLeftArea?.width ?? 0,
+            auxRight: target.auxiliaryTopRightArea?.width ?? 0)
         if !hasNotch, NotchHUDConfig.shared.floatingPillOnNoNotch {
             let menuBar = target.frame.maxY - target.visibleFrame.maxY
             return IslandMetrics.floatingPillFrame(

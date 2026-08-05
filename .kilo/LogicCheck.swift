@@ -2997,6 +2997,7 @@ struct LogicCheckMain {
         }
 
 
+
         // L41. Plan 016 §1a — directory-keyed diff-stat cache. The key is
         // (id, cwd): standalone agents share paneId == nil so id alone
         // collides, and a summary is only valid for the cwd it was computed
@@ -3066,6 +3067,129 @@ struct LogicCheckMain {
         let racedPruned = IslandMetrics.DiffStatCache.prune(race2, liveKeys: [repo2Key])
         check(racedPruned[repo2Key] == "+9 −9", "L41 race prune keeps live cwd2 key")
         check(racedPruned[repo1Key] == nil, "L41 race prune drops stale cwd1 key")
+
+
+        // L48. Plan 016 §4a — multi-display: notch-less detection & centered
+        // pill. The certified hasNotch heuristic: a display is NOTCHED only
+        // when safeTop > 0 AND at least one auxiliary menu-bar area is
+        // reported. Rows documented per case:
+        //   safeTop 0  + aux (any)      -> false  (notch-less display; aux
+        //                                       nil-ness alone is unreliable,
+        //                                       macOS 13 vs 14 reporting)
+        //   safeTop 24 + aux both 0     -> false  (safeTop alone isn't the
+        //                                       notch; no aux -> fallback)
+        //   safeTop 24 + any aux > 0    -> true   (certified notched, short
+        //                                       menu bar)
+        //   safeTop 37 + aux both 0     -> false
+        //   safeTop 37 + any aux > 0    -> true   (certified notched)
+        check(
+            !IslandMetrics.hasNotch(safeTop: 0, auxLeft: 0, auxRight: 0),
+            "L48 hasNotch(0,0,0) -> false")
+        check(
+            !IslandMetrics.hasNotch(safeTop: 0, auxLeft: 200, auxRight: 300),
+            "L48 hasNotch(0,200,300) -> false (safeTop 0 is notch-less even with aux)")
+        check(
+            !IslandMetrics.hasNotch(safeTop: 0, auxLeft: 0, auxRight: 300),
+            "L48 hasNotch(0,0,300) -> false (any aux, safeTop 0)")
+        check(
+            !IslandMetrics.hasNotch(safeTop: 24, auxLeft: 0, auxRight: 0),
+            "L48 hasNotch(24,0,0) -> false (no aux areas reported)")
+        check(
+            IslandMetrics.hasNotch(safeTop: 24, auxLeft: 200, auxRight: 300),
+            "L48 hasNotch(24,200,300) -> true (certified notched)")
+        check(
+            IslandMetrics.hasNotch(safeTop: 24, auxLeft: 0, auxRight: 300),
+            "L48 hasNotch(24,0,300) -> true (any aux > 0)")
+        check(
+            !IslandMetrics.hasNotch(safeTop: 37, auxLeft: 0, auxRight: 0),
+            "L48 hasNotch(37,0,0) -> false (both aux 0)")
+        check(
+            IslandMetrics.hasNotch(safeTop: 37, auxLeft: 200, auxRight: 300),
+            "L48 hasNotch(37,200,300) -> true (full notch)")
+        check(
+            IslandMetrics.hasNotch(safeTop: 37, auxLeft: 0, auxRight: 300),
+            "L48 hasNotch(37,0,300) -> true (any aux > 0)")
+
+        // Centered floating pill below the menu bar, clamped inside bounds at
+        // 400×300 and at 5K.
+        let smallScreen = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let pillSize = CGSize(width: 211, height: 36)
+        let smallPill = IslandMetrics.floatingPillFrame(
+            screenFrame: smallScreen, size: pillSize, menuBarHeight: 24)
+        check(
+            abs(smallPill.midX - smallScreen.midX) < 0.01,
+            "L48 pill centered (midX == screen.midX) at 400x300 (got \(smallPill.midX))")
+        check(
+            smallPill.maxY <= smallScreen.maxY - 24 + 0.01,
+            "L48 pill sits below menu bar (maxY \(smallPill.maxY) <= \(smallScreen.maxY - 24))")
+        check(
+            smallPill.minX >= 0 && smallPill.minY >= 0
+                && smallPill.maxX <= smallScreen.maxX && smallPill.maxY <= smallScreen.maxY,
+            "L48 pill inside 400x300 bounds (frame \(smallPill))")
+        let bigScreen = CGRect(x: 0, y: 0, width: 5120, height: 2880)
+        let bigPill = IslandMetrics.floatingPillFrame(
+            screenFrame: bigScreen, size: pillSize, menuBarHeight: 24)
+        check(
+            abs(bigPill.midX - bigScreen.midX) < 0.01,
+            "L48 pill centered at 5K (got \(bigPill.midX))")
+        check(
+            bigPill.minX >= 0 && bigPill.minY >= 0
+                && bigPill.maxX <= bigScreen.maxX && bigPill.maxY <= bigScreen.maxY,
+            "L48 pill inside 5K bounds (frame \(bigPill))")
+
+        // topInset on a notch-less display falls back to the menu bar.
+        check(
+            IslandMetrics.topInset(safeTop: 0, menuBarHeight: 24) == 24,
+            "L48 topInset(0,24) == 24")
+        check(
+            IslandMetrics.topInset(safeTop: 37, menuBarHeight: 24) == 37,
+            "L48 topInset(37,24) == 37 (notched keeps safeTop)")
+
+        // notchWidth falls back to notchlessFallbackWidth whenever any
+        // decisive input is 0 (safeTop 0, or an aux side missing) and computes
+        // a real width only for a certified notch with both aux areas.
+        check(
+            IslandMetrics.notchWidth(screenWidth: 1512, auxLeft: 0, auxRight: 0, safeTop: 0)
+                == IslandMetrics.notchlessFallbackWidth,
+            "L48 notchWidth fallback when safeTop 0")
+        check(
+            IslandMetrics.notchWidth(screenWidth: 1512, auxLeft: 0, auxRight: 300, safeTop: 37)
+                == IslandMetrics.notchlessFallbackWidth,
+            "L48 notchWidth fallback when auxLeft 0")
+        check(
+            IslandMetrics.notchWidth(screenWidth: 1512, auxLeft: 200, auxRight: 0, safeTop: 37)
+                == IslandMetrics.notchlessFallbackWidth,
+            "L48 notchWidth fallback when auxRight 0")
+        check(
+            IslandMetrics.notchWidth(screenWidth: 1512, auxLeft: 0, auxRight: 0, safeTop: 24)
+                == IslandMetrics.notchlessFallbackWidth,
+            "L48 notchWidth fallback when both aux 0")
+        let notchedWidth = IslandMetrics.notchWidth(
+            screenWidth: 1512, auxLeft: 200, auxRight: 300, safeTop: 24)
+        check(
+            abs(notchedWidth - 1014) < 0.01,
+            "L48 notchWidth computed for certified notch (got \(notchedWidth))")
+
+        // L17 ghost re-anchor stays green with the new notch-less pill
+        // geometry: an on-screen pill is not a ghost; a pill parked at a
+        // since-disconnected position is.
+        check(
+            IslandMetrics.DisplayAnchor.frameIsOnScreens(
+                frame: smallPill, screens: [smallScreen, bigScreen]),
+            "L48 pill frame lands on its own screen")
+        check(
+            !IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: true, windowFrame: smallPill, screens: [smallScreen, bigScreen]),
+            "L48 on-screen pill needs no re-anchor")
+        let ghostPill = CGRect(x: 6000, y: 3000, width: 211, height: 36)
+        check(
+            IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: true, windowFrame: ghostPill, screens: [smallScreen, bigScreen]),
+            "L48 ghost pill off every screen needs re-anchor")
+        check(
+            !IslandMetrics.DisplayAnchor.needsReanchor(
+                isVisible: false, windowFrame: ghostPill, screens: [smallScreen, bigScreen]),
+            "L48 hidden ghost pill needs no re-anchor")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
