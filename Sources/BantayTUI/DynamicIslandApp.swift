@@ -42,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotkeyMonitor: Any?
     private var badgeTimer: Timer?
     private var ingestServer: EventIngestServer?
+    /// The "Remove Bantay-TUI…" menu item; disabled while the uninstall
+    /// script runs so the action can't double-fire.
+    @MainActor private var uninstallMenuItem: NSMenuItem?
 
     /// Diagnostic trace written to stderr (landld captures it in bantay.err).
     static func dbg(_ message: String) {
@@ -581,6 +584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: "")
         uninstallItem.target = self
         uninstallItem.isEnabled = Self.uninstallScriptPath() != nil
+        uninstallMenuItem = uninstallItem
         menu.addItem(uninstallItem)
 
         menu.addItem(.separator())
@@ -747,18 +751,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             + "Your herdr sessions are untouched."
         alert.addButton(withTitle: "Uninstall")
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [script, "--uninstall"]
-            do {
-                try process.run()
-                process.waitUntilExit()
-                if process.terminationStatus == 0 {
-                    NSApp.terminate(nil)
-                }
-            } catch {
-                // Nothing was removed; leave the app running.
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // Run the script through the non-blocking runner so the menu action
+        // returns immediately; the menu item stays disabled until the script
+        // finishes (or fails). A long timeout keeps the script from being
+        // killed mid-write by the 3s default.
+        uninstallMenuItem?.isEnabled = false
+        Task { @MainActor in
+            let result = await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/bash"),
+                arguments: [script, "--uninstall"],
+                timeout: 120)
+            self.uninstallMenuItem?.isEnabled = Self.uninstallScriptPath() != nil
+            if result.status == 0 {
+                NSApp.terminate(nil)
             }
         }
     }

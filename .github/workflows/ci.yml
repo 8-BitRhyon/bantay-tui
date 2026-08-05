@@ -69,6 +69,7 @@ jobs:
             Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
             Sources/BantayTUI/TerminalFocusser.swift \
             Sources/BantayTUI/LaunchAgent.swift \
+            Sources/BantayTUI/ProcessRunner.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check
 
@@ -154,6 +155,7 @@ jobs:
             Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
             Sources/BantayTUI/TerminalFocusser.swift \
             Sources/BantayTUI/LaunchAgent.swift \
+            Sources/BantayTUI/ProcessRunner.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check
 
