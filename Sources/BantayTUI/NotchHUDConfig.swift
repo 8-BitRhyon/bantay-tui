@@ -128,6 +128,13 @@ final class NotchHUDConfig {
             defaults.set(usageBudgetUSD, forKey: "usageBudgetUSD")
         }
     }
+    /// Token rate indicator: amber when tokens/min ≥ this, red at ≥ 2×.
+    var usageRateWarnTokensPerMin: Int = 5000 {
+        didSet {
+            usageRateWarnTokensPerMin = min(max(usageRateWarnTokensPerMin, 100), 1_000_000)
+            defaults.set(usageRateWarnTokensPerMin, forKey: "usageRateWarnTokensPerMin")
+        }
+    }
     var ingestEnabled = false {
         didSet { defaults.set(ingestEnabled, forKey: "ingestEnabled") }
     }
@@ -288,6 +295,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "usageBudgetUSD") as? NSNumber {
             usageBudgetUSD = min(max(v.doubleValue, 1), 100)
+        }
+        if let v = defaults.object(forKey: "usageRateWarnTokensPerMin") as? NSNumber {
+            usageRateWarnTokensPerMin = min(max(v.intValue, 100), 1_000_000)
         }
         if let v = defaults.object(forKey: "ingestEnabled") as? Bool {
             ingestEnabled = v

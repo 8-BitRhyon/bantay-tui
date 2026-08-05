@@ -2909,6 +2909,92 @@ struct LogicCheckMain {
             "L43 pane list variants unchanged after async migration (got \(variantsAfterMigration))"
         )
 
+        // L46. Plan 016 §3b — token rate-limit indicators. rate() is pure over
+        // transcript JSONL timestamps; rateLevel maps tokens/min to a color.
+        func usageLine(_ timestamp: String, input: Int, output: Int = 0) -> String {
+            """
+            {"type":"assistant","message":{"usage":{"input_tokens":\(input),"output_tokens":\(output),"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"timestamp":"\(timestamp)"}
+            """
+        }
+        let now = UsageParser.parseTimestamp(usageLine("2026-08-04T12:01:00Z", input: 0))!
+        let threeLines = [
+            usageLine("2026-08-04T12:00:00Z", input: 100),
+            usageLine("2026-08-04T12:00:30Z", input: 100),
+            usageLine("2026-08-04T12:01:00Z", input: 100),
+        ]
+        let zeroWindow = UsageTracker.rate(lines: threeLines, now: now, window: 0)
+        check(zeroWindow.tokensPerMinute == nil, "L46 rate with 0s window is nil")
+        let negativeWindow = UsageTracker.rate(lines: threeLines, now: now, window: -10)
+        check(negativeWindow.tokensPerMinute == nil, "L46 rate with negative window is nil")
+        let sixty = UsageTracker.rate(lines: threeLines, now: now, window: 60)
+        check(
+            sixty.tokensPerMinute.map { abs($0 - 300) < 0.001 } ?? false,
+            "L46 rate over 60s window is 300/min (got \(sixty.tokensPerMinute.map(String.init(describing:)) ?? "nil"))"
+        )
+        check(sixty.lastSeen != nil, "L46 rate carries lastSeen")
+        let sameTimestamp = UsageTracker.rate(
+            lines: [
+                usageLine("2026-08-04T12:00:00Z", input: 100),
+                usageLine("2026-08-04T12:00:00Z", input: 100),
+            ],
+            now: now, window: 60)
+        check(
+            sameTimestamp.tokensPerMinute == nil,
+            "L46 same-timestamp lines yield nil (no div by zero)")
+        let missingTimestamps = UsageTracker.rate(
+            lines: [
+                #"{"type":"assistant","message":{"usage":{"input_tokens":10}}}"#,
+                #"{"type":"assistant","message":{"usage":{"input_tokens":20}}}"#,
+            ],
+            now: now, window: 60)
+        check(
+            missingTimestamps.tokensPerMinute == nil && missingTimestamps.lastSeen == nil,
+            "L46 missing timestamps yield nil")
+        let outsideWindow = UsageTracker.rate(
+            lines: [
+                usageLine("2026-08-04T11:00:00Z", input: 1000),
+                usageLine("2026-08-04T12:00:40Z", input: 50),
+            ],
+            now: now, window: 60)
+        check(outsideWindow.tokensPerMinute == nil, "L46 stale line outside window excluded")
+        check(
+            UsageTracker.rateLevel(rate: 100, warn: 100) == .warn,
+            "L46 rateLevel at exactly warn is warn")
+        check(
+            UsageTracker.rateLevel(rate: 200, warn: 100) == .red,
+            "L46 rateLevel at exactly 2× warn is red")
+        check(
+            UsageTracker.rateLevel(rate: 250, warn: 100) == .red,
+            "L46 rateLevel above 2× warn is red")
+        check(
+            UsageTracker.rateLevel(rate: 150, warn: 100) == .warn,
+            "L46 rateLevel between warn and 2× is warn")
+        check(
+            UsageTracker.rateLevel(rate: 99.9, warn: 100) == .normal,
+            "L46 rateLevel below warn is normal")
+        MainActor.assumeIsolated {
+            let defaults = UserDefaults.standard
+            let cfg = NotchHUDConfig.shared
+            let orig = cfg.usageRateWarnTokensPerMin
+            check(
+                cfg.usageRateWarnTokensPerMin == 5000,
+                "L46 warn threshold default 5000 (got \(cfg.usageRateWarnTokensPerMin))")
+            cfg.usageRateWarnTokensPerMin = 50
+            check(
+                cfg.usageRateWarnTokensPerMin == 100,
+                "L46 warn threshold clamps at 100 (got \(cfg.usageRateWarnTokensPerMin))")
+            cfg.usageRateWarnTokensPerMin = 2_000_000
+            check(
+                cfg.usageRateWarnTokensPerMin == 1_000_000,
+                "L46 warn threshold clamps at 1_000_000 (got \(cfg.usageRateWarnTokensPerMin))")
+            cfg.usageRateWarnTokensPerMin = 7500
+            check(
+                defaults.integer(forKey: "usageRateWarnTokensPerMin") == 7500,
+                "L46 warn threshold persisted")
+            cfg.usageRateWarnTokensPerMin = orig
+            defaults.removeObject(forKey: "usageRateWarnTokensPerMin")
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
