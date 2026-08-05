@@ -732,4 +732,56 @@ public enum IslandMetrics: Sendable {
     public static func requiresApproval(_ kind: String) -> Bool {
         kind == "accessRequest" || kind == "access_request"
     }
+
+    // MARK: - Diff-stat cache (plan 016 1a)
+
+    /// Cache key for a per-agent `git diff --shortstat` summary. `id` alone
+    /// is not unique (standalone agents share `paneId == nil`), and a summary
+    /// is only valid for the cwd it was computed in — both go in the key so
+    /// late-arriving old-cwd results can never clobber a fresh new-cwd value.
+    public struct DiffStatCacheKey: Hashable, Sendable {
+        public let id: String
+        public let cwd: String
+
+        public init(id: String, cwd: String) {
+            self.id = id
+            self.cwd = cwd
+        }
+    }
+
+    /// Pure diff-stat cache behavior: parse `git diff --shortstat` output and
+    /// prune dead (id, cwd) keys so one agent churning many cwds can't grow
+    /// the cache without bound.
+    public enum DiffStatCache {
+        /// First capture group of `pattern` matched against `raw`, or nil.
+        /// NSRegularExpression (not a bare-slash regex literal) so the pure
+        /// harness `swiftc` line compiles it.
+        private static func capture(_ pattern: String, in raw: String) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+            let nsRange = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+            guard let match = regex.firstMatch(in: raw, range: nsRange),
+                let range = Range(match.range(at: 1), in: raw)
+            else { return nil }
+            return String(raw[range])
+        }
+
+        /// Parse `git diff --shortstat` output (e.g. " 1 file changed, 2
+        /// insertions(+), 3 deletions(-)") into "+N −M". Insertion-only and
+        /// deletion-only output work; empty or garbage input returns nil.
+        public static func parseShortstat(_ raw: String) -> String? {
+            let inserted = capture("(\\d+) insertion", in: raw)
+            let deleted = capture("(\\d+) deletion", in: raw)
+            guard inserted != nil || deleted != nil else { return nil }
+            return "+\(inserted ?? "0") −\(deleted ?? "0")"
+        }
+
+        /// Remove every key not present in `liveKeys` (drop stale (id, cwd)
+        /// entries on write).
+        public static func prune(
+            _ cache: [DiffStatCacheKey: String],
+            liveKeys: Set<DiffStatCacheKey>
+        ) -> [DiffStatCacheKey: String] {
+            cache.filter { liveKeys.contains($0.key) }
+        }
+    }
 }

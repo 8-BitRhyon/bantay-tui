@@ -2909,6 +2909,7 @@ struct LogicCheckMain {
             "L43 pane list variants unchanged after async migration (got \(variantsAfterMigration))"
         )
 
+
         // L46. Plan 016 §3b — token rate-limit indicators. rate() is pure over
         // transcript JSONL timestamps; rateLevel maps tokens/min to a color.
         func usageLine(_ timestamp: String, input: Int, output: Int = 0) -> String {
@@ -2994,6 +2995,77 @@ struct LogicCheckMain {
             cfg.usageRateWarnTokensPerMin = orig
             defaults.removeObject(forKey: "usageRateWarnTokensPerMin")
         }
+
+
+        // L41. Plan 016 §1a — directory-keyed diff-stat cache. The key is
+        // (id, cwd): standalone agents share paneId == nil so id alone
+        // collides, and a summary is only valid for the cwd it was computed
+        // in. The cache write must be keyed so a late old-cwd task can never
+        // clobber the fresh new-cwd value.
+        let repo1Key = IslandMetrics.DiffStatCacheKey(id: "claude", cwd: "/repo1")
+        let repo2Key = IslandMetrics.DiffStatCacheKey(id: "claude", cwd: "/repo2")
+        check(
+            IslandMetrics.DiffStatCacheKey(id: "claude", cwd: "/repo1") == repo1Key,
+            "L41 key equal for same id+cwd")
+        check(repo1Key != repo2Key, "L41 key differs across cwds for same id")
+        check(
+            IslandMetrics.DiffStatCacheKey(id: "codex", cwd: "/repo1") != repo1Key,
+            "L41 key differs across ids for same cwd")
+        check(
+            IslandMetrics.DiffStatCache.parseShortstat(
+                " 1 file changed, 2 insertions(+), 3 deletions(-)")
+                == "+2 −3",
+            "L41 shortstat parses insertions+deletions")
+        check(
+            IslandMetrics.DiffStatCache.parseShortstat(" 1 file changed, 5 insertions(+)")
+                == "+5 −0",
+            "L41 insertion-only shortstat")
+        check(
+            IslandMetrics.DiffStatCache.parseShortstat(" 1 file changed, 7 deletions(-)")
+                == "+0 −7",
+            "L41 deletion-only shortstat")
+        check(IslandMetrics.DiffStatCache.parseShortstat("") == nil, "L41 empty shortstat is nil")
+        check(
+            IslandMetrics.DiffStatCache.parseShortstat("nothing to see here") == nil,
+            "L41 garbage shortstat is nil")
+        check(
+            IslandMetrics.DiffStatCache.parseShortstat(" 0 files changed") == nil,
+            "L41 no-match shortstat is nil")
+
+        let keyedCache: [IslandMetrics.DiffStatCacheKey: String] = [
+            repo1Key: "+1 −0",
+            repo2Key: "+9 −9",
+            IslandMetrics.DiffStatCacheKey(id: "claude", cwd: "/repo3"): "+4 −4",
+        ]
+        let pruned = IslandMetrics.DiffStatCache.prune(keyedCache, liveKeys: [repo1Key, repo2Key])
+        check(
+            pruned[repo1Key] == "+1 −0" && pruned[repo2Key] == "+9 −9",
+            "L41 prune keeps live keys")
+        check(
+            pruned[IslandMetrics.DiffStatCacheKey(id: "claude", cwd: "/repo3")] == nil,
+            "L41 prune drops dead keys")
+
+        // Simulated write race: cwd1 and cwd2 tasks both in flight for id A.
+        // Either landing order leaves cache[A:cwd2] correct — the keyed write
+        // never lets the stale cwd1 result occupy A's cwd2 slot.
+        func keyedWrite(
+            _ cache: inout [IslandMetrics.DiffStatCacheKey: String],
+            _ key: IslandMetrics.DiffStatCacheKey, _ value: String
+        ) {
+            if cache[key] == nil { cache[key] = value }
+        }
+        var race1: [IslandMetrics.DiffStatCacheKey: String] = [:]
+        keyedWrite(&race1, repo1Key, "+1 −0")
+        keyedWrite(&race1, repo2Key, "+9 −9")
+        check(race1[repo2Key] == "+9 −9", "L41 race order 1 keeps cwd2 value")
+        var race2: [IslandMetrics.DiffStatCacheKey: String] = [:]
+        keyedWrite(&race2, repo2Key, "+9 −9")
+        keyedWrite(&race2, repo1Key, "+1 −0")
+        check(race2[repo2Key] == "+9 −9", "L41 race order 2 keeps cwd2 value")
+        check(race2[repo1Key] == "+1 −0", "L41 race order 2 keeps cwd1 value in own slot")
+        let racedPruned = IslandMetrics.DiffStatCache.prune(race2, liveKeys: [repo2Key])
+        check(racedPruned[repo2Key] == "+9 −9", "L41 race prune keeps live cwd2 key")
+        check(racedPruned[repo1Key] == nil, "L41 race prune drops stale cwd1 key")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
