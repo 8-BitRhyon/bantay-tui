@@ -1235,8 +1235,12 @@ struct LogicCheckMain {
             check(
                 NotchHUDConfig.tokenMatches(token, expected: token),
                 "L64 matching token compares equal")
+            // Flip the first char to a value that is guaranteed to differ:
+            // the previous `"a" + dropFirst()` collided (and flaked) when the
+            // random token already started with "a".
+            let wrong = (token.first == "a" ? "b" : "a") + String(token.dropFirst())
             check(
-                !NotchHUDConfig.tokenMatches("a" + String(token.dropFirst()), expected: token),
+                !NotchHUDConfig.tokenMatches(wrong, expected: token),
                 "L64 wrong token rejected")
             check(
                 !NotchHUDConfig.tokenMatches("short", expected: token),
@@ -3435,6 +3439,134 @@ struct LogicCheckMain {
 
 
 
+        // L55. UDS event-ingest extension (plan 017 W2): HTTP-over-socket
+        // reuses the IngestHTTP parser; the bare NDJSON form (a `token
+        // <secret>` line followed by ONE event JSON line, then close)
+        // validates payloads, rejects garbage and oversized input, resolves
+        // the socket path with env override, and decides stale-socket
+        // unlinking. Coexists with L11/L64 (TCP ingest + token auth).
+        do {
+            let token = NotchHUDConfig.generateIngestToken()
+            let payload =
+                #"{"v":1,"source":"aider","type":"access_request","title":"run tests","message":"Aider needs approval","paneId":null,"workspaceId":null,"variance":"yes-no","choices":null}"#
+
+            // Form 1 — HTTP POST over the socket (curl --unix-socket ...).
+            let httpBytes = Data(
+                ("POST /events?token=\(token) HTTP/1.1\r\nHost: localhost\r\n"
+                    + "Content-Length: \(payload.utf8.count)\r\n\r\n\(payload)").utf8)
+            let udsHTTP = IngestHTTP.request(from: httpBytes)
+            check(
+                udsHTTP?.method == "POST" && udsHTTP?.token == token,
+                "L55 HTTP-over-UDS parses via IngestHTTP")
+            check(
+                String(data: udsHTTP!.body, encoding: .utf8) == payload,
+                "L55 HTTP-over-UDS body intact")
+            check(
+                !EventIngestServer.isBareLineRequest(httpBytes),
+                "L55 complete HTTP request is not bare-line")
+
+            // Form 2 — bare NDJSON form: `token <secret>` + one event line.
+            let bareBytes = Data("token \(token)\n\(payload)\n".utf8)
+            check(
+                EventIngestServer.isBareLineRequest(bareBytes),
+                "L55 bare-line buffer detected (no HTTP framing)")
+            check(
+                EventIngestServer.bareLineToken(from: "token \(token)") == token,
+                "L55 token prefix line parses")
+            check(
+                EventIngestServer.bareLineToken(from: "token  ") == nil,
+                "L55 empty token prefix rejected")
+            check(
+                EventIngestServer.bareLineToken(from: "notoken") == nil,
+                "L55 non-token line rejected")
+            check(
+                EventIngestServer.validateBareLine(payload),
+                "L55 valid payload passes bare-line validation")
+            check(
+                EventIngestServer.bareLineEvent(buffer: bareBytes, expectedToken: token)
+                    == payload,
+                "L55 bare-line form forwards the event line")
+            let wrongToken = NotchHUDConfig.generateIngestToken()
+            check(
+                EventIngestServer.bareLineEvent(buffer: bareBytes, expectedToken: wrongToken)
+                    == nil,
+                "L55 wrong bare-line token rejected")
+            check(
+                EventIngestServer.bareLineEvent(
+                    buffer: Data("token wrong\n\(payload)\n".utf8), expectedToken: token) == nil,
+                "L55 bare form with bad token line rejected")
+            check(
+                !EventIngestServer.validateBareLine("not json at all"),
+                "L55 non-JSON bare line rejected")
+            check(
+                !EventIngestServer.validateBareLine(#"{"type":"bogus"}"#),
+                "L55 unknown event type rejected")
+            check(
+                EventIngestServer.bareLineEvent(
+                    buffer: Data("token \(token)\nnot json\n".utf8),
+                    expectedToken: token) == nil,
+                "L55 bare form with non-JSON event rejected")
+            check(
+                EventIngestServer.bareLineEvent(
+                    buffer: Data("token \(token)\n".utf8), expectedToken: token) == nil,
+                "L55 bare form missing event line rejected")
+
+            // Oversized (> 64 KiB) lines are rejected before buffer growth.
+            let giant = Data(repeating: 0x61, count: EventIngestServer.maxIngestLineBytes + 1)
+            check(EventIngestServer.isOversized(giant), "L55 >64 KiB line flagged oversized")
+            check(
+                !EventIngestServer.isOversized(Data("token x\n{}".utf8)),
+                "L55 small buffer not oversized")
+
+            // Path resolution: env override wins, default lives in app support.
+            check(
+                EventIngestServer.ingestSocketPath(
+                    env: ["BANTAY_INGEST_SOCKET": "/tmp/bantay-ingest.sock"], home: "/Users/x")
+                    == "/tmp/bantay-ingest.sock",
+                "L55 BANTAY_INGEST_SOCKET override wins")
+            check(
+                EventIngestServer.ingestSocketPath(env: [:], home: "/Users/x")
+                    == "/Users/x/Library/Application Support/Bantay-TUI/ingest.sock",
+                "L55 default socket path in app support")
+            check(
+                EventIngestServer.ingestSocketPath(
+                    env: ["BANTAY_INGEST_SOCKET": ""], home: "/Users/x")
+                    == "/Users/x/Library/Application Support/Bantay-TUI/ingest.sock",
+                "L55 empty override falls back to default")
+
+            // Stale-socket handling: unlink a leftover socket file when the
+            // bind failed; never unlink a bound listener's socket.
+            check(
+                EventIngestServer.shouldUnlinkStaleSocket(bindFailed: true, socketExists: true),
+                "L55 stale socket file unlinked on bind failure")
+            check(
+                !EventIngestServer.shouldUnlinkStaleSocket(bindFailed: true, socketExists: false),
+                "L55 no leftover file, no unlink")
+            check(
+                !EventIngestServer.shouldUnlinkStaleSocket(bindFailed: false, socketExists: true),
+                "L55 live listener never unlinks")
+
+            // Config: socket facet default ON (user-owned local socket, not a
+            // network exposure like the default-off TCP port) + persisted.
+            MainActor.assumeIsolated {
+                let defaults = UserDefaults.standard
+                let cfg = NotchHUDConfig.shared
+                let orig = cfg.ingestSocketEnabled
+                check(
+                    cfg.ingestSocketEnabled,
+                    "L55 ingest socket default on (user-owned local socket)")
+                cfg.ingestSocketEnabled = false
+                check(
+                    defaults.bool(forKey: "ingestSocketEnabled") == false,
+                    "L55 ingest socket toggle persisted")
+                cfg.ingestSocketEnabled = orig
+                defaults.removeObject(forKey: "ingestSocketEnabled")
+            }
+        }
+
+
+
+
         // MARK: - L52 zellij adapter (WI-2, plan 017)
         // `zellij ls` session listing: --short (name per line), --no-formatting
         // (name + age + optional suffix), default (ANSI), and JSON variants.
@@ -3512,6 +3644,7 @@ struct LogicCheckMain {
         check(
             drifted == ["s2|terminal_2"],
             "L52 killed session drifts its pane ids (got \(drifted))")
+
 
 
         // L51. Plan 017 WI-1 — tmux adapter: dual-template `-F` pane parsing

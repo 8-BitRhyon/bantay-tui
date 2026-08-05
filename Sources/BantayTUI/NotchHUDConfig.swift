@@ -147,6 +147,15 @@ final class NotchHUDConfig {
     var ingestEnabled = false {
         didSet { defaults.set(ingestEnabled, forKey: "ingestEnabled") }
     }
+
+    /// Local Unix-domain socket ingest (plan 017 W2). Default ON: a
+    /// user-owned socket file (mode 0600) inside the app-support directory
+    /// is not a network exposure, unlike the TCP port (`ingestEnabled`),
+    /// which stays default-off.
+    var ingestSocketEnabled = true {
+        didSet { defaults.set(ingestSocketEnabled, forKey: "ingestSocketEnabled") }
+    }
+
     /// Local control gateway (W1 wire contract): a Unix-domain socket owned
     /// by the current user, not a network exposure — so it defaults ON unlike
     /// the TCP ingest port. A stale socket file from a crash is probed and
@@ -354,6 +363,10 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "ingestEnabled") as? Bool {
             ingestEnabled = v
+        }
+
+        if let v = defaults.object(forKey: "ingestSocketEnabled") as? Bool {
+            ingestSocketEnabled = v
         }
         if let v = defaults.object(forKey: "gatewayEnabled") as? Bool {
             gatewayEnabled = v
