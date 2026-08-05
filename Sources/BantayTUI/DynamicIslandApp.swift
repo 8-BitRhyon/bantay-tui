@@ -526,15 +526,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Start/stop the remote event-ingest listener per config. Remote agents
-    /// tunnel into it (`ssh -R <port>:localhost:<port>`) and POST event
-    /// lines that enter the same pipeline as local events.
+    /// Start/stop the remote event-ingest listeners per config. Remote agents
+    /// tunnel into the TCP listener (`ssh -R <port>:localhost:<port>`) and
+    /// POST event lines that enter the same pipeline as local events; the
+    /// user-owned Unix socket (default on) serves local scripts via HTTP
+    /// POST or the bare `token <secret>` + event-line form.
     @MainActor
     func updateIngestServer() {
         ingestServer?.stop()
         ingestServer = nil
         let config = NotchHUDConfig.shared
-        guard config.ingestEnabled else { return }
+        guard config.ingestEnabled || config.ingestSocketEnabled else { return }
         let manager = AgentEventManager.shared
         let server = EventIngestServer(
             port: IngestHTTP.clampedPort(config.ingestPort),
@@ -544,11 +546,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 manager.ingestEventLine(line)
             }
         }
-        server.start()
+        if config.ingestEnabled {
+            server.start()
+            Self.dbg(
+                "ingest: listening on 127.0.0.1:\(config.ingestPort) "
+                    + "(ssh -R \(config.ingestPort):localhost:\(config.ingestPort))")
+        }
+        if config.ingestSocketEnabled {
+            server.startUnixSocket()
+            Self.dbg(
+                "ingest: UDS \(EventIngestServer.ingestSocketPath()) "
+                    + "(HTTP POST or `token <secret>` + one event line)")
+        }
         ingestServer = server
-        Self.dbg(
-            "ingest: listening on 127.0.0.1:\(config.ingestPort) "
-                + "(ssh -R \(config.ingestPort):localhost:\(config.ingestPort))")
     }
 
     /// Start/stop the local control gateway (W1 wire contract) per config.

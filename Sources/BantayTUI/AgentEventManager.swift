@@ -857,7 +857,11 @@ extension AgentEventManager {
     }
 }
 
-private struct AgentEventPayload: Decodable {
+/// Decoder shape for event lines arriving via the events file, the Claude
+/// hook, or the ingest listeners (TCP + UDS). Kept internal so the UDS
+/// bare-line validator (`EventIngestServer.validateBareLine`) reuses the
+/// exact same decoder path as `ingestEventLine`.
+struct AgentEventPayload: Decodable {
     let source: String?
     let type: AgentEventKind?
     let title: String?
