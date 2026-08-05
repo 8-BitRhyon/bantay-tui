@@ -1,8 +1,10 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
 /// Pure geometry and state-machine helpers for the notch island expand animation.
-/// All functions are deterministic over their numeric inputs — no AppKit dependency.
+/// All functions are deterministic over their numeric inputs — AppKit is only
+/// imported for `NSEvent.ModifierFlags` in the hotkey mapping.
 public enum IslandMorphStyle: Sendable {
     case spring
     case linear
@@ -511,6 +513,38 @@ public enum IslandMetrics: Sendable {
         case "y": return .approve
         case "n": return .deny
         case "0"..."9": return .option(Int(String(char)) ?? 0)
+        default: return nil
+        }
+    }
+
+    /// Global ⌥-key actions dispatched from the key-down monitor. Physical
+    /// keyCodes are layout-independent: Space=toggle, Y=approve, N=deny,
+    /// S=snooze.
+    public enum HotkeyAction: Sendable {
+        case toggleIsland
+        case approveTop
+        case denyTop
+        case snooze15
+    }
+
+    /// Map a key-down event to a global hotkey action. Requires Option and
+    /// only Option — any extra modifier (Shift/Control/Command) disqualifies
+    /// so the combo never collides with app shortcuts. Unknown keyCodes are
+    /// nil. Facet gating lives in the caller (`updateGlobalHotkeyMonitor`).
+    public static func hotkeyAction(
+        keyCode: UInt16, modifiers: NSEvent.ModifierFlags
+    ) -> HotkeyAction? {
+        let hasOption = modifiers.contains(.option)
+        let extraModifier =
+            modifiers.contains(.shift)
+            || modifiers.contains(.control)
+            || modifiers.contains(.command)
+        guard hasOption, !extraModifier else { return nil }
+        switch keyCode {
+        case 49: return .toggleIsland
+        case 16: return .approveTop
+        case 45: return .denyTop
+        case 1: return .snooze15
         default: return nil
         }
     }

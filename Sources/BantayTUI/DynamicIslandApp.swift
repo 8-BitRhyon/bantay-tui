@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor static var isForcedVisible = false
     /// Set at launch when the one-time welcome sheet must appear.
     @MainActor static var pendingWelcome = false
+    /// Mirror of the island's F2 compose field state (set by NotchStatusView)
+    /// so global approve/deny hotkeys never fire while a prompt is being
+    /// typed — same guard the in-island Y/N shortcuts use.
+    @MainActor static var composingPaneId: String?
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
     private var fullScreenObserver: NSObjectProtocol?
@@ -39,7 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var spaceChangeObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     @MainActor private static var settleTask: Task<Void, Never>?
-    private var hotkeyMonitor: Any?
+    private var hotkeyMonitors: [Any] = []
+    private var didLogHotkeyPermissionWarning = false
     private var badgeTimer: Timer?
     private var ingestServer: EventIngestServer?
     /// The "Remove Bantay-TUI…" menu item; disabled while the uninstall
@@ -377,30 +382,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = item
     }
 
-    /// Global ⌥Space toggle: show/hide the island from anywhere. Uses a
-    /// key-down monitor so no Accessibility permission is required.
-    /// Re-run whenever the setting changes: removes any stale monitor and
-    /// reinstalls only when the feature is enabled, so the toggle takes
-    /// effect immediately in both directions.
+    /// Global ⌥-key shortcuts: toggle (⌥Space), approve top (⌥Y), deny top
+    /// (⌥N), snooze 15m (⌥S). One key-down monitor per enabled action, so a
+    /// disabled facet stops installing immediately in both directions. Uses
+    /// key-down monitors so no Accessibility permission is required; when
+    /// Input Monitoring is untrusted the monitor comes back nil — log once
+    /// and leave the menu-bar fallbacks working.
     @MainActor
     func updateGlobalHotkeyMonitor() {
-        if let hotkeyMonitor {
-            NSEvent.removeMonitor(hotkeyMonitor)
-            self.hotkeyMonitor = nil
+        for monitor in hotkeyMonitors {
+            NSEvent.removeMonitor(monitor)
         }
-        guard NotchHUDConfig.shared.globalHotkeyEnabled else { return }
-        let handler: @Sendable (NSEvent) -> Void = { event in
-            guard event.modifierFlags.contains(.option),
-                !event.modifierFlags.contains(.shift),
-                event.keyCode == 49  // Space
-            else {
-                return
-            }
-            Task { @MainActor in
-                AppDelegate.handleHotkeyToggle()
+        hotkeyMonitors.removeAll()
+        let config = NotchHUDConfig.shared
+        guard config.globalHotkeyEnabled else { return }
+        let enabledActions: [(UInt16, IslandMetrics.HotkeyAction)] = [
+            (49, .toggleIsland),
+            (16, .approveTop),
+            (45, .denyTop),
+            (1, .snooze15),
+        ].filter { keyCode, action in
+            switch action {
+            case .toggleIsland: return true
+            case .approveTop: return config.globalHotkeyApproveEnabled
+            case .denyTop: return config.globalHotkeyDenyEnabled
+            case .snooze15: return config.globalHotkeySnoozeEnabled
             }
         }
-        hotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
+        for (_, action) in enabledActions {
+            let handler: @Sendable (NSEvent) -> Void = { event in
+                guard
+                    IslandMetrics.hotkeyAction(
+                        keyCode: event.keyCode, modifiers: event.modifierFlags) == action
+                else {
+                    return
+                }
+                Task { @MainActor in
+                    AppDelegate.handleHotkeyAction(action)
+                }
+            }
+            if let monitor = NSEvent.addGlobalMonitorForEvents(
+                matching: .keyDown, handler: handler)
+            {
+                hotkeyMonitors.append(monitor)
+            } else if !didLogHotkeyPermissionWarning {
+                didLogHotkeyPermissionWarning = true
+                Self.dbg(
+                    "hotkeys: Input Monitoring untrusted — global monitor unavailable, menu-bar controls still work"
+                )
+            }
+        }
     }
 
     @MainActor
@@ -410,6 +441,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             showAtNotch()
             NotificationCenter.default.post(name: .notchHotkeyPressed, object: nil)
+        }
+    }
+
+    /// Dispatch a global hotkey action. Approve/deny route through the event
+    /// manager for the top pending approval, guarded exactly like the
+    /// in-island Y/N shortcuts (no compose field open, not resolving) so an
+    /// approval is never dropped or double-fired. Snooze mirrors the 15m menu
+    /// preset.
+    @MainActor
+    static func handleHotkeyAction(_ action: IslandMetrics.HotkeyAction) {
+        switch action {
+        case .toggleIsland:
+            handleHotkeyToggle()
+        case .approveTop:
+            performApprovalHotkey(approve: true)
+        case .denyTop:
+            performApprovalHotkey(approve: false)
+        case .snooze15:
+            let config = NotchHUDConfig.shared
+            config.snoozeUntilRestart = false
+            config.snoozedUntil = Date().addingTimeInterval(900)
+            NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+        }
+    }
+
+    @MainActor
+    private static func performApprovalHotkey(approve: Bool) {
+        guard composingPaneId == nil else { return }
+        let manager = AgentEventManager.shared
+        let muted = NotchHUDConfig.shared.mutedSources
+        let roster =
+            muted.isEmpty
+            ? manager.agents
+            : manager.agents.filter {
+                !muted.contains($0.source)
+            }
+        let merged = manager.mergeApprovals(into: roster)
+        let top = merged.first { $0.kind == .accessRequest || $0.kind == .waiting }
+        guard let paneId = top?.paneId, !manager.isResolving(paneId: paneId) else { return }
+        manager.performAction(paneId: paneId) { adapter in
+            if approve {
+                adapter.approve(paneId: paneId)
+            } else {
+                adapter.deny(paneId: paneId)
+            }
         }
     }
 

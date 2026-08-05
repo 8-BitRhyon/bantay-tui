@@ -2859,7 +2859,8 @@ struct LogicCheckMain {
                     ["command": "myagent --url http://127.0.0.1:8080/events"]),
                 "L44f foreign URL not matched by legacy matcher")
             check(
-                !ClaudeHookInstaller.isLegacyBantayHook(["command": "curl http://127.0.0.1/events"]),
+                !ClaudeHookInstaller.isLegacyBantayHook(["command": "curl http://127.0.0.1/events"]
+                ),
                 "L44f legacy matcher still requires stdin @-")
             check(
                 ClaudeHookInstaller.isOwnedBantayHook(["command": legacyDataCommand]),
@@ -2908,7 +2909,6 @@ struct LogicCheckMain {
                 == [["pane", "list", "--format", "json"], ["pane", "list"]],
             "L43 pane list variants unchanged after async migration (got \(variantsAfterMigration))"
         )
-
 
         // L46. Plan 016 §3b — token rate-limit indicators. rate() is pure over
         // transcript JSONL timestamps; rateLevel maps tokens/min to a color.
@@ -2996,8 +2996,6 @@ struct LogicCheckMain {
             defaults.removeObject(forKey: "usageRateWarnTokensPerMin")
         }
 
-
-
         // L41. Plan 016 §1a — directory-keyed diff-stat cache. The key is
         // (id, cwd): standalone agents share paneId == nil so id alone
         // collides, and a summary is only valid for the cwd it was computed
@@ -3067,7 +3065,6 @@ struct LogicCheckMain {
         let racedPruned = IslandMetrics.DiffStatCache.prune(race2, liveKeys: [repo2Key])
         check(racedPruned[repo2Key] == "+9 −9", "L41 race prune keeps live cwd2 key")
         check(racedPruned[repo1Key] == nil, "L41 race prune drops stale cwd1 key")
-
 
         // L48. Plan 016 §4a — multi-display: notch-less detection & centered
         // pill. The certified hasNotch heuristic: a display is NOTCHED only
@@ -3204,7 +3201,9 @@ struct LogicCheckMain {
         let tail6 = LogFormatter.cleanedTail(thousandLines, maxLines: 6, maxLineLength: 200)
         check(tail6.count == 6, "L45 tail suffixes to maxLines (got \(tail6.count))")
         check(tail6.last == "line 1000", "L45 tail keeps the newest line last")
-        check(tail6.first == "line 995", "L45 tail keeps the newest 6 lines (got \(tail6.first ?? "nil"))")
+        check(
+            tail6.first == "line 995",
+            "L45 tail keeps the newest 6 lines (got \(tail6.first ?? "nil"))")
         let tail200 = LogFormatter.cleanedTail(thousandLines, maxLines: 200, maxLineLength: 200)
         check(tail200.count == 200, "L45 tail at 200-line cap (got \(tail200.count))")
 
@@ -3219,7 +3218,8 @@ struct LogicCheckMain {
         let truncated = LogFormatter.cleanedTail(hugeLine, maxLines: 5, maxLineLength: 120)
         check(
             truncated.count == 1 && truncated[0].count == 120,
-            "L45 100k-char line truncated to maxLineLength (got \(truncated.first?.count ?? -1) chars)")
+            "L45 100k-char line truncated to maxLineLength (got \(truncated.first?.count ?? -1) chars)"
+        )
 
         // ANSI escape sequences are stripped so terminal garbage can't render.
         let ansi = "\u{1B}[31mred\u{1B}[0m \u{1B}[1;32mgreen\u{1B}[0m"
@@ -3229,7 +3229,8 @@ struct LogicCheckMain {
         let binary = "ok\u{07}good\u{00}and"
         let cleanedBinary = LogFormatter.cleanedTail(binary, maxLines: 10, maxLineLength: 200)
         check(cleanedBinary == ["okgoodand"], "L45 control chars stripped (got \(cleanedBinary))")
-        let twoCharEscape = LogFormatter.cleanedTail("\u{1B}7 hello", maxLines: 10, maxLineLength: 200)
+        let twoCharEscape = LogFormatter.cleanedTail(
+            "\u{1B}7 hello", maxLines: 10, maxLineLength: 200)
         check(twoCharEscape == ["hello"], "L45 two-char escape stripped (got \(twoCharEscape))")
 
         // CJK/emoji survive both cleaning and hard truncation (truncation
@@ -3240,7 +3241,9 @@ struct LogicCheckMain {
             cleanedUnicode == ["你好世界 🚀 test 日本語"],
             "L45 CJK/emoji preserved (got \(cleanedUnicode))")
         let unicodeTrunc = LogFormatter.cleanedTail("🚀🚀🚀🚀🚀", maxLines: 10, maxLineLength: 3)
-        check(unicodeTrunc == ["🚀🚀🚀"], "L45 emoji truncation keeps whole graphemes (got \(unicodeTrunc))")
+        check(
+            unicodeTrunc == ["🚀🚀🚀"],
+            "L45 emoji truncation keeps whole graphemes (got \(unicodeTrunc))")
 
         // peekFrame: docks beside the island, clamps inside a 400×300 screen,
         // never overlaps the island, aligns to the backing pixel grid.
@@ -3281,9 +3284,47 @@ struct LogicCheckMain {
         let alignedPeek = IslandMetrics.peekFrame(
             anchor: fractionalIsland, screenFrame: peekScreen,
             size: CGSize(width: 95.25, height: 201), scale: 2)
-        check(alignedPeek.minY == 3.5, "L45 peek aligns to the 2x pixel grid (got \(alignedPeek.minY))")
-        check(alignedPeek.maxY == 204.5, "L45 peek maxY aligns to the 2x grid (got \(alignedPeek.maxY))")
+        check(
+            alignedPeek.minY == 3.5,
+            "L45 peek aligns to the 2x pixel grid (got \(alignedPeek.minY))")
+        check(
+            alignedPeek.maxY == 204.5,
+            "L45 peek maxY aligns to the 2x grid (got \(alignedPeek.maxY))")
         check(!alignedPeek.intersects(fractionalIsland), "L45 aligned peek still avoids the island")
+
+        // MARK: - L47 global hotkey mapping (3c)
+        // Documented table: ⌥Space=toggle (49), ⌥Y=approve top (16),
+        // ⌥N=deny top (45), ⌥S=snooze 15m (1). Physical, layout-independent
+        // keyCodes. Modifier exclusivity: only Option; any of Shift/Control/
+        // Command disqualifies. Unknown keyCodes -> nil.
+        let opt = NSEvent.ModifierFlags.option
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 49, modifiers: [opt]) == .toggleIsland,
+            "L47 49+option -> toggleIsland")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 16, modifiers: [opt]) == .approveTop,
+            "L47 16+option -> approveTop")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 45, modifiers: [opt]) == .denyTop,
+            "L47 45+option -> denyTop")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 1, modifiers: [opt]) == .snooze15,
+            "L47 1+option -> snooze15")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 49, modifiers: [opt, .shift]) == nil,
+            "L47 49+option+shift -> nil (exclusive)")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 49, modifiers: [opt, .control]) == nil,
+            "L47 49+option+control -> nil (exclusive)")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 49, modifiers: [opt, .command]) == nil,
+            "L47 49+option+command -> nil (exclusive)")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 49, modifiers: []) == nil,
+            "L47 49 no modifiers -> nil")
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 99, modifiers: [opt]) == nil,
+            "L47 unknown keyCode -> nil")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
