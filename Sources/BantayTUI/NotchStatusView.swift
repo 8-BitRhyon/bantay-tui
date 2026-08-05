@@ -31,7 +31,9 @@ struct NotchStatusView: View {
     @State private var peekTask: Task<Void, Never>?
     /// Per-agent `git diff --shortstat` summary ("+12 −3"), the glanceable
     /// "did this agent actually do work" meter (Codex/Conductor pattern).
-    @State private var diffStats: [String: String] = [:]
+    /// Keyed by (id, cwd): standalone agents share `paneId == nil` so id alone
+    /// collides, and a summary is only valid for the cwd it was computed in.
+    @State private var diffStats: [IslandMetrics.DiffStatCacheKey: String] = [:]
     @State private var clipboardItems: [ClipboardItem] = []
     @State private var shelfFiles: [ShelfFile] = []
     @State private var lastChangeCount = NSPasteboard.general.changeCount
@@ -400,28 +402,34 @@ struct NotchStatusView: View {
     }
 
     /// Compute a `git diff --shortstat` summary for the agent's cwd off the
-    /// main actor and cache it by agent id. Cheap (one Process); only fetches
-    /// once per cwd change so the row isn't recomputing every poll. Runs
+    /// main actor and cache it by (id, cwd). Cheap (one Process); only fetches
+    /// once per (id, cwd) so the row isn't recomputing every poll. Runs
     /// through the non-blocking `ProcessRunner` with a timeout so a git
-    /// process in a huge/mounted repo can never hang the row.
+    /// process in a huge/mounted repo can never hang the row. The composite
+    /// key means an old-cwd task that lands late writes its own (id, cwd)
+    /// slot — never the agent's current one — and the prune then drops it.
     private func fetchDiffStats(_ agent: AgentSnapshot) {
-        guard let cwd = agent.cwd, diffStats[agent.id] == nil else { return }
-        let id = agent.id
+        guard let cwd = agent.cwd else { return }
+        let key = IslandMetrics.DiffStatCacheKey(id: agent.id, cwd: cwd)
+        guard diffStats[key] == nil else { return }
         Task.detached {
             let result = await ProcessRunner.run(
                 executableURL: URL(fileURLWithPath: "/usr/bin/git"),
                 arguments: ["-C", cwd, "diff", "--shortstat"],
-                timeout: 5.0)
+                timeout: 3.0)
             let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !raw.isEmpty else { return }
-            let added = raw.firstMatch(of: /(\d+) insertion/)?.1
-            let removed = raw.firstMatch(of: /(\d+) deletion/)?.1
-            let summary =
-                "+\(added ?? "0") −\(removed ?? "0")"
+            guard let summary = IslandMetrics.DiffStatCache.parseShortstat(raw) else { return }
             await MainActor.run {
-                if self.diffStats[id] == nil {
-                    self.diffStats[id] = summary
+                if self.diffStats[key] == nil {
+                    self.diffStats[key] = summary
                 }
+                let liveKeys = Set(
+                    self.eventManager.agents.compactMap { agent in
+                        agent.cwd.map { IslandMetrics.DiffStatCacheKey(id: agent.id, cwd: $0) }
+                    }
+                )
+                self.diffStats = IslandMetrics.DiffStatCache.prune(
+                    self.diffStats, liveKeys: liveKeys)
             }
         }
     }
@@ -1555,7 +1563,10 @@ struct NotchStatusView: View {
                                 Text(agent.kind.label)
                                     .font(.system(size: 8.5, weight: .medium))
                                     .foregroundColor(.secondary).lineLimit(1)
-                                if let diff = diffStats[agent.id] {
+                                if let cwd = agent.cwd,
+                                    let diff = diffStats[
+                                        IslandMetrics.DiffStatCacheKey(id: agent.id, cwd: cwd)]
+                                {
                                     Text(diff)
                                         .font(
                                             .system(
@@ -1592,7 +1603,9 @@ struct NotchStatusView: View {
                 .layoutPriority(0)
                 .onAppear { fetchDiffStats(agent) }
                 .onChange(of: agent.cwd) { _ in
-                    diffStats[agent.id] = nil
+                    // No manual dict clear: the key change makes the old-cwd
+                    // entry unreachable and the prune (on the next write)
+                    // drops it. Clearing here would reintroduce the race.
                     fetchDiffStats(agent)
                 }
                 if let paneId = agent.paneId {
