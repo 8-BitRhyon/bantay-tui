@@ -2787,10 +2787,10 @@ struct LogicCheckMain {
                 "L44d foreign entry survives cross-port merge")
 
             // (e) ClaudeHookWriteDecision.decide table: abort whenever the file
-            // exists but did not parse, regardless of enabled.
+            // exists but did not parse, regardless of install/removal intent.
             let sample: [String: Any] = ["a": 1]
             switch ClaudeHookWriteDecision.decide(
-                enabled: true, fileExists: false, parsed: false, merged: sample)
+                fileExists: false, parsed: false, merged: sample)
             {
             case .write(let payload):
                 check(dictEquals(payload, sample), "L44e no file -> write (fresh install)")
@@ -2798,7 +2798,7 @@ struct LogicCheckMain {
                 check(false, "L44e no file -> write (fresh install)")
             }
             switch ClaudeHookWriteDecision.decide(
-                enabled: true, fileExists: true, parsed: false, merged: sample)
+                fileExists: true, parsed: false, merged: sample)
             {
             case .abort:
                 check(true, "L44e unparseable existing file aborts install")
@@ -2806,7 +2806,7 @@ struct LogicCheckMain {
                 check(false, "L44e unparseable existing file aborts install")
             }
             switch ClaudeHookWriteDecision.decide(
-                enabled: false, fileExists: true, parsed: false, merged: sample)
+                fileExists: true, parsed: false, merged: sample)
             {
             case .abort:
                 check(true, "L44e unparseable existing file aborts removal")
@@ -2814,7 +2814,7 @@ struct LogicCheckMain {
                 check(false, "L44e unparseable existing file aborts removal")
             }
             switch ClaudeHookWriteDecision.decide(
-                enabled: true, fileExists: true, parsed: true, merged: sample)
+                fileExists: true, parsed: true, merged: sample)
             {
             case .write(let payload):
                 check(dictEquals(payload, sample), "L44e parsed existing file writes merged")
@@ -2841,6 +2841,47 @@ struct LogicCheckMain {
                 remergeSamePP?.count == 2,
                 "L44 legacy L28b same-port re-merge still no-dup (got \(remergeSamePP?.count ?? -1))"
             )
+
+            // (f) Legacy-shape hooks remain removable: a curl invocation that
+            // pipes stdin via `-d @-` / `--data @-` (pre-1d installs) must be
+            // recognized by the owned matcher and removed, while a foreign
+            // command that merely mentions a localhost URL still never matches.
+            let legacyDataCommand = "curl -s -X POST -d @- http://127.0.0.1:41817/events"
+            check(
+                ClaudeHookInstaller.isLegacyBantayHook(["command": legacyDataCommand]),
+                "L44f legacy -d @- hook recognized")
+            check(
+                ClaudeHookInstaller.isLegacyBantayHook(
+                    ["command": "curl -s -X POST --data @- http://127.0.0.1:9999/events"]),
+                "L44f legacy --data @- hook recognized (port-agnostic)")
+            check(
+                !ClaudeHookInstaller.isLegacyBantayHook(
+                    ["command": "myagent --url http://127.0.0.1:8080/events"]),
+                "L44f foreign URL not matched by legacy matcher")
+            check(
+                !ClaudeHookInstaller.isLegacyBantayHook(["command": "curl http://127.0.0.1/events"]),
+                "L44f legacy matcher still requires stdin @-")
+            check(
+                ClaudeHookInstaller.isOwnedBantayHook(["command": legacyDataCommand]),
+                "L44f owned matcher covers legacy command")
+            check(
+                ClaudeHookInstaller.isOwnedBantayHook(["command": exactCommand]),
+                "L44f owned matcher covers current command")
+            let legacyEntry: [String: Any] = [
+                "matcher": "legacy-bantay",
+                "hooks": [["type": "command", "command": legacyDataCommand]],
+            ]
+            check(
+                ClaudeHookInstaller.isBantayEntry(legacyEntry),
+                "L44f legacy entry recognized for removal")
+            let removedLegacy = ClaudeHookInstaller.removingBantayHooks(
+                from: ["hooks": ["PermissionPrompt": [legacyEntry]]])
+            let removedLegacyHooks =
+                (removedLegacy["hooks"] as? [String: Any])?["PermissionPrompt"]
+                as? [[String: Any]]
+            check(
+                removedLegacyHooks == nil || removedLegacyHooks?.isEmpty == true,
+                "L44f legacy hook actually removed")
         }
 
         // L43. ProcessRunner timeout clamp (plan 016 1c): negative and zero
