@@ -132,6 +132,9 @@ struct SettingsView: View {
                             + "Also enables the local ingest listener."
                     )
                     .onChange(of: claudeHookInstalled) { newValue in
+                        guard newValue != NotchHUDConfig.shared.claudeHookInstalled else {
+                            return
+                        }
                         installClaudeHook(newValue)
                     }
             }
@@ -528,35 +531,54 @@ struct SettingsView: View {
     }
 
     /// Install or remove the Claude Code hooks in ~/.claude/settings.json.
-    /// On write failure the toggle reverts and the user is told why.
+    /// On write failure — or when the existing file exists but cannot be
+    /// parsed — the toggle reverts and the user is told why. Bantay never
+    /// writes over a settings.json it failed to read.
     private func installClaudeHook(_ enabled: Bool) {
         let home = NSHomeDirectory()
         let settingsPath = home + "/.claude/settings.json"
+        let settingsURL = URL(fileURLWithPath: settingsPath)
+        let fileExists = FileManager.default.fileExists(atPath: settingsPath)
+        var parsed = false
         var settings: [String: Any] = [:]
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: settingsPath)),
+        if let data = try? Data(contentsOf: settingsURL),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {
             settings = obj
+            parsed = true
         }
         let merged =
             enabled
             ? ClaudeHookInstaller.mergedSettings(
                 existing: settings, port: NotchHUDConfig.shared.ingestPort)
             : ClaudeHookInstaller.removingBantayHooks(from: settings)
-        guard
-            let data = try? JSONSerialization.data(
-                withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
-        else {
-            claudeHookRevertFailure(enabled)
+        switch ClaudeHookWriteDecision.decide(
+            enabled: enabled, fileExists: fileExists, parsed: parsed, merged: merged)
+        {
+        case .abort:
+            claudeHookRevertFailure(
+                enabled,
+                reason:
+                    "~/.claude/settings.json exists but could not be read as JSON. "
+                    + "Bantay never overwrites a file it cannot parse — fix the file "
+                    + "or remove it and try again.")
             return
-        }
-        do {
-            try data.write(to: URL(fileURLWithPath: settingsPath))
-        } catch {
-            claudeHookRevertFailure(enabled)
-            AppDelegate.dbg(
-                "claude hook: could not write \(settingsPath): \(error)")
-            return
+        case .write(let payload):
+            guard
+                let data = try? JSONSerialization.data(
+                    withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            else {
+                claudeHookRevertFailure(enabled)
+                return
+            }
+            do {
+                try data.write(to: settingsURL)
+            } catch {
+                claudeHookRevertFailure(enabled)
+                AppDelegate.dbg(
+                    "claude hook: could not write \(settingsPath): \(error)")
+                return
+            }
         }
         if enabled {
             NotchHUDConfig.shared.ingestEnabled = true
@@ -566,13 +588,15 @@ struct SettingsView: View {
         claudeHookInstalled = enabled
     }
 
-    private func claudeHookRevertFailure(_ enabled: Bool) {
+    private func claudeHookRevertFailure(
+        _ enabled: Bool,
+        reason: String = "Failed to write ~/.claude/settings.json. Check permissions and try again."
+    ) {
         claudeHookInstalled = !enabled
         NotchHUDConfig.shared.claudeHookInstalled = !enabled
         let alert = NSAlert()
         alert.messageText = "Could not \(enabled ? "install" : "remove") the Claude Code hook"
-        alert.informativeText =
-            "Failed to write ~/.claude/settings.json. Check permissions and try again."
+        alert.informativeText = reason
         alert.runModal()
     }
 }
