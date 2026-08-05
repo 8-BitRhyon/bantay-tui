@@ -3433,6 +3433,110 @@ struct LogicCheckMain {
             IslandMetrics.hotkeyAction(keyCode: 99, modifiers: [opt]) == nil,
             "L47 unknown keyCode -> nil")
 
+        // MARK: - L54. Plan 017 WI-4 — control gateway (W1 wire contract,
+        // UDS NDJSON). Framing round-trip, request parsing, route table,
+        // response shapes, socket path resolution.
+        let multiData = Data(
+            "{\"id\":\"req_1\",\"method\":\"bantay.ping\",\"params\":{}}\n{\"id\":\"req_2\",\"method\":\"agent.list\",\"params\":{}}\n"
+                .utf8)
+        let framed = ControlGateway.extractLines(from: multiData)
+        check(framed.count == 2, "L54 multi-line NDJSON extracts 2 lines (got \(framed.count))")
+        check(
+            ControlGateway.parseRequest(framed[0])?.id == "req_1",
+            "L54 first framed line parses with id req_1")
+        check(
+            ControlGateway.parseRequest(framed[1])?.method == "agent.list",
+            "L54 second framed line parses with method agent.list")
+        let giant = String(repeating: "x", count: 64 * 1024 + 1)
+        let cappedLines = ControlGateway.extractLines(from: Data(giant.utf8))
+        check(cappedLines.isEmpty, "L54 oversized line (>64 KiB) is dropped by the cap")
+        let withGarbage = ControlGateway.extractLines(
+            from: Data("{\"id\":\"a\",\"method\":\"bantay.ping\"}\nnot json\n".utf8))
+        check(withGarbage.count == 2, "L54 garbage line still extracts as a raw line")
+        check(
+            ControlGateway.parseRequest(withGarbage[1]) == nil,
+            "L54 garbage line fails to parse")
+
+        let parsed = ControlGateway.parseRequest(
+            "{\"id\":\"req_ab12\",\"method\":\"pane.read\",\"params\":{\"pane_id\":\"%1\",\"lines\":6}}"
+        )
+        check(parsed?.id == "req_ab12", "L54 parseRequest extracts id")
+        check(parsed?.method == "pane.read", "L54 parseRequest extracts method")
+        check(parsed?.params?["pane_id"] as? String == "%1", "L54 parseRequest keeps params dict")
+        check(parsed?.params?["lines"] != nil, "L54 parseRequest keeps numeric params")
+        check(ControlGateway.parseRequest("{\"id\":\"x\"}") == nil, "L54 missing method -> nil")
+        check(
+            ControlGateway.parseRequest("{\"method\":\"bantay.ping\"}") == nil,
+            "L54 missing id -> nil")
+        check(ControlGateway.parseRequest("not json at all") == nil, "L54 non-JSON line -> nil")
+        check(ControlGateway.parseRequest("") == nil, "L54 empty line -> nil")
+        check(
+            ControlGateway.parseRequest("{\"id\":\"x\",\"method\":\"agent.list\",\"params\":[1,2]}")
+                == nil,
+            "L54 non-object params -> nil")
+
+        check(
+            ControlGateway.GatewayRoute.catalog.count == 6,
+            "L54 catalog has 6 methods (got \(ControlGateway.GatewayRoute.catalog.count))")
+        for method in ControlGateway.GatewayRoute.catalog {
+            check(
+                ControlGateway.route(method: method) != .unknown,
+                "L54 catalog method \(method) routes non-unknown")
+            check(ControlGateway.GatewayRoute.isKnown(method), "L54 \(method) is known")
+        }
+        check(
+            ControlGateway.route(method: "bantay.frobnicate") == .unknown,
+            "L54 bantay.frobnicate routes unknown")
+        check(
+            !ControlGateway.GatewayRoute.isKnown("bantay.frobnicate"),
+            "L54 bantay.frobnicate rejected")
+        check(
+            ControlGateway.route(method: "bantay.ping") == .ping,
+            "L54 bantay.ping maps to ping")
+
+        let pongLine = ControlGateway.GatewayResponse.ok(
+            id: "req_ab12", result: ["type": "pong", "v": 1])
+        if let data = pongLine.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = obj["result"] as? [String: Any]
+        {
+            check(obj["id"] as? String == "req_ab12", "L54 ok response echoes request id")
+            check(result["type"] as? String == "pong", "L54 ping result type is pong")
+            check((result["v"] as? Int) == 1, "L54 ping result carries protocol version v")
+            check(obj["error"] is NSNull, "L54 ok response has null error")
+        } else {
+            check(false, "L54 ok response is parseable JSON")
+        }
+
+        let errorLine = ControlGateway.GatewayResponse.error(
+            id: "req_ab12", code: "unknown_method", message: "bantay.frobnicate")
+        if let data = errorLine.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let error = obj["error"] as? [String: Any]
+        {
+            check(obj["id"] as? String == "req_ab12", "L54 error response echoes request id")
+            check(error["code"] as? String == "unknown_method", "L54 error code is unknown_method")
+            check(
+                error["message"] as? String == "bantay.frobnicate", "L54 error carries method name")
+            check(obj["result"] is NSNull, "L54 error response result is null")
+        } else {
+            check(false, "L54 error response is parseable JSON")
+        }
+
+        check(
+            ControlGateway.socketPath(
+                env: ["BANTAY_CONTROL_SOCKET": "/tmp/x.sock"], home: "/Users/u")
+                == "/tmp/x.sock",
+            "L54 BANTAY_CONTROL_SOCKET env override wins")
+        check(
+            ControlGateway.socketPath(env: [:], home: "/Users/u")
+                == "/Users/u/Library/Application Support/Bantay-TUI/control.sock",
+            "L54 default socket path under ~/Library/Application Support")
+        check(
+            ControlGateway.socketPath(env: ["BANTAY_CONTROL_SOCKET": ""], home: "/Users/u")
+                == "/Users/u/Library/Application Support/Bantay-TUI/control.sock",
+            "L54 empty env override falls back to default")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
