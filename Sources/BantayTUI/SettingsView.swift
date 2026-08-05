@@ -553,7 +553,7 @@ struct SettingsView: View {
                 existing: settings, port: NotchHUDConfig.shared.ingestPort)
             : ClaudeHookInstaller.removingBantayHooks(from: settings)
         switch ClaudeHookWriteDecision.decide(
-            enabled: enabled, fileExists: fileExists, parsed: parsed, merged: merged)
+            fileExists: fileExists, parsed: parsed, merged: merged)
         {
         case .abort:
             claudeHookRevertFailure(

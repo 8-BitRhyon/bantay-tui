@@ -1149,7 +1149,14 @@ struct NotchStatusView: View {
                     .frame(maxWidth: 200, alignment: .trailing)
             }
             Button {
-                NotchHUDConfig.shared.panelPinned.toggle()
+                if NotchHUDConfig.shared.panelPinned {
+                    NotchHUDConfig.shared.panelPinned = IslandMetrics.pinAfterCollapse(
+                        reason: .explicitUnpin,
+                        wasPinned: true,
+                        persistAcrossCollapse: true)
+                } else {
+                    NotchHUDConfig.shared.panelPinned = true
+                }
             } label: {
                 Image(systemName: panelPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9, weight: .semibold))
