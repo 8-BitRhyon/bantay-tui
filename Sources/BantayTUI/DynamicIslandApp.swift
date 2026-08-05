@@ -534,7 +534,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let config = NotchHUDConfig.shared
         guard config.ingestEnabled else { return }
         let manager = AgentEventManager.shared
-        let server = EventIngestServer(port: IngestHTTP.clampedPort(config.ingestPort)) { line in
+        let server = EventIngestServer(
+            port: IngestHTTP.clampedPort(config.ingestPort),
+            token: config.ingestToken
+        ) { line in
             Task { @MainActor in
                 manager.ingestEventLine(line)
             }

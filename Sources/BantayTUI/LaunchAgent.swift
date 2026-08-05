@@ -49,29 +49,43 @@ enum LaunchAgent {
 
     /// Plist content mirroring `scripts/setup.sh`, with the app's own binary.
     static func plistContent(binaryPath: String, dataDir: String) -> String {
-        """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-          "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>Label</key>
-            <string>\(label)</string>
-            <key>ProgramArguments</key>
-            <array>
-                <string>\(binaryPath)</string>
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>KeepAlive</key>
-            <true/>
-            <key>StandardOutPath</key>
-            <string>\(dataDir)/bantay.log</string>
-            <key>StandardErrorPath</key>
-            <string>\(dataDir)/bantay.err</string>
-        </dict>
-        </plist>
-        """
+        let escapedBinary = Self.xmlEscape(binaryPath)
+        let escapedDataDir = Self.xmlEscape(dataDir)
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+              "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>Label</key>
+                <string>\(label)</string>
+                <key>ProgramArguments</key>
+                <array>
+                    <string>\(escapedBinary)</string>
+                </array>
+                <key>RunAtLoad</key>
+                <true/>
+                <key>KeepAlive</key>
+                <true/>
+                <key>StandardOutPath</key>
+                <string>\(escapedDataDir)/bantay.log</string>
+                <key>StandardErrorPath</key>
+                <string>\(escapedDataDir)/bantay.err</string>
+            </dict>
+            </plist>
+            """
+    }
+
+    /// XML-escape a path interpolated into the plist so an app directory
+    /// containing `&`, `<`, `>`, or quotes can't produce a malformed plist
+    /// (which would silently break launch-at-login).
+    static func xmlEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     /// Creates the data directory and touches the events file
@@ -85,6 +99,9 @@ enum LaunchAgent {
         if !FileManager.default.fileExists(atPath: eventsFile) {
             FileManager.default.createFile(atPath: eventsFile, contents: nil)
         }
+        // Events carry agent shell commands — keep them user-private.
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: eventsFile)
         return FileManager.default.fileExists(atPath: eventsFile)
     }
 

@@ -139,6 +139,8 @@ fi
 
 mkdir -p "$DATA_DIR"
 touch "$EVENTS_FILE"
+# Events carry agent shell commands — keep them user-private.
+chmod 600 "$EVENTS_FILE"
 
 echo "bantay-tui: data directory ready at $DATA_DIR"
 

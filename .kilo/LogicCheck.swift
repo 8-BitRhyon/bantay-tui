@@ -1216,6 +1216,59 @@ struct LogicCheckMain {
             !IngestHTTP.okResponse().isEmpty && !IngestHTTP.badResponse().isEmpty,
             "L11 responses present")
 
+        // L64. Ingest auth token (security sweep MEDIUM-1): the shared secret
+        // is required on every ingest request, compared constant-time, and the
+        // hook command + matchers tolerate the `?token=` query string.
+        do {
+            let token = NotchHUDConfig.generateIngestToken()
+            check(token.utf8.count == 32, "L64 generated token is 128-bit hex")
+            let tokenData = Data(
+                ("POST /events?token=\(token) HTTP/1.1\r\nHost: localhost\r\n"
+                    + "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}").utf8)
+            let withToken = IngestHTTP.request(from: tokenData)
+            check(withToken?.token == token, "L64 request parses token query param")
+            let noTokenData = Data(
+                ("POST /events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+                    + "Content-Length: 2\r\n\r\n{}").utf8)
+            let withoutToken = IngestHTTP.request(from: noTokenData)
+            check(withoutToken?.token == nil, "L64 no query means no token")
+            check(
+                NotchHUDConfig.tokenMatches(token, expected: token),
+                "L64 matching token compares equal")
+            check(
+                !NotchHUDConfig.tokenMatches("a" + String(token.dropFirst()), expected: token),
+                "L64 wrong token rejected")
+            check(
+                !NotchHUDConfig.tokenMatches("short", expected: token),
+                "L64 short token rejected (length guard)")
+            check(
+                !NotchHUDConfig.tokenMatches("", expected: token),
+                "L64 empty token rejected")
+            let tokenCommand = ClaudeHookInstaller.hookCommand(port: 41817, token: token)
+            check(
+                tokenCommand.contains("token=\(token)"),
+                "L64 hook command embeds token")
+            check(
+                ClaudeHookInstaller.isBantayHook(["command": tokenCommand]),
+                "L64 matcher accepts token'd hook command")
+            check(
+                ClaudeHookInstaller.isOwnedBantayHook(["command": tokenCommand]),
+                "L64 owned matcher accepts token'd hook command")
+            check(
+                LaunchAgent.xmlEscape("/Users/me/App & Tools/app")
+                    == "/Users/me/App &amp; Tools/app",
+                "L64 xmlEscape escapes ampersand")
+            check(
+                LaunchAgent.xmlEscape("/a<b>c") == "/a&lt;b&gt;c",
+                "L64 xmlEscape escapes angle brackets")
+            check(
+                LaunchAgent.xmlEscape("/q\"u'ote") == "/q&quot;u&apos;ote",
+                "L64 xmlEscape escapes quotes")
+            check(
+                LaunchAgent.plistContent(binaryPath: "/a&b/c", dataDir: "/d<e").contains("&amp;"),
+                "L64 plist escapes binary path")
+        }
+
         // L11. Ingest appends valid payloads to the watched events file.
         MainActor.assumeIsolated {
             let url = FileManager.default.temporaryDirectory
