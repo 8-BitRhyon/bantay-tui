@@ -27,7 +27,7 @@ adversarial corpus (`try to break it`) grows with every plan.
 | 014  | UI/UX audit: glanceable agent control plane (F1–F14) | P1 | L |  -  | DONE — all F1–F14 shipped; wave 3 (F8/F9/F11/F13) merged 2026-08-04 via PR #21 |
 | 015  | Ecosystem architecture & language boundaries (Swift/Go/wire contract) | P1 | M |  -  | DONE — decisions locked 2026-08-04; master doc for 016–018 |
 | 016  | Phase 1: macOS completion & hardening (stability, Sparkle, deeper UI, multi-display/a11y) | P1 | L | 015 | IN PROGRESS — 1a–1d + 3a/3b/3c/4a/4b shipped (PRs #25–#36); security sweep fixes in (PR #37); 2 Sparkle remains |
-| 017  | Phase 2: multiplexer adapters, universal hook SDK, standalone Go TUI | P1 | L | 015, 016 | PROPOSED — plan written 2026-08-04, RED tests pending |
+| 017  | Phase 2: multiplexer adapters, universal hook SDK, standalone Go TUI | P1 | L | 015, 016 | IN PROGRESS — WI-1 tmux, WI-2 zellij, WI-4 gateway, WI-5 UDS ingest shipped (PRs #39–#42); WI-3 routing, WI-6 hook SDK, WI-7 Go TUI next |
 | 018  | Phase 3: remote devbox bridge, cross-platform overlays, web & mobile companion | P2 | L | 015, 016, 017 | PROPOSED — plan written 2026-08-04, RED tests pending |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
