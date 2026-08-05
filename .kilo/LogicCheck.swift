@@ -2527,6 +2527,210 @@ struct LogicCheckMain {
             IslandMetrics.hoverExitGrace >= 0.25,
             "L40 hover grace is at least 250ms")
 
+        // L44. Plan 016 §1d — non-destructive Claude hook merging. The five
+        // adversarial gaps: false-positive matcher, corrupt/foreign `hooks`
+        // shape, entry-level shape leak, data loss on unreadable settings.json,
+        // and cross-port re-merge.
+        do {
+            func dictEquals(_ a: [String: Any], _ b: [String: Any]) -> Bool {
+                (a as NSDictionary).isEqual(to: b)
+            }
+
+            // (a) Tightened matcher: true only for the Bantay command SHAPE
+            // (curl + --data-binary @- + http://127.0.0.1:<digits>/events).
+            let exactCommand = ClaudeHookInstaller.hookCommand(port: 41817)
+            check(
+                ClaudeHookInstaller.isBantayHook(["command": exactCommand]),
+                "L44a exact hookCommand matches tightened matcher")
+            check(
+                ClaudeHookInstaller.isBantayHook(
+                    ["command": "curl -s -X POST --data-binary @- http://127.0.0.1:9999/events"]),
+                "L44a old port matches (port-agnostic digits)")
+            check(
+                !ClaudeHookInstaller.isBantayHook(
+                    ["command": "myagent --url http://127.0.0.1:8080/events"]),
+                "L44a foreign agent URL is not a bantay hook")
+            check(
+                !ClaudeHookInstaller.isBantayHook(["command": "curl http://127.0.0.1/events"]),
+                "L44a bare curl without data-binary is not a bantay hook")
+            check(
+                !ClaudeHookInstaller.isBantayHook(["command": "ssh -R 41817:localhost:41817"]),
+                "L44a ssh reverse tunnel is not a bantay hook")
+            check(
+                !ClaudeHookInstaller.isBantayHook(
+                    [
+                        "command":
+                            "sh -c 'curl -s -X POST --data-binary @- http://127.0.0.1:9999/events'"
+                    ]),
+                "L44a wrapped curl variant unmatched (survives, documented limitation)")
+
+            // (b) Merge returns the input UNCHANGED when `hooks` exists but is
+            // not a [String: Any] — never fabricate or replace.
+            let stringHooks: [String: Any] = ["apiKeyHelper": "default", "hooks": "broken"]
+            let mergedString = ClaudeHookInstaller.mergedSettings(
+                existing: stringHooks, port: 41817)
+            check(
+                dictEquals(mergedString, stringHooks),
+                "L44b merge leaves string hooks value unchanged")
+            let arrayHooks: [String: Any] = [
+                "hooks": [["type": "command", "command": "foreign-tool"]]
+            ]
+            let mergedArray = ClaudeHookInstaller.mergedSettings(existing: arrayHooks, port: 41817)
+            check(
+                dictEquals(mergedArray, arrayHooks),
+                "L44b merge leaves array hooks value unchanged")
+            let oddEventHooks: [String: Any] = ["hooks": ["PermissionPrompt": "not-an-array"]]
+            let mergedOdd = ClaudeHookInstaller.mergedSettings(existing: oddEventHooks, port: 41817)
+            let mergedOddHooks = mergedOdd["hooks"] as? [String: Any]
+            check(
+                mergedOddHooks?["PermissionPrompt"] as? String == "not-an-array",
+                "L44b merge preserves non-conforming event value (no overwrite)")
+            check(
+                (mergedOddHooks?["Stop"] as? [[String: Any]])?.count == 1,
+                "L44b merge still installs bantay hooks for absent events")
+
+            // (c) Removal with a non-array `hooks` value returns the input
+            // unchanged; opaque event values survive alongside real removal.
+            let removedString = ClaudeHookInstaller.removingBantayHooks(from: stringHooks)
+            check(
+                dictEquals(removedString, stringHooks),
+                "L44c removal leaves string hooks value unchanged")
+            let removedOdd = ClaudeHookInstaller.removingBantayHooks(from: oddEventHooks)
+            check(
+                dictEquals(removedOdd, oddEventHooks),
+                "L44c removal preserves non-conforming event value")
+            let mixedHooks: [String: Any] = [
+                "hooks": [
+                    "PermissionPrompt": "opaque",
+                    "Stop": [
+                        [
+                            "matcher": "",
+                            "hooks": [
+                                ["type": "command", "command": exactCommand]
+                            ],
+                        ]
+                    ],
+                ]
+            ]
+            let removedMixed = ClaudeHookInstaller.removingBantayHooks(from: mixedHooks)
+            let removedMixedHooks = removedMixed["hooks"] as? [String: Any]
+            check(
+                removedMixedHooks?["PermissionPrompt"] as? String == "opaque",
+                "L44c opaque event value preserved while bantay Stop removed")
+            check(
+                removedMixedHooks?["Stop"] == nil,
+                "L44c bantay-only Stop still removed alongside opaque value")
+
+            // (d) Cross-port re-merge: settings with a Bantay entry at port
+            // 41000 + a foreign entry, merged at 41817, yield exactly one
+            // Bantay entry per event and preserve the foreign entry (no dup).
+            let oldPortCommand = "curl -s -X POST --data-binary @- http://127.0.0.1:41000/events"
+            let crossPortSettings: [String: Any] = [
+                "hooks": [
+                    "PermissionPrompt": [
+                        [
+                            "matcher": "bantay-old",
+                            "hooks": [["type": "command", "command": oldPortCommand]],
+                        ],
+                        [
+                            "matcher": "",
+                            "hooks": [["type": "command", "command": "foreign-tool"]],
+                        ],
+                    ],
+                    "Stop": [
+                        [
+                            "matcher": "",
+                            "hooks": [["type": "command", "command": oldPortCommand]],
+                        ]
+                    ],
+                ]
+            ]
+            let crossMerged = ClaudeHookInstaller.mergedSettings(
+                existing: crossPortSettings, port: 41817)
+            let crossPP =
+                (crossMerged["hooks"] as? [String: Any])?["PermissionPrompt"]
+                as? [[String: Any]]
+            let crossStop =
+                (crossMerged["hooks"] as? [String: Any])?["Stop"]
+                as? [[String: Any]]
+            check(
+                crossPP?.count == 2,
+                "L44d cross-port merge yields two PermissionPrompt entries (got \(crossPP?.count ?? -1))"
+            )
+            check(
+                crossStop?.count == 1,
+                "L44d cross-port merge yields one Stop entry (got \(crossStop?.count ?? -1))")
+            let crossBantayCount = (crossPP ?? []).filter {
+                ClaudeHookInstaller.isBantayEntry($0)
+            }.count
+            check(
+                crossBantayCount == 1,
+                "L44d exactly one bantay PermissionPrompt entry after cross-port merge (got \(crossBantayCount))"
+            )
+            let crossForeignSurvives = (crossPP ?? []).contains {
+                ($0["hooks"] as? [[String: Any]])?.first?["command"] as? String == "foreign-tool"
+            }
+            check(
+                crossForeignSurvives,
+                "L44d foreign entry survives cross-port merge")
+
+            // (e) ClaudeHookWriteDecision.decide table: abort whenever the file
+            // exists but did not parse, regardless of enabled.
+            let sample: [String: Any] = ["a": 1]
+            switch ClaudeHookWriteDecision.decide(
+                enabled: true, fileExists: false, parsed: false, merged: sample)
+            {
+            case .write(let payload):
+                check(dictEquals(payload, sample), "L44e no file -> write (fresh install)")
+            case .abort:
+                check(false, "L44e no file -> write (fresh install)")
+            }
+            switch ClaudeHookWriteDecision.decide(
+                enabled: true, fileExists: true, parsed: false, merged: sample)
+            {
+            case .abort:
+                check(true, "L44e unparseable existing file aborts install")
+            case .write:
+                check(false, "L44e unparseable existing file aborts install")
+            }
+            switch ClaudeHookWriteDecision.decide(
+                enabled: false, fileExists: true, parsed: false, merged: sample)
+            {
+            case .abort:
+                check(true, "L44e unparseable existing file aborts removal")
+            case .write:
+                check(false, "L44e unparseable existing file aborts removal")
+            }
+            switch ClaudeHookWriteDecision.decide(
+                enabled: true, fileExists: true, parsed: true, merged: sample)
+            {
+            case .write(let payload):
+                check(dictEquals(payload, sample), "L44e parsed existing file writes merged")
+            case .abort:
+                check(false, "L44e parsed existing file writes merged")
+            }
+
+            // Re-assert the L28/L28b legacy corpus still holds against the
+            // tightened matcher: the exact hookCommand output must match.
+            let l28Entry: [String: Any] = [
+                "matcher": "bantay",
+                "hooks": [["type": "command", "command": exactCommand]],
+            ]
+            check(
+                ClaudeHookInstaller.isBantayEntry(l28Entry),
+                "L44 legacy L28 bantay entry still recognized by tightened matcher")
+            let remergeSame = ClaudeHookInstaller.mergedSettings(
+                existing: ["hooks": ["PermissionPrompt": [foreignPermission, l28Entry]]],
+                port: 41817)
+            let remergeSamePP =
+                (remergeSame["hooks"] as? [String: Any])?["PermissionPrompt"]
+                as? [[String: Any]]
+            check(
+                remergeSamePP?.count == 2,
+                "L44 legacy L28b same-port re-merge still no-dup (got \(remergeSamePP?.count ?? -1))"
+            )
+        }
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

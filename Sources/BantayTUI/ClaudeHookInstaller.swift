@@ -36,12 +36,19 @@ enum ClaudeHookInstaller {
         ]
     }
 
-    /// True when a hook's command targets the Bantay ingest server, regardless
-    /// of which port Bantay used at install time.
+    /// True when a hook's command has the Bantay command SHAPE: a `curl`
+    /// invocation that pipes the hook's stdin to the local ingest server on
+    /// any port. The port is matched as port-agnostic digits so old installs
+    /// stay removable after `ingestPort` changes. A foreign command that merely
+    /// mentions a localhost URL (e.g. `myagent --url http://127.0.0.1:8080/events`)
+    /// is not matched and is never deleted. A Bantay command wrapped in a
+    /// launcher (e.g. `sh -c 'curl ...'`) is also not matched — it survives
+    /// removal untouched, never corrupted.
     static func isBantayHook(_ hook: [String: Any]) -> Bool {
         guard let command = hook["command"] as? String else { return false }
-        return command.contains("http://127.0.0.1:")
-            && command.contains("/events")
+        let pattern =
+            #"^\s*curl\b.*\s--data-binary\s+@-\s+http://127\.0\.0\.1:\d+/events\b\s*$"#
+        return command.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// True when an entry's hooks include at least one Bantay hook.
@@ -54,17 +61,31 @@ enum ClaudeHookInstaller {
     /// all unrelated keys. Existing entries for the same events are kept and
     /// Bantay's entries appended after any stale Bantay entries are removed,
     /// so foreign hooks (herdr, user config) are never overwritten and
-    /// re-installs do not duplicate.
+    /// re-installs do not duplicate. A `hooks` value that exists but is not a
+    /// `[String: Any]` (a String, an Array, or any other foreign shape) is
+    /// opaque and returned unchanged — never fabricated or replaced. A
+    /// non-conforming value for a single event is preserved untouched too,
+    /// even at the cost of skipping that event's Bantay hook.
     static func mergedSettings(existing: [String: Any], port: Int) -> [String: Any] {
+        guard existing["hooks"] == nil || existing["hooks"] is [String: Any] else {
+            return existing
+        }
         var merged = existing
         var hooks = (existing["hooks"] as? [String: Any]) ?? [:]
         let bantayHooks = (hooksSection(port: port)["hooks"] as? [String: Any]) ?? [:]
         for (event, bantayEntries) in bantayHooks {
             guard let fresh = bantayEntries as? [[String: Any]] else { continue }
-            var existingEntries = (hooks[event] as? [[String: Any]]) ?? []
-            existingEntries.removeAll { isBantayEntry($0) }
-            existingEntries.append(contentsOf: fresh)
-            hooks[event] = existingEntries
+            guard let existingEntries = hooks[event] as? [[String: Any]] else {
+                if hooks[event] != nil {
+                    continue
+                }
+                hooks[event] = fresh
+                continue
+            }
+            var entries = existingEntries
+            entries.removeAll { isBantayEntry($0) }
+            entries.append(contentsOf: fresh)
+            hooks[event] = entries
         }
         merged["hooks"] = hooks
         return merged
@@ -149,5 +170,25 @@ enum ClaudeHookInstaller {
         default:
             return nil
         }
+    }
+}
+
+/// Decides whether the I/O layer may write `~/.claude/settings.json` after a
+/// read. Writing over a file that exists but failed to parse would destroy the
+/// user's Claude Code configuration (a truncated write, a permission hiccup,
+/// or foreign JSON5/comment-laden content all produce `parsed == false`), so
+/// the caller must `abort` — never write — in that case.
+enum ClaudeHookWriteDecision {
+    case write([String: Any])
+    case abort
+
+    /// `abort` whenever `fileExists && !parsed`; otherwise `write(merged)`.
+    /// `enabled` is carried for the caller's context; the abort is independent
+    /// of install vs removal intent.
+    static func decide(
+        enabled: Bool, fileExists: Bool, parsed: Bool, merged: [String: Any]
+    ) -> ClaudeHookWriteDecision {
+        guard !(fileExists && !parsed) else { return .abort }
+        return .write(merged)
     }
 }
