@@ -38,6 +38,9 @@ struct NotchStatusView: View {
     @State private var shelfFiles: [ShelfFile] = []
     @State private var lastChangeCount = NSPasteboard.general.changeCount
     @State private var legacyKeyMonitor: Any?
+    /// Keyboard-navigation cursor over `mergedRoster` (plan 016 4b). Nil means
+    /// no row is focused; arrow keys move it, Enter activates, Esc clears.
+    @State private var focusedRow: Int?
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -279,6 +282,11 @@ struct NotchStatusView: View {
                 return true
             }
         )
+        .modifier(
+            NavigationKeyPressModifier { keyCode in
+                handleNavigationKey(keyCode)
+            }
+        )
         .onReceive(
             NotificationCenter.default.publisher(for: .notchHotkeyPressed)
         ) { _ in
@@ -347,15 +355,67 @@ struct NotchStatusView: View {
         }
     }
 
+    /// Arrow-key / Enter / Esc roster navigation (plan 016 4b). Pure cursor
+    /// movement delegates to `IslandMetrics.rowIndex`; Enter activates the
+    /// focused row's primary action; Esc clears focus. Returns true when
+    /// handled.
+    private func handleNavigationKey(_ keyCode: UInt16) -> Bool {
+        guard composingPaneId == nil, isExpanded else { return false }
+        let count = mergedRoster.count
+        let current = focusedRow
+        switch keyCode {
+        case 126:  // up arrow
+            focusedRow = IslandMetrics.rowIndex(before: current ?? 0, count: count)
+            return focusedRow != current || current != nil
+        case 125:  // down arrow
+            focusedRow = IslandMetrics.rowIndex(after: current ?? -1, count: count)
+            return true
+        case 36:  // return
+            guard let index = focusedRow, mergedRoster.indices.contains(index) else {
+                return false
+            }
+            activateRow(mergedRoster[index])
+            return true
+        case 53:  // escape
+            focusedRow = nil
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Primary keyboard action for a focused roster row: queue rows approve,
+    /// roster rows expand/peek. Mirrors the hover/click primary action.
+    private func activateRow(_ agent: AgentSnapshot) {
+        if approvalQueueAgents.contains(where: {
+            $0.paneId == agent.paneId
+                && ($0.kind == .accessRequest || $0.kind == .waiting)
+        }) {
+            guard let paneId = agent.paneId else { return }
+            eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+        } else {
+            showDetail = true
+            fetchPeek(paneId: agent.paneId ?? agent.source)
+        }
+    }
+
     /// macOS 13 fallback for the single-key roster shortcuts: `.onKeyPress`
     /// is macOS 14+. Mirrors its scope (panel key, expanded, not composing).
+    /// Also routes arrow/Enter/Esc navigation keys.
     private func installLegacyKeyMonitor() {
         guard legacyKeyMonitor == nil else { return }
         legacyKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard event.window === AppDelegate.window,
                 isExpanded,
-                composingPaneId == nil,
-                NotchHUDConfig.shared.keyboardShortcuts,
+                composingPaneId == nil
+            else {
+                return event
+            }
+            let keyCode = event.keyCode
+            if handleNavigationKey(keyCode) {
+                return nil
+            }
+            guard NotchHUDConfig.shared.keyboardShortcuts,
                 let char = event.charactersIgnoringModifiers?.first,
                 let shortcut = IslandMetrics.shortcutKey(for: char)
             else {
@@ -476,6 +536,33 @@ struct NotchStatusView: View {
                     }
                     return .handled
                 }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// Arrow-key / Enter / Esc roster navigation via `.onKeyPress(keys:)` on
+    /// macOS 14+. The keys set is the physical arrow/return/escape keys, so it
+    /// works regardless of keyboard layout.
+    private struct NavigationKeyPressModifier: ViewModifier {
+        var handle: (_ keyCode: UInt16) -> Bool
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if #available(macOS 14.0, *) {
+                content
+                    .onKeyPress(.upArrow, phases: .down) { _ in
+                        handle(126) ? .handled : .ignored
+                    }
+                    .onKeyPress(.downArrow, phases: .down) { _ in
+                        handle(125) ? .handled : .ignored
+                    }
+                    .onKeyPress(.return, phases: .down) { _ in
+                        handle(36) ? .handled : .ignored
+                    }
+                    .onKeyPress(.escape, phases: .down) { _ in
+                        handle(53) ? .handled : .ignored
+                    }
             } else {
                 content
             }
@@ -958,7 +1045,7 @@ struct NotchStatusView: View {
                 if queueSplit.overflow > 0 {
                     Text("+\(queueSplit.overflow) more waiting")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.white.opacity(0.45))
+                        .foregroundColor(.white.opacity(0.6))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
                         .frame(height: 18)
@@ -1066,6 +1153,7 @@ struct NotchStatusView: View {
                     selected ? Color.white.opacity(0.14) : Color.clear, in: Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityValue(selected ? "selected" : "not selected")
     }
 
     private var shelfContent: some View {
@@ -1169,7 +1257,7 @@ struct NotchStatusView: View {
             if let title = eventManager.currentEvent?.title {
                 Text(title)
                     .font(.system(size: 9, weight: .regular))
-                    .foregroundColor(.white.opacity(0.45))
+                    .foregroundColor(.white.opacity(0.6))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: 200, alignment: .trailing)
@@ -1193,6 +1281,7 @@ struct NotchStatusView: View {
             .buttonStyle(.plain)
             .help(panelPinned ? "Unpin panel" : "Pin panel open")
             .accessibilityLabel(panelPinned ? "Unpin panel" : "Pin panel open")
+            .accessibilityValue(panelPinned ? "pinned" : "unpinned")
         }
         .padding(.horizontal, 16)
         .frame(height: IslandMetrics.headerHeight)
@@ -1211,7 +1300,7 @@ struct NotchStatusView: View {
                         .truncationMode(.middle)
                     Text(agent.title ?? agent.message ?? agent.kind.label)
                         .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.white.opacity(0.55))
+                        .foregroundColor(.white.opacity(0.6))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -1399,7 +1488,7 @@ struct NotchStatusView: View {
             Circle().fill(Color(hex: color)).frame(width: 5, height: 5)
             Text(title)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.55))
+                .foregroundColor(.white.opacity(0.6))
             Text("\(count)")
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.35))
@@ -1413,8 +1502,12 @@ struct NotchStatusView: View {
 
     private var flatAgentRows: some View {
         VStack(spacing: 0) {
-            ForEach(mergedRoster) { agent in
+            ForEach(Array(mergedRoster.enumerated()), id: \.element.id) { index, agent in
                 agentRow(agent: agent)
+                    .background(
+                        focusedRow == index
+                            ? Color.accentColor.opacity(0.18) : Color.clear
+                    )
             }
         }
     }
@@ -1472,11 +1565,11 @@ struct NotchStatusView: View {
                 if usage.costUSD > 0 {
                     Text(String(format: "$%.2f", usage.costUSD))
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.55))
+                        .foregroundColor(.white.opacity(0.6))
                 }
                 Text(UsageTracker.compactTokens(usage.totalTokens))
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.55))
+                    .foregroundColor(.white.opacity(0.6))
                 if usage.totalTokens > 0,
                     let tokensPerMinute = eventManager.usageRate.tokensPerMinute
                 {
@@ -1487,7 +1580,7 @@ struct NotchStatusView: View {
                         ? Color(hex: "#ff6b6b")
                         : rateLevel == .warn
                             ? Color(hex: "#ffe066")
-                            : .white.opacity(0.55)
+                            : .white.opacity(0.6)
                     Text("· \(UsageTracker.compactTokens(Int(tokensPerMinute)))/min")
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundColor(rateColor)
@@ -1575,7 +1668,7 @@ struct NotchStatusView: View {
                                 }
                                 Text(agent.source)
                                     .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.45))
+                                    .foregroundColor(.white.opacity(0.6))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
@@ -1611,7 +1704,7 @@ struct NotchStatusView: View {
                         if let title = agent.title {
                             Text(title)
                                 .font(.system(size: 9, weight: .regular))
-                                .foregroundColor(.white.opacity(0.45))
+                                .foregroundColor(.white.opacity(0.6))
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         }

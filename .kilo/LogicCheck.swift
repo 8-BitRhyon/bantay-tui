@@ -3292,6 +3292,60 @@ struct LogicCheckMain {
             "L45 peek maxY aligns to the 2x grid (got \(alignedPeek.maxY))")
         check(!alignedPeek.intersects(fractionalIsland), "L45 aligned peek still avoids the island")
 
+        // L49. Plan 016 §4b — arrow-key roster navigation. Pure rowIndex
+        // model: no wrap at either end, safe on count 0/1, and strictly
+        // monotonic. The UI seeds `current` with -1 (nothing focused → first
+        // row) and `count` (nothing focused → last row) so the sentinels are
+        // part of the contract.
+        check(
+            IslandMetrics.rowIndex(after: 0, count: 3) == 1,
+            "L49 rowIndex(after 0 of 3) -> 1")
+        check(
+            IslandMetrics.rowIndex(after: 2, count: 3) == nil,
+            "L49 down from last row is nil (no wrap)")
+        check(
+            IslandMetrics.rowIndex(before: 2, count: 3) == 1,
+            "L49 rowIndex(before 2 of 3) -> 1")
+        check(
+            IslandMetrics.rowIndex(before: 0, count: 3) == nil,
+            "L49 up from first row is nil (no wrap)")
+        check(
+            IslandMetrics.rowIndex(after: 0, count: 0) == nil,
+            "L49 after on empty roster is nil")
+        check(
+            IslandMetrics.rowIndex(before: 0, count: 0) == nil,
+            "L49 before on empty roster is nil")
+        check(
+            IslandMetrics.rowIndex(after: 0, count: 1) == nil,
+            "L49 single row has no next (got \(String(describing: IslandMetrics.rowIndex(after: 0, count: 1))))"
+        )
+        check(
+            IslandMetrics.rowIndex(before: 0, count: 1) == nil,
+            "L49 single row has no previous (got \(String(describing: IslandMetrics.rowIndex(before: 0, count: 1))))"
+        )
+        check(
+            IslandMetrics.rowIndex(after: -1, count: 3) == 0,
+            "L49 sentinel -1 focuses first row (got \(String(describing: IslandMetrics.rowIndex(after: -1, count: 3))))"
+        )
+        check(
+            IslandMetrics.rowIndex(before: 3, count: 3) == 2,
+            "L49 sentinel count focuses last row (got \(String(describing: IslandMetrics.rowIndex(before: 3, count: 3))))"
+        )
+        check(
+            IslandMetrics.rowIndex(after: 1, count: 2) == nil,
+            "L49 down from penultimate of 2 is nil (no wrap)")
+        check(
+            IslandMetrics.rowIndex(before: 1, count: 2) == 0,
+            "L49 up from second of 2 is first (monotonic, got \(String(describing: IslandMetrics.rowIndex(before: 1, count: 2))))"
+        )
+        var walk = 0
+        var monotonic = true
+        while let next = IslandMetrics.rowIndex(after: walk, count: 5) {
+            if next != walk + 1 { monotonic = false }
+            walk = next
+        }
+        check(monotonic && walk == 4, "L49 down-walk 0..4 is monotonic, no wrap (walk \(walk))")
+
         // MARK: - L47 global hotkey mapping (3c)
         // Documented table: ⌥Space=toggle (49), ⌥Y=approve top (16),
         // ⌥N=deny top (45), ⌥S=snooze 15m (1). Physical, layout-independent
