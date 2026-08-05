@@ -3434,6 +3434,86 @@ struct LogicCheckMain {
             "L47 unknown keyCode -> nil")
 
 
+
+        // MARK: - L52 zellij adapter (WI-2, plan 017)
+        // `zellij ls` session listing: --short (name per line), --no-formatting
+        // (name + age + optional suffix), default (ANSI), and JSON variants.
+        // Unhandled/error output (empty stdout) must yield empty results.
+        check(
+            ZellijAdapter.parseSessions("") == [],
+            "L52 empty/unhandled zellij ls stdout -> []")
+        check(
+            ZellijAdapter.parseSessions("foo\nbar\n") == ["foo", "bar"],
+            "L52 zellij ls --short parses one name per line")
+        let lsNoFormat =
+            "foo [Created 2h ago]\nbar [Created 5m ago] (current)\n"
+            + "dead [Created 1d ago] (EXITED - attach to resurrect)\n"
+        check(
+            ZellijAdapter.parseSessions(lsNoFormat) == ["foo", "bar", "dead"],
+            "L52 zellij ls --no-formatting keeps names, drops age/suffix")
+        check(
+            ZellijAdapter.parseSessions("\u{1b}[32;1mfoo\u{1b}[m [Created \u{1b}[35;1m2h\u{1b}[m ago]\n")
+                == ["foo"],
+            "L52 default (ANSI) zellij ls strips styling")
+        check(
+            ZellijAdapter.parseSessions(#"["alpha", "beta"]"#) == ["alpha", "beta"],
+            "L52 zellij ls JSON string array parses")
+        check(
+            ZellijAdapter.parseSessions(#"[{"name": "one"}, {"name": "two"}]"#) == ["one", "two"],
+            "L52 zellij ls JSON object array parses by name")
+        check(
+            ZellijAdapter.parseSessions("[{bad json") == [],
+            "L52 malformed zellij ls JSON -> []")
+        // Unhandled verbs never fabricate results.
+        check(
+            ZellijAdapter.supportsActionVerb("dump-screen"),
+            "L52 dump-screen verb is in the 0.40+ action surface")
+        check(
+            !ZellijAdapter.supportsActionVerb("frobnicate-pane"),
+            "L52 unknown action verb is rejected")
+        // Verb construction (pure, documented zellij 0.40+ assumption).
+        check(
+            ZellijAdapter.listSessionsCommand() == ["ls", "--short"],
+            "L52 session listing verb is `zellij ls --short`")
+        check(
+            ZellijAdapter.listPanesCommand(session: "s1")
+                == ["--session", "s1", "action", "list-panes", "--json"],
+            "L52 pane listing verb targets the session with --json")
+        check(
+            ZellijAdapter.captureCommand(session: "s1", pane: "terminal_3")
+                == ["--session", "s1", "action", "dump-screen", "--pane-id", "terminal_3"],
+            "L52 capture verb is dump-screen --pane-id")
+        check(
+            ZellijAdapter.focusCommand(session: "s1", pane: "terminal_3")
+                == ["--session", "s1", "action", "focus-pane-id", "terminal_3"],
+            "L52 focus verb is focus-pane-id")
+        check(
+            ZellijAdapter.sendKeysCommand(session: "s1", pane: "terminal_3", keys: ["y", "enter"])
+                == ["--session", "s1", "action", "send-keys", "--pane-id", "terminal_3", "y", "Enter"],
+            "L52 send-keys verb maps herdr keys to zellij names")
+        check(
+            ZellijAdapter.writeCharsCommand(session: "s1", pane: "terminal_3", text: "echo hi")
+                == ["--session", "s1", "action", "write-chars", "--pane-id", "terminal_3", "echo hi"],
+            "L52 sendLine verb is write-chars")
+        // (session, pane) identity composition + drift on session kill.
+        check(
+            ZellijAdapter.composePaneId(session: "s1", pane: "terminal_3") == "s1|terminal_3",
+            "L52 paneId composes (session, pane) into one string")
+        check(
+            ZellijAdapter.splitPaneId("s1|terminal_3")?.session == "s1"
+                && ZellijAdapter.splitPaneId("s1|terminal_3")?.pane == "terminal_3",
+            "L52 paneId splits back into (session, pane)")
+        check(
+            ZellijAdapter.splitPaneId("terminal_3") == nil,
+            "L52 malformed paneId without a session -> nil")
+        let drifted = ZellijAdapter.driftedPaneIds(
+            paneIds: ["s1|terminal_1", "s2|terminal_2", "s3|terminal_1"],
+            activeSessions: ["s1", "s3"])
+        check(
+            drifted == ["s2|terminal_2"],
+            "L52 killed session drifts its pane ids (got \(drifted))")
+
+
         // L51. Plan 017 WI-1 — tmux adapter: dual-template `-F` pane parsing
         // (full 8-field + minimal 4-field shapes, tab/quoted variants),
         // `%N` -> `session:window.pane` id composition, extended PaneInfo
@@ -3630,6 +3710,7 @@ struct LogicCheckMain {
             PlexerDetection.detect(env: ["TMUX": "/tmp/stale"], tmuxSocketExists: false)
                 == .tmux,
             "L51 TMUX env wins even with no socket on disk")
+
 
 
         // MARK: - L54. Plan 017 WI-4 — control gateway (W1 wire contract,
