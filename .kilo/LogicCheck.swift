@@ -3433,6 +3433,205 @@ struct LogicCheckMain {
             IslandMetrics.hotkeyAction(keyCode: 99, modifiers: [opt]) == nil,
             "L47 unknown keyCode -> nil")
 
+
+        // L51. Plan 017 WI-1 — tmux adapter: dual-template `-F` pane parsing
+        // (full 8-field + minimal 4-field shapes, tab/quoted variants),
+        // `%N` -> `session:window.pane` id composition, extended PaneInfo
+        // fields, PATH discovery, and detection wiring. The parser and
+        // candidate paths are pure and harness-safe; the CLI verbs are
+        // fire-and-forget and are never exercised here.
+        let fullPanes = TmuxAdapter.parsePaneLines(
+            "dev\t1\t2\t%12\t/dev/ttys003\t4242\tzsh\t/Users/me/proj")
+        check(fullPanes.count == 1, "L51 full-shape line parses (got \(fullPanes.count))")
+        let full = fullPanes[0]
+        check(
+            full.id == "dev:1.2",
+            "L51 %N composes to session:window.pane (got \(full.id))")
+        check(full.session == "dev", "L51 full session extracted")
+        check(
+            full.windowIndex == 1 && full.paneIndex == 2,
+            "L51 full window/pane extracted (got \(String(describing: full.windowIndex)),\(String(describing: full.paneIndex)))")
+        check(
+            full.tty == "/dev/ttys003",
+            "L51 full tty extracted (got \(String(describing: full.tty)))")
+        check(
+            full.pid == 4242,
+            "L51 full pid extracted (got \(String(describing: full.pid)))")
+        check(
+            full.currentCommand == "zsh",
+            "L51 full current command extracted (got \(String(describing: full.currentCommand)))")
+        check(
+            full.currentPath == "/Users/me/proj",
+            "L51 full current path extracted (got \(String(describing: full.currentPath)))")
+
+        let minimalPanes = TmuxAdapter.parsePaneLines("dev\t1\t2\t%12\n")
+        check(
+            minimalPanes.count == 1,
+            "L51 minimal-shape line parses (got \(minimalPanes.count))")
+        let minimal = minimalPanes[0]
+        check(
+            minimal.id == "dev:1.2",
+            "L51 minimal id composes (got \(minimal.id))")
+        check(
+            minimal.tty == nil && minimal.pid == nil,
+            "L51 minimal lacks tty/pid")
+        check(
+            minimal.currentCommand == nil && minimal.currentPath == nil,
+            "L51 minimal lacks command/path")
+
+        let mixed = TmuxAdapter.parsePaneLines(
+            "one\t0\t0\t%1\n" + "two\t2\t1\t%5\t/dev/ttys001\t100\tbash\t/home/x\n")
+        check(
+            mixed.count == 2,
+            "L51 mixed template shapes parse (got \(mixed.count))")
+        check(
+            mixed[0].id == "one:0.0" && mixed[1].id == "two:2.1",
+            "L51 mixed ids compose (got \(mixed.map(\.id)))")
+
+        check(TmuxAdapter.parsePaneLines("").isEmpty, "L51 empty output -> []")
+        check(
+            TmuxAdapter.parsePaneLines("  \n\t\n").isEmpty,
+            "L51 whitespace-only output -> []")
+        check(
+            TmuxAdapter.parsePaneLines("dev\t1\t2").isEmpty,
+            "L51 3-field line skipped")
+        check(
+            TmuxAdapter.parsePaneLines("dev\t1\t2\t%12\tstray").isEmpty,
+            "L51 5-field line skipped (no template shape)")
+        check(
+            TmuxAdapter.parsePaneLines("dev\t1\t2\t%12\ttty\tpid\tcmd").isEmpty,
+            "L51 7-field line skipped (no template shape)")
+        check(
+            TmuxAdapter.parsePaneLines("garbage").isEmpty,
+            "L51 single-field garbage skipped")
+        let withBad = TmuxAdapter.parsePaneLines("ok\t0\t0\t%1\nbroken\nok2\t1\t1\t%2\n")
+        check(
+            withBad.count == 2,
+            "L51 malformed line skipped in multi-line output (got \(withBad.count))")
+        check(
+            withBad.map(\.id) == ["ok:0.0", "ok2:1.1"],
+            "L51 multi-line ids ordered")
+
+        let tabbed = TmuxAdapter.parsePaneLines(
+            "dev\t1\t2\t%12\t/dev/ttys003\t4242\tzsh\t/Users/me/My\tProject")
+        check(
+            tabbed.count == 1,
+            "L51 tab-in-path line parses (got \(tabbed.count))")
+        check(
+            tabbed[0].id == "dev:1.2",
+            "L51 tab-in-path id composes (got \(tabbed[0].id))")
+        check(
+            tabbed[0].currentPath == "/Users/me/My\tProject",
+            "L51 tab-in-path reconstructed (got \(String(describing: tabbed[0].currentPath)))")
+
+        let quoted = TmuxAdapter.parsePaneLines(
+            "\"dev\"\t\"1\"\t\"2\"\t\"%12\"\t\"/dev/ttys003\"\t\"4242\"\t\"zsh\"\t\"/Users/me/My Project\"")
+        check(
+            quoted.count == 1 && quoted[0].id == "dev:1.2",
+            "L51 quoted fields parse (got \(quoted.count))")
+        check(
+            quoted[0].session == "dev" && quoted[0].pid == 4242,
+            "L51 quoted fields unquoted")
+        check(
+            quoted[0].currentPath == "/Users/me/My Project",
+            "L51 quoted path with spaces kept (got \(String(describing: quoted[0].currentPath)))")
+
+        let badPid = TmuxAdapter.parsePaneLines(
+            "dev\t1\t2\t%12\t/dev/ttys003\tnan\tzsh\t/p")
+        check(
+            badPid.count == 1 && badPid[0].pid == nil,
+            "L51 non-numeric pid decodes nil")
+        check(
+            badPid[0].id == "dev:1.2" && badPid[0].currentCommand == "zsh",
+            "L51 non-numeric pid keeps the pane")
+
+        // PaneInfo decodes with and without the new tmux fields.
+        let legacyPaneJSON = #"{"id":"w1:p1","title":"t","cwd":"/x","workspace_id":"w1"}"#
+        guard let legacyPane = try? JSONDecoder().decode(
+            PaneInfo.self, from: Data(legacyPaneJSON.utf8))
+        else {
+            check(false, "L51 legacy PaneInfo decodes")
+            fatalError()
+        }
+        check(
+            legacyPane.id == "w1:p1" && legacyPane.title == "t" && legacyPane.cwd == "/x",
+            "L51 legacy PaneInfo fields intact")
+        check(
+            legacyPane.session == nil && legacyPane.pid == nil && legacyPane.tty == nil
+                && legacyPane.windowIndex == nil && legacyPane.paneIndex == nil
+                && legacyPane.currentCommand == nil && legacyPane.currentPath == nil,
+            "L51 legacy PaneInfo decodes without new fields")
+        let fullPaneJSON =
+            #"{"id":"dev:1.2","tty":"/dev/ttys003","pid":4242,"session":"dev","window_index":1,"pane_index":2,"current_command":"zsh","current_path":"/Users/me/proj"}"#
+        guard let fullPane = try? JSONDecoder().decode(
+            PaneInfo.self, from: Data(fullPaneJSON.utf8))
+        else {
+            check(false, "L51 full PaneInfo decodes")
+            fatalError()
+        }
+        check(
+            fullPane.pid == 4242 && fullPane.session == "dev",
+            "L51 full PaneInfo decodes new fields (got pid \(String(describing: fullPane.pid)))")
+        check(
+            fullPane.windowIndex == 1 && fullPane.paneIndex == 2,
+            "L51 full PaneInfo window/pane decode")
+        check(
+            fullPane.currentCommand == "zsh" && fullPane.currentPath == "/Users/me/proj",
+            "L51 full PaneInfo command/path decode")
+
+        // PATH discovery mirrors the herdr fallback-chain pattern.
+        let tmuxPaths = TmuxAdapter.candidateTmuxPaths(
+            env: ["PATH": "/usr/local/bin:/usr/bin"], home: "/Users/me")
+        check(
+            tmuxPaths == [
+                "/usr/local/bin/tmux", "/usr/bin/tmux", "/opt/homebrew/bin/tmux", "/bin/tmux",
+            ],
+            "L51 PATH candidates in priority order (got \(tmuxPaths))")
+        check(
+            TmuxAdapter.candidateTmuxPaths(env: [:], home: "/Users/me").count >= 3,
+            "L51 fallback chain without PATH")
+
+        // Pane-list CLI variants: full template first, minimal fallback,
+        // both pure `list-panes -a` reads that never auto-start a server.
+        let tmuxVariants = TmuxAdapter.paneListCommandVariants()
+        check(
+            tmuxVariants.count == 2,
+            "L51 two pane-list variants (got \(tmuxVariants.count))")
+        check(
+            tmuxVariants[0].prefix(3) == ["list-panes", "-a", "-F"],
+            "L51 full variant is list-panes -a -F")
+        check(
+            tmuxVariants[0][3].contains("pane_tty") && tmuxVariants[0][3].contains("pane_pid")
+                && tmuxVariants[0][3].contains("pane_current_command")
+                && tmuxVariants[0][3].contains("pane_current_path"),
+            "L51 full template carries tty/pid/command/path")
+        check(
+            tmuxVariants[1][3].split(separator: "\t").count == 4,
+            "L51 minimal fallback template is 4 fields (got \(tmuxVariants[1][3]))")
+        for variant in tmuxVariants {
+            check(
+                !variant.contains("new-session") && !variant.contains("start-server"),
+                "L51 listing never auto-starts a server")
+        }
+
+        // Detection wiring: TmuxAdapter is selected when detection yields tmux.
+        check(TmuxAdapter().kind == .tmux, "L51 TmuxAdapter kind is tmux")
+        check(
+            PlexerDetection.detect(env: ["TMUX": "/private/tmp/tmux-501/default,1,0"])
+                == .tmux,
+            "L51 TMUX env selects tmux")
+        check(
+            PlexerDetection.detect(env: [:], tmuxSocketExists: true) == .tmux,
+            "L51 tmux socket selects tmux")
+        check(
+            PlexerDetection.detect(env: ["HERDR_ENV": "1", "TMUX": "/tmp/x"]) == .herdr,
+            "L51 herdr wins over tmux env")
+        check(
+            PlexerDetection.detect(env: ["TMUX": "/tmp/stale"], tmuxSocketExists: false)
+                == .tmux,
+            "L51 TMUX env wins even with no socket on disk")
+
+
         // MARK: - L54. Plan 017 WI-4 — control gateway (W1 wire contract,
         // UDS NDJSON). Framing round-trip, request parsing, route table,
         // response shapes, socket path resolution.
@@ -3536,6 +3735,7 @@ struct LogicCheckMain {
             ControlGateway.socketPath(env: ["BANTAY_CONTROL_SOCKET": ""], home: "/Users/u")
                 == "/Users/u/Library/Application Support/Bantay-TUI/control.sock",
             "L54 empty env override falls back to default")
+
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
