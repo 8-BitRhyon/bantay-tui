@@ -1851,6 +1851,7 @@ struct NotchStatusView: View {
     private func beginComposing(_ agent: AgentSnapshot) {
         guard agent.paneId != nil else { return }
         composingPaneId = agent.paneId
+        AppDelegate.composingPaneId = agent.paneId
         promptText = ""
         DispatchQueue.main.async { promptFocused = true }
     }
@@ -1867,6 +1868,7 @@ struct NotchStatusView: View {
 
     private func cancelComposing() {
         composingPaneId = nil
+        AppDelegate.composingPaneId = nil
         promptText = ""
         promptFocused = false
     }

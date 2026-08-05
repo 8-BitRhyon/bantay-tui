@@ -101,6 +101,15 @@ final class NotchHUDConfig {
     var globalHotkeyEnabled = true {
         didSet { defaults.set(globalHotkeyEnabled, forKey: "globalHotkeyEnabled") }
     }
+    var globalHotkeyApproveEnabled = true {
+        didSet { defaults.set(globalHotkeyApproveEnabled, forKey: "globalHotkeyApproveEnabled") }
+    }
+    var globalHotkeyDenyEnabled = true {
+        didSet { defaults.set(globalHotkeyDenyEnabled, forKey: "globalHotkeyDenyEnabled") }
+    }
+    var globalHotkeySnoozeEnabled = false {
+        didSet { defaults.set(globalHotkeySnoozeEnabled, forKey: "globalHotkeySnoozeEnabled") }
+    }
     var keyboardShortcuts = true {
         didSet { defaults.set(keyboardShortcuts, forKey: "keyboardShortcuts") }
     }
@@ -271,6 +280,15 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "globalHotkeyEnabled") as? Bool {
             globalHotkeyEnabled = v
+        }
+        if let v = defaults.object(forKey: "globalHotkeyApproveEnabled") as? Bool {
+            globalHotkeyApproveEnabled = v
+        }
+        if let v = defaults.object(forKey: "globalHotkeyDenyEnabled") as? Bool {
+            globalHotkeyDenyEnabled = v
+        }
+        if let v = defaults.object(forKey: "globalHotkeySnoozeEnabled") as? Bool {
+            globalHotkeySnoozeEnabled = v
         }
         if let v = defaults.object(forKey: "keyboardShortcuts") as? Bool {
             keyboardShortcuts = v
