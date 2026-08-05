@@ -64,6 +64,7 @@ jobs:
             Sources/BantayTUI/ControlGateway.swift \
             Sources/BantayTUI/IslandMetrics.swift \
             Sources/BantayTUI/PlexerAdapter.swift \
+            Sources/BantayTUI/ZellijAdapter.swift \
             Sources/BantayTUI/AgentEventManager.swift \
             Sources/BantayTUI/UsageTracker.swift \
             Sources/BantayTUI/EventIngestServer.swift \
@@ -152,6 +153,7 @@ jobs:
             Sources/BantayTUI/ControlGateway.swift \
             Sources/BantayTUI/IslandMetrics.swift \
             Sources/BantayTUI/PlexerAdapter.swift \
+            Sources/BantayTUI/ZellijAdapter.swift \
             Sources/BantayTUI/AgentEventManager.swift \
             Sources/BantayTUI/UsageTracker.swift \
             Sources/BantayTUI/EventIngestServer.swift \
