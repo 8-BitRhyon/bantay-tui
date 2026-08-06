@@ -1722,7 +1722,7 @@ struct NotchStatusView: View {
                     fetchDiffStats(agent)
                 }
                 if let paneId = agent.paneId {
-                    Button(action: { adapter.focusPane(paneId: paneId) }) {
+                    Button(action: { focusAgentPane(paneId) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.6))
                     }
@@ -1757,7 +1757,7 @@ struct NotchStatusView: View {
         .onHover { hovering in hoveredRow = hovering ? agent.id : nil }
         .contextMenu {
             if let paneId = agent.paneId {
-                Button("Focus Pane") { adapter.focusPane(paneId: paneId) }
+                Button("Focus Pane") { focusAgentPane(paneId) }
             }
             if let title = agent.title {
                 Button("Copy Title") { copyToClipboard(title) }
@@ -1791,6 +1791,37 @@ struct NotchStatusView: View {
         }
         let target = url ?? URL(fileURLWithPath: NSHomeDirectory())
         NSWorkspace.shared.activateFileViewerSelecting([target])
+    }
+
+    /// Route the focus button through `PaneFocusRouter` (plan 017 WI-3)
+    /// when the active multiplexer is tmux/zellij AND the current adapter is
+    /// that same kind: select the pane inside the mux, then raise the
+    /// terminal app. herdr (raw pane-id passthrough) and every mismatch
+    /// keep the adapter's own focus behavior unchanged.
+    private func focusAgentPane(_ paneId: String) {
+        let kind = PlexerDetection.detect(env: ProcessInfo.processInfo.environment)
+        guard kind == adapter.kind, kind == .tmux || kind == .zellij else {
+            adapter.focusPane(paneId: paneId)
+            return
+        }
+        let target = PaneFocusRouter.resolveForFocus(
+            paneId: paneId, kind: kind, tty: nil, pid: nil, panes: [])
+        let action = PaneFocusRouter.route(target: target)
+        switch action {
+        case .none:
+            return
+        case .terminalOnly:
+            _ = TerminalFocusser.focus()
+        case .muxFocus, .both:
+            if let command = PaneFocusRouter.focusCommand(target: target) {
+                ProcessRunner.launch(
+                    executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+                    arguments: ["env"] + command)
+            }
+            if action == .both {
+                _ = TerminalFocusser.focus()
+            }
+        }
     }
 
     // MARK: - Behavior

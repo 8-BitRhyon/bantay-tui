@@ -3951,6 +3951,167 @@ struct LogicCheckMain {
             "L54 empty env override falls back to default")
 
 
+        // MARK: - L53. Plan 017 WI-3 — process-level pane tracking & focus
+        // routing: the pure PaneFocusRouter maps a composed paneId to the
+        // multiplexer command that selects the pane plus the terminal
+        // activation strategy. Covers per-kind id parsing, the drift
+        // fallback (tty/pid re-key after a mux restart regenerates pane
+        // ids), the focus-command shapes, the route() table, and the
+        // pid-reuse guard.
+        // resolveTarget parses the composed paneId per kind.
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "dev:1.2", kind: .tmux)
+                == .tmux(session: "dev", window: "1", pane: "2"),
+            "L53 tmux paneId resolves to (session, window, pane)")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "dev|pane3", kind: .zellij)
+                == .zellij(session: "dev", pane: "pane3"),
+            "L53 zellij paneId resolves to (session, pane)")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "pane_abc123", kind: .herdr)
+                == .herdr(paneId: "pane_abc123"),
+            "L53 herdr paneId passes through raw")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "  pane_abc123  ", kind: .herdr)
+                == .herdr(paneId: "pane_abc123"),
+            "L53 herdr paneId trimmed")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "no-separator", kind: .tmux) == .none,
+            "L53 malformed tmux paneId -> none")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "dev:1", kind: .tmux) == .none,
+            "L53 tmux paneId missing window.pane -> none")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "dev:1.2.3", kind: .tmux) == .none,
+            "L53 tmux paneId with extra dot -> none")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "pane3", kind: .zellij) == .none,
+            "L53 malformed zellij paneId -> none")
+        check(
+            PaneFocusRouter.resolveTarget(paneId: "", kind: .herdr) == .none,
+            "L53 empty herdr paneId -> none")
+
+        // Drift fallback: pane ids regenerate on mux restart, so re-key by
+        // tty (strongest) then pid against the current pane list.
+        let restartedPanes = [
+            PaneInfo(id: "dev:0.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys003",
+                pid: 4242),
+            PaneInfo(id: "dev:1.1", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys001",
+                pid: 1111),
+        ]
+        check(
+            PaneFocusRouter.resolveByTty(tty: "/dev/ttys003", panes: restartedPanes) == "dev:0.0",
+            "L53 tty re-keys to the regenerated pane id")
+        check(
+            PaneFocusRouter.resolveByPid(pid: 1111, panes: restartedPanes) == "dev:1.1",
+            "L53 pid re-keys to the regenerated pane id")
+        check(
+            PaneFocusRouter.resolveByTty(tty: "/dev/ttys999", panes: restartedPanes) == nil,
+            "L53 unknown tty -> nil")
+        check(
+            PaneFocusRouter.resolveByPid(pid: 9999, panes: restartedPanes) == nil,
+            "L53 unknown pid -> nil")
+        check(
+            PaneFocusRouter.resolveByTty(tty: "", panes: restartedPanes) == nil,
+            "L53 empty tty -> nil")
+        check(
+            PaneFocusRouter.resolveByPid(pid: 0, panes: restartedPanes) == nil,
+            "L53 zero pid -> nil")
+        // resolveDrifted: a stale id that still exists wins verbatim.
+        check(
+            PaneFocusRouter.resolveDrifted(
+                stalePaneId: "dev:1.1", tty: "/dev/ttys001", pid: 1111,
+                panes: restartedPanes) == "dev:1.1",
+            "L53 live id survives drift resolution")
+        // A vanished pane id re-keys via tty.
+        check(
+            PaneFocusRouter.resolveDrifted(
+                stalePaneId: "old:9.9", tty: "/dev/ttys003", pid: 4242,
+                panes: restartedPanes) == "dev:0.0",
+            "L53 vanished id re-keys via tty")
+        // Pid-reuse guard: the pid now belongs to a DIFFERENT pane than the
+        // tty does — the tty match must win.
+        let reusedPidPanes = [
+            PaneInfo(id: "new:0.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys003",
+                pid: 7777),
+            PaneInfo(id: "new:1.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys001",
+                pid: 4242),
+        ]
+        check(
+            PaneFocusRouter.resolveDrifted(
+                stalePaneId: "old:0.0", tty: "/dev/ttys003", pid: 4242,
+                panes: reusedPidPanes) == "new:0.0",
+            "L53 pid-reuse guard prefers the tty match")
+        check(
+            PaneFocusRouter.resolveDrifted(
+                stalePaneId: "old:0.0", tty: nil, pid: 4242, panes: reusedPidPanes)
+                == "new:1.0",
+            "L53 pid-only re-key still resolves without tty evidence")
+        check(
+            PaneFocusRouter.resolveDrifted(
+                stalePaneId: "old:0.0", tty: nil, pid: nil, panes: reusedPidPanes) == nil,
+            "L53 no tty/pid evidence -> nil")
+        // resolveForFocus: kind nil means no mux -> standalone (terminal only).
+        check(
+            PaneFocusRouter.resolveForFocus(
+                paneId: "dev:1.2", kind: nil, tty: nil, pid: nil, panes: []) == .standalone,
+            "L53 no mux resolves standalone")
+        check(
+            PaneFocusRouter.resolveForFocus(
+                paneId: "dev:1.2", kind: .tmux, tty: nil, pid: nil, panes: [])
+                == .tmux(session: "dev", window: "1", pane: "2"),
+            "L53 tmux resolves directly through resolveForFocus")
+        check(
+            PaneFocusRouter.resolveForFocus(
+                paneId: "old:9.9", kind: .tmux, tty: "/dev/ttys003", pid: 4242,
+                panes: restartedPanes) == .tmux(session: "dev", window: "0", pane: "0"),
+            "L53 drift re-keys through resolveForFocus")
+        check(
+            PaneFocusRouter.resolveForFocus(
+                paneId: "old:9.9", kind: .tmux, tty: nil, pid: nil, panes: restartedPanes)
+                == .none,
+            "L53 unresolvable drift -> none")
+
+        // focusCommand shapes per kind.
+        check(
+            PaneFocusRouter.focusCommand(target: .tmux(session: "dev", window: "1", pane: "2"))
+                == ["tmux", "select-pane", "-t", "dev:1.2", ";", "switch-client", "-t", "dev"],
+            "L53 tmux focus command selects pane then switches client")
+        check(
+            PaneFocusRouter.focusCommand(target: .zellij(session: "dev", pane: "pane3"))
+                == ["zellij", "--session", "dev", "action", "focus-pane-id", "pane3"],
+            "L53 zellij focus command is the 0.40+ focus-pane-id verb")
+        check(
+            PaneFocusRouter.focusCommand(target: .herdr(paneId: "pane_abc123"))
+                == ["herdr", "agent", "focus", "pane_abc123"],
+            "L53 herdr focus command is the agent focus verb")
+        check(
+            PaneFocusRouter.focusCommand(target: .standalone) == nil,
+            "L53 standalone has no mux focus command")
+        check(
+            PaneFocusRouter.focusCommand(target: .none) == nil,
+            "L53 none has no focus command")
+
+        // route() table: mux -> both (mux select + terminal activation),
+        // standalone -> terminal only, none -> nothing.
+        check(
+            PaneFocusRouter.route(target: .tmux(session: "dev", window: "1", pane: "2"))
+                == .both,
+            "L53 tmux routes to both")
+        check(
+            PaneFocusRouter.route(target: .zellij(session: "dev", pane: "pane3")) == .both,
+            "L53 zellij routes to both")
+        check(
+            PaneFocusRouter.route(target: .herdr(paneId: "pane_abc123")) == .both,
+            "L53 herdr routes to both")
+        check(
+            PaneFocusRouter.route(target: .standalone) == .terminalOnly,
+            "L53 standalone routes to terminal only")
+        check(
+            PaneFocusRouter.route(target: .none) == .none,
+            "L53 none routes to nothing")
+
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
