@@ -180,4 +180,30 @@ enum StandaloneAgentScanner {
     static func scan(home: String = NSHomeDirectory()) -> [DetectedAgent] {
         detect(samples: runningProcesses(), home: home)
     }
+
+    /// PERF-2: whether the standalone scan should run now. The `/bin/ps`
+    /// spawn + `~/.claude/projects` enumeration is heavy; throttle it to
+    /// `minInterval` even though the roster poll runs every few seconds.
+    static func shouldRescan(lastScan: Date?, now: Date, minInterval: TimeInterval = 30)
+        -> Bool
+    {
+        guard let lastScan else { return true }
+        return now.timeIntervalSince(lastScan) >= minInterval
+    }
+
+    /// PERF-2: pure listing of transcript project roots under a base dir.
+    /// Empty base → empty result (no I/O).
+    static func projectRoots(_ base: String) -> [String] {
+        guard !base.isEmpty else { return [] }
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: base) else { return [] }
+        return entries.map { base + "/" + $0 }
+    }
+
+    /// PERF-2: a transcript root's content mtime (or nil when unreadable).
+    /// Memoized per root so unchanged trees are skipped on the next poll.
+    static func contentModificationDate(of path: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
+            as? Date
+    }
 }

@@ -48,18 +48,14 @@ struct AgentSnapshot: Identifiable, Equatable {
     let choices: [String]?
     /// When this agent's current working burst began (elapsed timers).
     let startedAt: Date?
+    /// Cached project context (project + git branch) derived from `cwd`.
+    /// Computed ONCE per poll off the main actor (PERF-1) instead of being a
+    /// computed property that re-reads `.git/HEAD` from disk on every SwiftUI
+    /// body evaluation.
+    let projectContext: ProjectContext?
 
     var approval: IslandMetrics.ApprovalControls {
         IslandMetrics.ApprovalControls(variance: variance, choices: choices)
-    }
-
-    /// Human-readable project context derived from `cwd`: the directory
-    /// basename plus the current git branch. Lets the roster show
-    /// "bantay-tui · main" instead of a bare tool name. Cheap + offline
-    /// (reads `.git/HEAD`); nil when cwd is unknown or not a git repo.
-    var projectContext: ProjectContext? {
-        guard let cwd, !cwd.isEmpty else { return nil }
-        return ProjectContext(cwd: cwd)
     }
 }
 
@@ -73,21 +69,27 @@ struct ProjectContext: Equatable, Sendable {
         self.project = (cwd as NSString).lastPathComponent
         let headURL = URL(fileURLWithPath: cwd).appendingPathComponent(".git/HEAD")
         if let content = try? String(contentsOf: headURL, encoding: .utf8) {
-            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.hasPrefix("ref: refs/heads/") {
-                self.branch = String(trimmed.dropFirst("ref: refs/heads/".count))
-                self.isGit = true
-            } else if !trimmed.isEmpty {
-                self.branch = "detached"
-                self.isGit = true
-            } else {
-                self.branch = nil
-                self.isGit = false
-            }
+            let parsed = Self.parseHead(content)
+            self.branch = parsed.branch
+            self.isGit = parsed.isGit
         } else {
             self.branch = nil
             self.isGit = false
         }
+    }
+
+    /// Pure parser for `.git/HEAD` contents (PERF-1). `ref: refs/heads/<b>`
+    /// yields the branch; a bare hex (detached HEAD) yields "detached"; empty
+    /// or garbage yields not-git. Harness-testable without disk I/O.
+    static func parseHead(_ content: String) -> (branch: String?, isGit: Bool) {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("ref: refs/heads/") {
+            return (String(trimmed.dropFirst("ref: refs/heads/".count)), true)
+        }
+        if !trimmed.isEmpty {
+            return ("detached", true)
+        }
+        return (nil, false)
     }
 }
 
@@ -126,6 +128,13 @@ final class AgentEventManager: ObservableObject {
     private var lineBuffer = ""
     private var lastSeenKinds: [String: AgentEventKind] = [:]
     private var lastSoundAt: [String: Date] = [:]
+    /// PERF-2: last time the standalone ps scan ran (throttle state).
+    private var lastStandaloneScan: Date?
+    /// PERF-2: minimum interval between standalone `ps` scans.
+    static let minScanInterval: TimeInterval = 30
+    /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
+    /// expensive enumeration + read on each poll.
+    private var transcriptMtimes: [String: Date] = [:]
     /// When each pane's current working burst started (for elapsed timers).
     /// Set when a pane transitions into progress/started; cleared when it
     /// leaves working state.
@@ -402,6 +411,10 @@ extension AgentEventManager {
 
     nonisolated static func snapshot(for agent: HerdrAgentInfo) -> AgentSnapshot? {
         guard let kind = kind(for: agent.agentStatus ?? "") else { return nil }
+        let projectContext: ProjectContext? = {
+            guard let cwd = agent.cwd, !cwd.isEmpty else { return nil }
+            return ProjectContext(cwd: cwd)
+        }()
         return AgentSnapshot(
             id: agent.paneId ?? agent.agent,
             source: agent.agent,
@@ -413,7 +426,8 @@ extension AgentEventManager {
             cwd: agent.cwd,
             variance: nil,
             choices: nil,
-            startedAt: nil
+            startedAt: nil,
+            projectContext: projectContext
         )
     }
 
@@ -565,9 +579,19 @@ extension AgentEventManager {
         let herdrAgents: [HerdrAgentInfo] = await herdrAdapter.listAgents()
         let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
         // Heavy scans (ps, transcript enumeration) run off the main actor so
-        // the island never beachballs while polling.
+        // the island never beachballs while polling. PERF-2: throttle the ps
+        // spawn to `minScanInterval` — the roster is fine updating every few
+        // seconds without re-scanning the process table each time.
+        let rescan =
+            scanStandalone
+            && StandaloneAgentScanner.shouldRescan(
+                lastScan: lastStandaloneScan, now: Date(),
+                minInterval: Self.minScanInterval)
+        if rescan {
+            lastStandaloneScan = Date()
+        }
         let agents: [HerdrAgentInfo] = await Task.detached(priority: .userInitiated) {
-            let detected = scanStandalone ? StandaloneAgentScanner.scan() : []
+            let detected = rescan ? StandaloneAgentScanner.scan() : []
             return herdrAgents
                 + detected.filter {
                     !Set(herdrAgents.map { $0.agent }).contains($0.name)
@@ -582,15 +606,33 @@ extension AgentEventManager {
                     )
                 }
         }.value
+        // PERF-2: skip the transcript enumeration+read when no transcript root
+        // changed since the last poll (mtime memo). The roster + usage gauge
+        // keep their last-known values; the next change refreshes them.
+        let usageRoots: [String] = agents.compactMap {
+            AgentDetector.transcriptSearchPaths(home: NSHomeDirectory(), name: $0.agent).first
+        }
+        let changedRoots = usageRoots.filter { root in
+            guard let mtime = UsageTracker.transcriptMtime(root: root) else { return true }
+            return transcriptMtimes[root] != mtime
+        }
+        for root in changedRoots {
+            transcriptMtimes[root] = UsageTracker.transcriptMtime(root: root)
+        }
+        let currentUsage = self.usage
+        let currentRate = self.usageRate
         let usageAndRate = await Task.detached(priority: .utility) {
-            UsageTracker.latestUsageAndRate(
+            if changedRoots.isEmpty && currentUsage.totalTokens > 0 {
+                return (currentUsage, currentRate)
+            }
+            return UsageTracker.latestUsageAndRate(
                 home: NSHomeDirectory(),
                 names: agents.map { $0.agent },
                 now: Date(),
                 window: 60)
         }.value
-        self.usage = usageAndRate.usage
-        self.usageRate = usageAndRate.rate
+        self.usage = usageAndRate.0
+        self.usageRate = usageAndRate.1
         let liveStatuses: [String: String] = Dictionary(
             uniqueKeysWithValues: agents.compactMap {
                 (agent: HerdrAgentInfo) -> (String, String)? in
@@ -724,7 +766,8 @@ extension AgentEventManager {
                 cwd: agent.cwd,
                 variance: variance,
                 choices: choices,
-                startedAt: startedAt
+                startedAt: startedAt,
+                projectContext: agent.projectContext
             )
         }
     }

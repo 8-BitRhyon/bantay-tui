@@ -240,4 +240,12 @@ enum UsageTracker {
         let text = String(data: data, encoding: .utf8) ?? ""
         return text.split(whereSeparator: \.isNewline).map(String.init)
     }
+
+    /// PERF-2: the transcript root's directory mtime — a cheap sentinel for
+    /// "did anything under this root change". The caller memoizes this and
+    /// skips the expensive `tailLines` enumeration+read when unchanged.
+    static func transcriptMtime(root: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: root))?[.modificationDate]
+            as? Date
+    }
 }
