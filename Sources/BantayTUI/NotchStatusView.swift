@@ -208,10 +208,24 @@ struct NotchStatusView: View {
         }
     }
 
+    /// Content cross-fade for the `isExpanded` flip, coordinated with the
+    /// background morph: opacity + top-anchored scale when motion is on (the
+    /// text fades as the notch morphs, no pop), opacity-only under reduce
+    /// motion (the short linear morph drives it, so it snaps near-instantly).
+    private var contentTransition: AnyTransition {
+        guard IslandMetrics.contentTransition(reduceMotion: reduceMotion) == .synced else {
+            return .opacity
+        }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)),
+            removal: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             islandBackground
             content
+                .animation(morphAnimation, value: isExpanded)
                 .frame(width: contentFrameWidth, height: contentHeight, alignment: .top)
                 .offset(y: chipTopOffset)
                 .clipped()
@@ -625,10 +639,12 @@ struct NotchStatusView: View {
     private var content: some View {
         if isExpanded {
             expandedList
+                .transition(contentTransition)
         } else if let event = eventManager.currentEvent, let paneId = event.paneId,
             IslandMetrics.requiresApproval(event.kind.rawValue)
         {
             approvalPill(event: event, paneId: paneId)
+                .transition(contentTransition)
         } else if let event = eventManager.currentEvent {
             closedPill(
                 color: event.kind.color,
@@ -638,6 +654,7 @@ struct NotchStatusView: View {
                     if let paneId = event.paneId { adapter.paneFocus(paneId: paneId) }
                 }
             )
+            .transition(contentTransition)
             .onChange(of: event.id) { _ in
                 showDetail = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -651,15 +668,19 @@ struct NotchStatusView: View {
                 // (The black bar is the canvas; adding a stray dot on the
                 // left edge reads as noise against the menu bar.)
                 emptyBar
+                    .transition(contentTransition)
                     .onTapGesture { expandTo(true) }
             } else {
                 agentStrip
+                    .transition(contentTransition)
                     .onTapGesture { expandTo(true) }
             }
         } else if isExpanded {
             expandedList
+                .transition(contentTransition)
         } else {
             emptyBar
+                .transition(contentTransition)
         }
     }
 

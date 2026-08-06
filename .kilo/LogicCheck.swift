@@ -4344,6 +4344,23 @@ struct LogicCheckMain {
             "L53 none routes to nothing")
 
 
+        // L58. Notch animation sync (fix 016): the content cross-fade must be
+        // coordinated with the background morph so text never pops before the
+        // notch finishes morphing. Full motion -> synced opacity+scale;
+        // reduce motion -> instant opacity-only, matching the morph style.
+        check(
+            IslandMetrics.contentTransition(reduceMotion: false) == .synced,
+            "L58 full motion syncs content with the morph")
+        check(
+            IslandMetrics.contentTransition(reduceMotion: true) == .instant,
+            "L58 reduced motion snaps content instantly")
+        check(
+            IslandMetrics.morphMatchesContent(reduceMotion: false),
+            "L58 content + morph both smooth without reduceMotion")
+        check(
+            IslandMetrics.morphMatchesContent(reduceMotion: true),
+            "L58 content + morph both near-instant with reduceMotion")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
