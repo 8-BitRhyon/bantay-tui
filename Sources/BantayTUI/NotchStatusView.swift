@@ -63,6 +63,12 @@ struct NotchStatusView: View {
             && NotchHUDConfig.shared.islandDockSide == .center
     }
 
+    /// Centered closed state, including non-actionable working/completed
+    /// events. Approval events are handled before this state in `content`.
+    private var isCenteredClosed: Bool {
+        !isExpanded && NotchHUDConfig.shared.islandDockSide == .center
+    }
+
     private var closedPillWidth: CGFloat {
         let full = min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
         guard !hasTransientEvent else { return full }
@@ -645,7 +651,7 @@ struct NotchStatusView: View {
         {
             approvalPill(event: event, paneId: paneId)
                 .transition(contentTransition)
-        } else if isCenteredIdle {
+        } else if isCenteredClosed {
             // Centered idle: the pill sits over/behind the physical notch,
             // so it carries no content at all — no status dot, no chips,
             // and no closed pill (a working agent's purple progress dot on
@@ -1058,8 +1064,9 @@ struct NotchStatusView: View {
             + queueSection
             + (NotchHUDConfig.shared.showShelfTab
                 ? IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight : 0)
-        let available =
-            IslandMetrics.maxExpandedHeight - chipTopOffset - chrome - IslandMetrics.contentSpacing
+        let available = max(
+            contentHeight - chrome - IslandMetrics.contentSpacing,
+            0)
         return IslandMetrics.stableRosterHeight(
             agentCount: mergedRoster.count, availableHeight: available)
     }
