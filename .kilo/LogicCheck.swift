@@ -924,11 +924,13 @@ struct LogicCheckMain {
             let working = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
                 paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
-                startedAt: nil)
+                startedAt: nil,
+                projectContext: nil)
             let done = AgentSnapshot(
                 id: "p2", source: "codex", kind: .completed, title: nil, message: nil,
                 paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
-                startedAt: nil)
+                startedAt: nil,
+                projectContext: nil)
             let start = Date(timeIntervalSince1970: 500_000)
             manager.pendingApprovals["1-1"] = (variance: nil, choices: nil)
             let merged = manager.mergeApprovals(into: [working, done])
@@ -1899,11 +1901,13 @@ struct LogicCheckMain {
             let kilo = AgentSnapshot(
                 id: "p1", source: "kilo", kind: .progress, title: nil, message: nil,
                 paneId: "1-1", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
-                startedAt: nil)
+                startedAt: nil,
+                projectContext: nil)
             let codex = AgentSnapshot(
                 id: "p2", source: "codex", kind: .progress, title: nil, message: nil,
                 paneId: "1-2", workspaceId: nil, cwd: nil, variance: nil, choices: nil,
-                startedAt: nil)
+                startedAt: nil,
+                projectContext: nil)
             let visible = manager.mergeApprovals(into: [kilo, codex])
             check(
                 visible.map(\.source) == ["kilo"],
@@ -2511,15 +2515,17 @@ struct LogicCheckMain {
             let snapshot = AgentSnapshot(
                 id: "p1", source: "claude", kind: .progress, title: nil, message: nil,
                 paneId: "1-1", workspaceId: nil, cwd: gitDir,
-                variance: nil, choices: nil, startedAt: nil)
+                variance: nil, choices: nil, startedAt: nil,
+                projectContext: ProjectContext(cwd: gitDir))
             check(
                 snapshot.projectContext?.project == "bantay-tui"
                     && snapshot.projectContext?.branch == "main",
-                "L36 snapshot surfaces project context")
+                "L36 snapshot surfaces cached project context")
             let noCwd = AgentSnapshot(
                 id: "p2", source: "claude", kind: .progress, title: nil, message: nil,
                 paneId: "1-2", workspaceId: nil, cwd: nil,
-                variance: nil, choices: nil, startedAt: nil)
+                variance: nil, choices: nil, startedAt: nil,
+                projectContext: nil)
             check(noCwd.projectContext == nil, "L36 no cwd means no context")
 
             try? FileManager.default.removeItem(atPath: tmp)
@@ -2532,7 +2538,8 @@ struct LogicCheckMain {
                 AgentSnapshot(
                     id: id, source: id, kind: kind, title: nil, message: nil,
                     paneId: nil, workspaceId: nil, cwd: nil,
-                    variance: nil, choices: nil, startedAt: nil)
+                    variance: nil, choices: nil, startedAt: nil,
+                    projectContext: nil)
             }
             let roster = [
                 mk("a", .progress), mk("b", .accessRequest), mk("c", .completed),
@@ -3437,8 +3444,6 @@ struct LogicCheckMain {
             IslandMetrics.hotkeyAction(keyCode: 99, modifiers: [opt]) == nil,
             "L47 unknown keyCode -> nil")
 
-
-
         // L55. UDS event-ingest extension (plan 017 W2): HTTP-over-socket
         // reuses the IngestHTTP parser; the bare NDJSON form (a `token
         // <secret>` line followed by ONE event JSON line, then close)
@@ -3564,9 +3569,6 @@ struct LogicCheckMain {
             }
         }
 
-
-
-
         // MARK: - L52 zellij adapter (WI-2, plan 017)
         // `zellij ls` session listing: --short (name per line), --no-formatting
         // (name + age + optional suffix), default (ANSI), and JSON variants.
@@ -3584,7 +3586,8 @@ struct LogicCheckMain {
             ZellijAdapter.parseSessions(lsNoFormat) == ["foo", "bar", "dead"],
             "L52 zellij ls --no-formatting keeps names, drops age/suffix")
         check(
-            ZellijAdapter.parseSessions("\u{1b}[32;1mfoo\u{1b}[m [Created \u{1b}[35;1m2h\u{1b}[m ago]\n")
+            ZellijAdapter.parseSessions(
+                "\u{1b}[32;1mfoo\u{1b}[m [Created \u{1b}[35;1m2h\u{1b}[m ago]\n")
                 == ["foo"],
             "L52 default (ANSI) zellij ls strips styling")
         check(
@@ -3621,11 +3624,17 @@ struct LogicCheckMain {
             "L52 focus verb is focus-pane-id")
         check(
             ZellijAdapter.sendKeysCommand(session: "s1", pane: "terminal_3", keys: ["y", "enter"])
-                == ["--session", "s1", "action", "send-keys", "--pane-id", "terminal_3", "y", "Enter"],
+                == [
+                    "--session", "s1", "action", "send-keys", "--pane-id", "terminal_3", "y",
+                    "Enter",
+                ],
             "L52 send-keys verb maps herdr keys to zellij names")
         check(
             ZellijAdapter.writeCharsCommand(session: "s1", pane: "terminal_3", text: "echo hi")
-                == ["--session", "s1", "action", "write-chars", "--pane-id", "terminal_3", "echo hi"],
+                == [
+                    "--session", "s1", "action", "write-chars", "--pane-id", "terminal_3",
+                    "echo hi",
+                ],
             "L52 sendLine verb is write-chars")
         // (session, pane) identity composition + drift on session kill.
         check(
@@ -3645,8 +3654,6 @@ struct LogicCheckMain {
             drifted == ["s2|terminal_2"],
             "L52 killed session drifts its pane ids (got \(drifted))")
 
-
-
         // L51. Plan 017 WI-1 — tmux adapter: dual-template `-F` pane parsing
         // (full 8-field + minimal 4-field shapes, tab/quoted variants),
         // `%N` -> `session:window.pane` id composition, extended PaneInfo
@@ -3663,7 +3670,8 @@ struct LogicCheckMain {
         check(full.session == "dev", "L51 full session extracted")
         check(
             full.windowIndex == 1 && full.paneIndex == 2,
-            "L51 full window/pane extracted (got \(String(describing: full.windowIndex)),\(String(describing: full.paneIndex)))")
+            "L51 full window/pane extracted (got \(String(describing: full.windowIndex)),\(String(describing: full.paneIndex)))"
+        )
         check(
             full.tty == "/dev/ttys003",
             "L51 full tty extracted (got \(String(describing: full.tty)))")
@@ -3738,7 +3746,8 @@ struct LogicCheckMain {
             "L51 tab-in-path reconstructed (got \(String(describing: tabbed[0].currentPath)))")
 
         let quoted = TmuxAdapter.parsePaneLines(
-            "\"dev\"\t\"1\"\t\"2\"\t\"%12\"\t\"/dev/ttys003\"\t\"4242\"\t\"zsh\"\t\"/Users/me/My Project\"")
+            "\"dev\"\t\"1\"\t\"2\"\t\"%12\"\t\"/dev/ttys003\"\t\"4242\"\t\"zsh\"\t\"/Users/me/My Project\""
+        )
         check(
             quoted.count == 1 && quoted[0].id == "dev:1.2",
             "L51 quoted fields parse (got \(quoted.count))")
@@ -3760,8 +3769,9 @@ struct LogicCheckMain {
 
         // PaneInfo decodes with and without the new tmux fields.
         let legacyPaneJSON = #"{"id":"w1:p1","title":"t","cwd":"/x","workspace_id":"w1"}"#
-        guard let legacyPane = try? JSONDecoder().decode(
-            PaneInfo.self, from: Data(legacyPaneJSON.utf8))
+        guard
+            let legacyPane = try? JSONDecoder().decode(
+                PaneInfo.self, from: Data(legacyPaneJSON.utf8))
         else {
             check(false, "L51 legacy PaneInfo decodes")
             fatalError()
@@ -3776,8 +3786,9 @@ struct LogicCheckMain {
             "L51 legacy PaneInfo decodes without new fields")
         let fullPaneJSON =
             #"{"id":"dev:1.2","tty":"/dev/ttys003","pid":4242,"session":"dev","window_index":1,"pane_index":2,"current_command":"zsh","current_path":"/Users/me/proj"}"#
-        guard let fullPane = try? JSONDecoder().decode(
-            PaneInfo.self, from: Data(fullPaneJSON.utf8))
+        guard
+            let fullPane = try? JSONDecoder().decode(
+                PaneInfo.self, from: Data(fullPaneJSON.utf8))
         else {
             check(false, "L51 full PaneInfo decodes")
             fatalError()
@@ -3843,8 +3854,6 @@ struct LogicCheckMain {
             PlexerDetection.detect(env: ["TMUX": "/tmp/stale"], tmuxSocketExists: false)
                 == .tmux,
             "L51 TMUX env wins even with no socket on disk")
-
-
 
         // MARK: - L54. Plan 017 WI-4 — control gateway (W1 wire contract,
         // UDS NDJSON). Framing round-trip, request parsing, route table,
@@ -4089,7 +4098,8 @@ struct LogicCheckMain {
             check(
                 mergedHooks?["SessionStart"] != nil,
                 "L56 merge preserves foreign hook events untouched")
-            let foreignStart = (mergedHooks?["PromptStart"] as? [String: Any])?["command"]
+            let foreignStart =
+                (mergedHooks?["PromptStart"] as? [String: Any])?["command"]
                 as? [String]
             check(
                 foreignStart?.last == "my-foreign --notify",
@@ -4104,13 +4114,17 @@ struct LogicCheckMain {
                 "L56 double merge is idempotent (no duplicate install)")
             let stringHooks: [String: Any] = ["hooks": "not a dict"]
             check(
-                NSDictionary(dictionary: HookSdk.mergeHooks(
-                    existing: stringHooks, tool: .codex, port: 41817)).isEqual(
+                NSDictionary(
+                    dictionary: HookSdk.mergeHooks(
+                        existing: stringHooks, tool: .codex, port: 41817)
+                ).isEqual(
                     to: NSDictionary(dictionary: stringHooks)),
                 "L56 non-dict hooks value is returned unchanged")
             check(
-                NSDictionary(dictionary: HookSdk.mergeHooks(
-                    existing: foreignConfig, tool: .windsurf, port: 41817)).isEqual(
+                NSDictionary(
+                    dictionary: HookSdk.mergeHooks(
+                        existing: foreignConfig, tool: .windsurf, port: 41817)
+                ).isEqual(
                     to: NSDictionary(dictionary: foreignConfig)),
                 "L56 merge never fabricates hooks for an unverified tool")
 
@@ -4133,7 +4147,7 @@ struct LogicCheckMain {
                     "SessionStart": [
                         "command": ["sh", "-lc", "echo foreign"]
                     ],
-                ],
+                ]
             ]
             let removed = HookSdk.removingHooks(from: bantayConfig, tool: .codex)
             let removedHooks = removed["hooks"] as? [String: Any]
@@ -4151,15 +4165,17 @@ struct LogicCheckMain {
                             "scripts/hook-emit.sh --source codex --type progress",
                         ]
                     ]
-                ],
+                ]
             ]
             let removedAll = HookSdk.removingHooks(from: fullyOwned, tool: .codex)
             check(
                 removedAll["hooks"] == nil,
                 "L56 removal drops the hooks key when no hooks remain")
             check(
-                NSDictionary(dictionary: HookSdk.removingHooks(
-                    from: bantayConfig, tool: .windsurf)).isEqual(
+                NSDictionary(
+                    dictionary: HookSdk.removingHooks(
+                        from: bantayConfig, tool: .windsurf)
+                ).isEqual(
                     to: NSDictionary(dictionary: bantayConfig)),
                 "L56 removal never touches an unverified tool's config")
 
@@ -4181,7 +4197,6 @@ struct LogicCheckMain {
                     args: ["--source", "codex", "--type", "progress", "--title", "t"]) == 0,
                 "L56 complete invocation exits 0")
         }
-
 
         // MARK: - L53. Plan 017 WI-3 — process-level pane tracking & focus
         // routing: the pure PaneFocusRouter maps a composed paneId to the
@@ -4226,9 +4241,11 @@ struct LogicCheckMain {
         // Drift fallback: pane ids regenerate on mux restart, so re-key by
         // tty (strongest) then pid against the current pane list.
         let restartedPanes = [
-            PaneInfo(id: "dev:0.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys003",
+            PaneInfo(
+                id: "dev:0.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys003",
                 pid: 4242),
-            PaneInfo(id: "dev:1.1", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys001",
+            PaneInfo(
+                id: "dev:1.1", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys001",
                 pid: 1111),
         ]
         check(
@@ -4264,9 +4281,11 @@ struct LogicCheckMain {
         // Pid-reuse guard: the pid now belongs to a DIFFERENT pane than the
         // tty does — the tty match must win.
         let reusedPidPanes = [
-            PaneInfo(id: "new:0.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys003",
+            PaneInfo(
+                id: "new:0.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys003",
                 pid: 7777),
-            PaneInfo(id: "new:1.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys001",
+            PaneInfo(
+                id: "new:1.0", title: nil, cwd: nil, workspaceId: nil, tty: "/dev/ttys001",
                 pid: 4242),
         ]
         check(
@@ -4343,6 +4362,47 @@ struct LogicCheckMain {
             PaneFocusRouter.route(target: .none) == .none,
             "L53 none routes to nothing")
 
+        // L57. Performance sweep (PERF-1/PERF-2): pure decisions for caching
+        // projectContext (parse .git/HEAD without disk I/O in the render path),
+        // throttling the standalone ps scan, and skipping unchanged transcript
+        // re-reads by mtime.
+        do {
+            let mainBranch = ProjectContext.parseHead(
+                "ref: refs/heads/main\n")
+            check(
+                mainBranch.branch == "main" && mainBranch.isGit,
+                "L57 parseHead ref: refs/heads/main -> main, git (got \(mainBranch))")
+            let detached = ProjectContext.parseHead(
+                "9f8a2b4c5d6e7f8090a1b2c3d4e5f60718293a4b5\n")
+            check(
+                detached.branch == "detached" && detached.isGit,
+                "L57 parseHead hex -> detached, git")
+            let empty = ProjectContext.parseHead("")
+            check(empty.branch == nil && !empty.isGit, "L57 parseHead empty -> not git")
+            let packed = ProjectContext.parseHead("ref: refs/heads/feat/016-perf\n")
+            check(
+                packed.branch == "feat/016-perf",
+                "L57 parseHead nested branch path (got \(String(describing: packed.branch)))")
+
+            let now = Date()
+            let recent = now.addingTimeInterval(-1)
+            let stale = now.addingTimeInterval(-31)
+            check(
+                StandaloneAgentScanner.shouldRescan(
+                    lastScan: stale, now: now, minInterval: 30),
+                "L57 scan throttled: 31s ago -> rescan")
+            check(
+                !StandaloneAgentScanner.shouldRescan(
+                    lastScan: recent, now: now, minInterval: 30),
+                "L57 scan throttled: 1s ago -> skip")
+            check(
+                StandaloneAgentScanner.shouldRescan(
+                    lastScan: nil, now: now, minInterval: 30),
+                "L57 scan throttled: never scanned -> rescan")
+
+            let projects = StandaloneAgentScanner.projectRoots("")
+            check(projects == [], "L57 projectRoots(empty) -> []")
+        }
 
         // L58. Notch animation sync (fix 016): the content cross-fade must be
         // coordinated with the background morph so text never pops before the
