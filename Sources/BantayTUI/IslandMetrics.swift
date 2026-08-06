@@ -10,6 +10,15 @@ public enum IslandMorphStyle: Sendable {
     case linear
 }
 
+/// How the notch's content cross-fades when `isExpanded` flips. `.synced`
+/// rides the same smooth morph as the background (opacity+scale grow from the
+/// notch top); `.instant` is the reduce-motion path (opacity only, driven by
+/// the short linear morph animation).
+public enum ContentTransitionKind: Sendable, Equatable {
+    case synced
+    case instant
+}
+
 public enum IslandMetrics: Sendable {
     /// Where the island parks when idle (closed): beside the notch or centered
     /// underneath it.
@@ -706,6 +715,28 @@ public enum IslandMetrics: Sendable {
 
     public static func morphStyle(reduceMotion: Bool) -> IslandMorphStyle {
         reduceMotion ? .linear : .spring
+    }
+
+    /// Content cross-fade policy for the `isExpanded` flip. `.synced` rides the
+    /// smooth background morph (opacity + top-anchored scale); `.instant` is
+    /// the reduce-motion path (opacity only, driven by the 0.1s linear morph).
+    public static func contentTransition(reduceMotion: Bool) -> ContentTransitionKind {
+        reduceMotion ? .instant : .synced
+    }
+
+    /// The content transition and the background morph are always coordinated:
+    /// both smooth (spring + synced) without reduce motion, both near-instant
+    /// (linear + instant) with it. This is the invariant the notch animation
+    /// fix enforces so text never pops before the background finishes morphing.
+    public static func morphMatchesContent(reduceMotion: Bool) -> Bool {
+        switch reduceMotion {
+        case true:
+            return morphStyle(reduceMotion: true) == .linear
+                && contentTransition(reduceMotion: true) == .instant
+        case false:
+            return morphStyle(reduceMotion: false) == .spring
+                && contentTransition(reduceMotion: false) == .synced
+        }
     }
 
     public static func hoverScale(isHovered: Bool, isExpanded: Bool) -> CGFloat {
