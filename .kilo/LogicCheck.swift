@@ -3950,6 +3950,238 @@ struct LogicCheckMain {
                 == "/Users/u/Library/Application Support/Bantay-TUI/control.sock",
             "L54 empty env override falls back to default")
 
+        // L56. Plan 017 WI-6 — universal hook SDK (W4): the tool
+        // verification table (aider + codex verified, windsurf + cursor not),
+        // per-tool hook command shapes, tool hook payload → canonical
+        // AgentEventPayload mapping, non-destructive merge/remove that
+        // preserves foreign hooks, idempotent double-install, and the
+        // hook-emit.sh required-args contract (missing --type → exit 2)
+        // mirrored as a pure function. `bash -n scripts/hook-emit.sh` is
+        // asserted as a separate shell gate; this block covers the pure layer.
+        do {
+            let tools = HookSdk.AgentTool.allCases.map(\.rawValue)
+            check(
+                tools == ["aider", "codex", "windsurf", "cursor"],
+                "L56 AgentTool cases are aider/codex/windsurf/cursor (got \(tools))")
+
+            let verifyTable: [(HookSdk.AgentTool, Bool)] = [
+                (.aider, true), (.codex, true), (.windsurf, false), (.cursor, false),
+            ]
+            for (tool, expected) in verifyTable {
+                check(
+                    HookSdk.isHookVerified(tool) == expected,
+                    "L56 \(tool.rawValue) verified=\(expected)")
+            }
+
+            // hookCommand: verified tools return the emitter shape, unverified
+            // tools return nil — a hook is never fabricated for a tool without
+            // a stable hook surface.
+            if let aiderCmd = HookSdk.hookCommand(for: .aider, port: 41817, token: nil) {
+                check(aiderCmd.contains("hook-emit.sh"), "L56 aider command invokes the emitter")
+                check(aiderCmd.contains("--source aider"), "L56 aider command tags source aider")
+            } else {
+                check(false, "L56 aider command is non-nil (verified mechanism)")
+            }
+            if let codexCmd = HookSdk.hookCommand(for: .codex, port: 41817, token: nil) {
+                check(codexCmd.contains("--source codex"), "L56 codex command tags source codex")
+                check(
+                    codexCmd.contains("PromptStart"),
+                    "L56 codex command branches on the Codex hook event")
+            } else {
+                check(false, "L56 codex command is non-nil (verified mechanism)")
+            }
+            check(
+                HookSdk.hookCommand(for: .windsurf, port: 41817, token: nil) == nil,
+                "L56 windsurf has no hook command (unverified surface)")
+            check(
+                HookSdk.hookCommand(for: .cursor, port: 41817, token: nil) == nil,
+                "L56 cursor has no hook command (unverified surface)")
+            if let tokenCmd = HookSdk.hookCommand(for: .codex, port: 41817, token: "abc123") {
+                check(
+                    tokenCmd.contains("BANTAY_INGEST_TOKEN=abc123"),
+                    "L56 explicit token is embedded in the hook command")
+            } else {
+                check(false, "L56 tokenized codex command is non-nil")
+            }
+
+            // mapToEventPayload: canned tool payloads → canonical shape.
+            let codexStart: [String: Any] = [
+                "event_type": "PromptStart", "prompt": "run tests", "model": "gpt-5",
+            ]
+            let codexStartMapped = HookSdk.mapToEventPayload(codexStart, tool: .codex)
+            check(
+                codexStartMapped?["source"] as? String == "codex"
+                    && codexStartMapped?["type"] as? String == "progress",
+                "L56 codex PromptStart maps to codex/progress")
+            check(
+                codexStartMapped?["title"] as? String == "run tests",
+                "L56 codex PromptStart keeps the prompt as title")
+            let codexDone: [String: Any] = [
+                "event_type": "PromptFinish", "result": "success", "prompt": "run tests",
+            ]
+            check(
+                HookSdk.mapToEventPayload(codexDone, tool: .codex)?["type"] as? String
+                    == "completed",
+                "L56 codex PromptFinish success maps to completed")
+            let codexFailed: [String: Any] = [
+                "event_type": "PromptFinish", "result": "error", "prompt": "run tests",
+            ]
+            check(
+                HookSdk.mapToEventPayload(codexFailed, tool: .codex)?["type"] as? String
+                    == "failed",
+                "L56 codex PromptFinish error maps to failed")
+            check(
+                HookSdk.mapToEventPayload(["event_type": "PromptPlan"], tool: .codex) == nil,
+                "L56 codex PromptPlan is not an actionable event")
+            check(
+                HookSdk.mapToEventPayload(["something": "else"], tool: .codex) == nil,
+                "L56 codex payload without event_type maps nil")
+
+            let aiderEdit: [String: Any] = [
+                "event": "post-edit", "path": "Sources/BantayTUI/HookSdk.swift",
+            ]
+            let aiderMapped = HookSdk.mapToEventPayload(aiderEdit, tool: .aider)
+            check(
+                aiderMapped?["source"] as? String == "aider"
+                    && aiderMapped?["type"] as? String == "progress",
+                "L56 aider post-edit maps to aider/progress")
+            check(
+                aiderMapped?["title"] as? String == "Sources/BantayTUI/HookSdk.swift",
+                "L56 aider post-edit keeps the edited path as title")
+            check(
+                HookSdk.mapToEventPayload(["event": "post-commit"], tool: .aider)?["type"]
+                    as? String == "completed",
+                "L56 aider post-commit maps to completed")
+            check(
+                HookSdk.mapToEventPayload(["event": "frobnicate"], tool: .aider) == nil,
+                "L56 aider unknown event maps nil")
+
+            // Canonical payload round-trips through the exact decoder the UDS
+            // ingest uses (AgentEventPayload) — the emitted line is ingestible.
+            if let mapped = HookSdk.mapToEventPayload(codexStart, tool: .codex),
+                let data = try? JSONSerialization.data(withJSONObject: mapped),
+                let decoded = try? JSONDecoder().decode(AgentEventPayload.self, from: data)
+            {
+                check(decoded.source == "codex", "L56 canonical payload decodes with source codex")
+            } else {
+                check(false, "L56 canonical payload round-trips through AgentEventPayload")
+            }
+
+            // mergeHooks: preserves foreign keys, idempotent double-install,
+            // never fabricates hooks for unverified tools.
+            let foreignConfig: [String: Any] = [
+                "model": "gpt-5",
+                "hooks": [
+                    "PromptStart": [
+                        "command": ["sh", "-lc", "my-foreign --notify"]
+                    ],
+                    "SessionStart": [
+                        "command": ["sh", "-lc", "echo session"]
+                    ],
+                ],
+            ]
+            let mergedOnce = HookSdk.mergeHooks(
+                existing: foreignConfig, tool: .codex, port: 41817)
+            check(
+                mergedOnce["model"] as? String == "gpt-5",
+                "L56 merge preserves foreign top-level keys")
+            let mergedHooks = mergedOnce["hooks"] as? [String: Any]
+            check(
+                mergedHooks?["SessionStart"] != nil,
+                "L56 merge preserves foreign hook events untouched")
+            let foreignStart = (mergedHooks?["PromptStart"] as? [String: Any])?["command"]
+                as? [String]
+            check(
+                foreignStart?.last == "my-foreign --notify",
+                "L56 merge never clobbers a foreign command for an owned event")
+            check(
+                mergedHooks?["PromptFinish"] != nil,
+                "L56 merge adds Bantay's hook for an unclaimed event")
+            let mergedTwice = HookSdk.mergeHooks(
+                existing: mergedOnce, tool: .codex, port: 41817)
+            check(
+                NSDictionary(dictionary: mergedOnce).isEqual(to: mergedTwice),
+                "L56 double merge is idempotent (no duplicate install)")
+            let stringHooks: [String: Any] = ["hooks": "not a dict"]
+            check(
+                NSDictionary(dictionary: HookSdk.mergeHooks(
+                    existing: stringHooks, tool: .codex, port: 41817)).isEqual(
+                    to: NSDictionary(dictionary: stringHooks)),
+                "L56 non-dict hooks value is returned unchanged")
+            check(
+                NSDictionary(dictionary: HookSdk.mergeHooks(
+                    existing: foreignConfig, tool: .windsurf, port: 41817)).isEqual(
+                    to: NSDictionary(dictionary: foreignConfig)),
+                "L56 merge never fabricates hooks for an unverified tool")
+
+            // removingHooks: drops only Bantay-owned hooks, never foreign ones,
+            // and never touches an unverified tool's config.
+            let bantayConfig: [String: Any] = [
+                "hooks": [
+                    "PromptStart": [
+                        "command": [
+                            "sh", "-lc",
+                            "scripts/hook-emit.sh --source codex --type progress",
+                        ]
+                    ],
+                    "PromptFinish": [
+                        "command": [
+                            "sh", "-lc",
+                            "scripts/hook-emit.sh --source codex --type completed",
+                        ]
+                    ],
+                    "SessionStart": [
+                        "command": ["sh", "-lc", "echo foreign"]
+                    ],
+                ],
+            ]
+            let removed = HookSdk.removingHooks(from: bantayConfig, tool: .codex)
+            let removedHooks = removed["hooks"] as? [String: Any]
+            check(
+                removedHooks?["PromptStart"] == nil && removedHooks?["PromptFinish"] == nil,
+                "L56 removal drops only Bantay's owned events")
+            check(
+                removedHooks?["SessionStart"] != nil,
+                "L56 removal preserves foreign hook events")
+            let fullyOwned: [String: Any] = [
+                "hooks": [
+                    "PromptStart": [
+                        "command": [
+                            "sh", "-lc",
+                            "scripts/hook-emit.sh --source codex --type progress",
+                        ]
+                    ]
+                ],
+            ]
+            let removedAll = HookSdk.removingHooks(from: fullyOwned, tool: .codex)
+            check(
+                removedAll["hooks"] == nil,
+                "L56 removal drops the hooks key when no hooks remain")
+            check(
+                NSDictionary(dictionary: HookSdk.removingHooks(
+                    from: bantayConfig, tool: .windsurf)).isEqual(
+                    to: NSDictionary(dictionary: bantayConfig)),
+                "L56 removal never touches an unverified tool's config")
+
+            // hook-emit.sh required-args contract, mirrored in Swift: a
+            // missing --type/--source/--title (or a value-less flag) exits 2;
+            // a complete invocation exits 0. The shell gate runs
+            // `bash -n scripts/hook-emit.sh` separately.
+            check(
+                HookSdk.emitterExitCodeFor(args: ["--source", "codex"]) == 2,
+                "L56 missing --type exits 2")
+            check(
+                HookSdk.emitterExitCodeFor(args: ["--type"]) == 2,
+                "L56 --type without a value exits 2")
+            check(
+                HookSdk.emitterExitCodeFor(args: ["--type", "progress"]) == 2,
+                "L56 missing --source exits 2")
+            check(
+                HookSdk.emitterExitCodeFor(
+                    args: ["--source", "codex", "--type", "progress", "--title", "t"]) == 0,
+                "L56 complete invocation exits 0")
+        }
+
 
         // MARK: - L53. Plan 017 WI-3 — process-level pane tracking & focus
         // routing: the pure PaneFocusRouter maps a composed paneId to the

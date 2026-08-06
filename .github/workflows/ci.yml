@@ -74,6 +74,7 @@ jobs:
             Sources/BantayTUI/PaneFocusRouter.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             Sources/BantayTUI/ProcessRunner.swift \
+            Sources/BantayTUI/HookSdk.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check
 
@@ -164,6 +165,7 @@ jobs:
             Sources/BantayTUI/PaneFocusRouter.swift \
             Sources/BantayTUI/LaunchAgent.swift \
             Sources/BantayTUI/ProcessRunner.swift \
+            Sources/BantayTUI/HookSdk.swift \
             .kilo/LogicCheck.swift
           /tmp/logic-check
 
