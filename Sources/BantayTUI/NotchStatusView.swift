@@ -139,8 +139,8 @@ struct NotchStatusView: View {
     private var islandHeight: CGFloat {
         if isExpanded {
             return IslandMetrics.expandedSize(
-                topInset: chipTopOffset, agentCount: eventManager.agents.count,
-                queueCount: approvalQueueAgents.count,
+                topInset: chipTopOffset, agentCount: mergedRoster.count,
+                queueCount: expandedQueueSplit.shown,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
                 overflowCount: expandedQueueSplit.overflow
             ).height
@@ -151,7 +151,7 @@ struct NotchStatusView: View {
     private var contentHeight: CGFloat {
         IslandMetrics.contentHeight(
             isExpanded: isExpanded, topInset: chipTopOffset,
-            agentCount: eventManager.agents.count, queueCount: approvalQueueAgents.count,
+            agentCount: mergedRoster.count, queueCount: expandedQueueSplit.shown,
             shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
             overflowCount: expandedQueueSplit.overflow)
     }
@@ -645,6 +645,14 @@ struct NotchStatusView: View {
         {
             approvalPill(event: event, paneId: paneId)
                 .transition(contentTransition)
+        } else if isCenteredIdle {
+            // Centered idle: the pill sits over/behind the physical notch,
+            // so it carries no content at all — no status dot, no chips,
+            // and no closed pill (a working agent's purple progress dot on
+            // the left edge reads as noise against the menu bar).
+            emptyBar
+                .transition(contentTransition)
+                .onTapGesture { expandTo(true) }
         } else if let event = eventManager.currentEvent {
             closedPill(
                 color: event.kind.color,
@@ -662,19 +670,9 @@ struct NotchStatusView: View {
                 }
             }
         } else if !eventManager.agents.isEmpty {
-            if isCenteredIdle {
-                // Centered idle: the pill sits over/behind the physical notch,
-                // so it carries no content at all — no status dot, no chips.
-                // (The black bar is the canvas; adding a stray dot on the
-                // left edge reads as noise against the menu bar.)
-                emptyBar
-                    .transition(contentTransition)
-                    .onTapGesture { expandTo(true) }
-            } else {
-                agentStrip
-                    .transition(contentTransition)
-                    .onTapGesture { expandTo(true) }
-            }
+            agentStrip
+                .transition(contentTransition)
+                .onTapGesture { expandTo(true) }
         } else if isExpanded {
             expandedList
                 .transition(contentTransition)
@@ -1046,11 +1044,18 @@ struct NotchStatusView: View {
     }
 
     /// Roster scroll area: natural row height from the rendered roster
-    /// (muted sources excluded), capped so header/tabs/footer always stay
-    /// visible inside the island (scrolls when 6+ rows overflow).
+    /// (muted sources excluded), capped so header/tabs/queue/footer always
+    /// stay visible inside the island (scrolls when 6+ rows overflow). The
+    /// queue section (approval cards + overflow rows) is subtracted from the
+    /// available height so the roster never clips against the panel's rounded
+    /// bottom.
     private var rosterScrollHeight: CGFloat {
+        let queueSection =
+            CGFloat(expandedQueueSplit.shown) * IslandMetrics.queueCardHeight
+            + CGFloat(expandedQueueSplit.overflow) * IslandMetrics.overflowRowHeight
         let chrome =
             IslandMetrics.headerHeight + IslandMetrics.footerHeight
+            + queueSection
             + (NotchHUDConfig.shared.showShelfTab
                 ? IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight : 0)
         let available =
