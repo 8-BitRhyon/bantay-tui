@@ -646,7 +646,11 @@ struct NotchStatusView: View {
             }
         } else if !eventManager.agents.isEmpty {
             if isCenteredIdle {
-                centerIdleStrip
+                // Centered idle: the pill sits over/behind the physical notch,
+                // so it carries no content at all — no status dot, no chips.
+                // (The black bar is the canvas; adding a stray dot on the
+                // left edge reads as noise against the menu bar.)
+                emptyBar
                     .onTapGesture { expandTo(true) }
             } else {
                 agentStrip
@@ -760,88 +764,6 @@ struct NotchStatusView: View {
             }
         }
         .frame(width: islandWidth, height: IslandMetrics.pillHeight)
-        .contentShape(Rectangle())
-        .overlay(alignment: .topTrailing) { recentCompletionBadge }
-    }
-
-    /// Centered idle: the pill spans the notch (black bar behind it) and
-    /// important details split to both sides — counts/usage on the left,
-    /// live agent chips on the right.
-    private var centerIdleStrip: some View {
-        let agents = eventManager.agents
-        let counts = IslandMetrics.agentCounts(kinds: agents.map(\.kind))
-        let sideWidth = IslandMetrics.centeredSideWidth(
-            windowWidth: IslandMetrics.windowSize().width,
-            notchWidth: AppDelegate.notchWidth)
-        let shown = IslandMetrics.idleShownChips(
-            agentCount: agents.count,
-            maxChips: NotchHUDConfig.shared.clampedIdleMaxChips)
-        let overflow = max(agents.count - shown, 0)
-        return HStack(spacing: 0) {
-            HStack(spacing: 6) {
-                if counts.needsInput > 0 {
-                    Circle()
-                        .fill(Color(hex: AgentEventKind.accessRequest.color))
-                        .frame(width: 6, height: 6)
-                } else {
-                    Circle()
-                        .fill(Color(hex: AgentEventKind.progress.color))
-                        .frame(width: 6, height: 6)
-                }
-                Text("\(agents.count) agent\(agents.count == 1 ? "" : "s")")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                if counts.needsInput > 0 {
-                    Text("· \(counts.needsInput) need you")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.yellow)
-                        .lineLimit(1)
-                }
-                if NotchHUDConfig.shared.showUsageGauge,
-                    eventManager.usage.totalTokens > 0
-                {
-                    Text(UsageTracker.compactTokens(eventManager.usage.totalTokens))
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.5))
-                        .lineLimit(1)
-                }
-            }
-            .frame(width: sideWidth, alignment: .trailing)
-            .lineLimit(1)
-            .allowsHitTesting(false)
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: IslandMetrics.idleChipGap) {
-                ForEach(Array(agents.prefix(shown).enumerated()), id: \.offset) { _, agent in
-                    HStack(spacing: IslandMetrics.idleChipDotGap) {
-                        Circle()
-                            .fill(Color(hex: agent.kind.color))
-                            .frame(
-                                width: IslandMetrics.idleDotSize,
-                                height: IslandMetrics.idleDotSize)
-                        Text(agent.source)
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, IslandMetrics.idleChipHPad)
-                    .frame(height: 20)
-                    .background(Color.white.opacity(0.10), in: Capsule())
-                }
-                if overflow > 0 {
-                    Text("+\(overflow)")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.6))
-                }
-            }
-            .frame(width: sideWidth, alignment: .leading)
-        }
-        .frame(
-            width: IslandMetrics.windowSize().width, height: IslandMetrics.pillHeight,
-            alignment: .center
-        )
         .contentShape(Rectangle())
         .overlay(alignment: .topTrailing) { recentCompletionBadge }
     }
