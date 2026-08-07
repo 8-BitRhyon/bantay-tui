@@ -196,13 +196,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .ignoresCycle,
         ]
         window.canBecomeVisibleWithoutLogin = true
-        // Plain hosting view: file drops are handled by SwiftUI `.onDrop` on
-        // the island content (NotchDrop pattern), not by an AppKit
-        // NSDraggingDestination — that machinery fought AppKit's own drag
-        // plumbing and refused every drop.
-        let hosting = NSHostingView(
+        // FileDropContentView is a REAL AppKit drag destination. SwiftUI
+        // `.onDrop` silently never registers on a borderless accessory panel
+        // (verified: registeredDraggedTypes stays empty), so an AppKit view
+        // must own the drop. The SwiftUI island is hosted inside it; the view
+        // posts .notchFilesDropped on drop.
+        let dropView = FileDropContentView(
             rootView: NotchStatusView().environmentObject(AgentEventManager.shared))
-        window.contentView = hosting
+        window.contentView = dropView
 
         Self.window = window
     }

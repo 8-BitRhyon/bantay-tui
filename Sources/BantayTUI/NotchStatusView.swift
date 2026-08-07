@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 import UserNotifications
 
 struct NotchStatusView: View {
@@ -31,9 +30,6 @@ struct NotchStatusView: View {
     @State private var peekTask: Task<Void, Never>?
     @State private var clipboardItems: [ClipboardItem] = []
     @State private var shelfFiles: [ShelfFile] = []
-    /// True while a drag hovers the island (NotchDrop `isTargeted`): drives
-    /// expand-to-shelf on enter and collapse on exit.
-    @State private var dropTargeting = false
     @State private var lastChangeCount = NSPasteboard.general.changeCount
     @State private var legacyKeyMonitor: Any?
     /// Keyboard-navigation cursor over `mergedRoster` (plan 016 4b). Nil means
@@ -244,15 +240,6 @@ struct NotchStatusView: View {
                 .offset(y: chipTopOffset)
         }
         .overlay(edgeGlow)
-        // NotchDrop pattern: the island itself is the drop target. Register
-        // for the generic `.data` type so any drag is accepted (file URL
-        // drags included), and use `isTargeted` to expand to the shelf when a
-        // drag hovers. `.contentShape` keeps the whole island hit-testable
-        // for the drop even though the pill is mostly transparent.
-        .contentShape(Rectangle())
-        .onDrop(of: [.data], isTargeted: $dropTargeting) { providers in
-            handleDrop(providers)
-        }
         .scaleEffect(activeHoverScale, anchor: .top)
         // Centered idle spans the full window width so the split strip can
         // leak chips past the notch on both sides; everything else hugs the
@@ -279,16 +266,6 @@ struct NotchStatusView: View {
         .background(Color.clear.allowsHitTesting(false))
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
-        .onChange(of: dropTargeting) { isTargeted in
-            if isTargeted {
-                // A file drag entered the island: expand + open the shelf so
-                // the drop lands visibly.
-                handleFileDragEntered()
-            }
-            // On exit the normal hover/collapse logic resumes; keeping the
-            // shelf open mid-drag is what we want, and a failed drop (drag
-            // left the window) falls back to the standard hover-exit path.
-        }
         .onAppear {
             if !ProcessInfo.processInfo.isOperatingSystemAtLeast(
                 .init(majorVersion: 14, minorVersion: 0, patchVersion: 0))
@@ -1861,71 +1838,6 @@ struct NotchStatusView: View {
         showAttention = false
         showShelf = true
         expandTo(true)
-    }
-
-    /// The `.onDrop` handler (NotchDrop pattern). `.data` providers can be
-    /// file URLs, strings, or images; extract file URLs by loading each
-    /// provider's URL object, falling back to an in-place file representation.
-    /// Runs off the main actor (provider loading blocks on a semaphore).
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        let providersBox = NSItemProvidersBox(providers)
-        Task { @MainActor in
-            let urls = await Self.extractFileURLs(providersBox)
-            guard !urls.isEmpty else { return }
-            handleFilesDropped(urls)
-        }
-        return true
-    }
-
-    /// A Sendable box for the dropped `[NSItemProvider]` so the extraction
-    /// task can hold it across the region-isolation boundary.
-    private struct NSItemProvidersBox: @unchecked Sendable {
-        let value: [NSItemProvider]
-        init(_ value: [NSItemProvider]) { self.value = value }
-    }
-
-    /// Blocking provider → file URL extraction. Mirrors NotchDrop's
-    /// `convertToFilePathThatIsWhatWeThinkItWillWorkWithNotchDrop`: try
-    /// `loadObject(ofClass: URL.self)` first, then
-    /// `loadInPlaceFileRepresentation` for the `.data` type. Each provider
-    /// blocks until its file is available — so this must never run on main.
-    /// Runs as a detached task so the semaphore never touches the main actor.
-    nonisolated
-        private static func extractFileURLs(
-            _ providersBox: NSItemProvidersBox
-        ) async -> [URL]
-    {
-        let providers = providersBox.value
-        return await Task.detached(priority: .utility) {
-            providers.compactMap { provider in
-                // Sendable-safe box for the callback to write into; the
-                // semaphore orders the write before the read.
-                let url = SendableBox<URL>()
-                let sem = DispatchSemaphore(value: 0)
-                _ = provider.loadObject(ofClass: URL.self) { item, _ in
-                    url.value = item
-                    sem.signal()
-                }
-                sem.wait()
-                if url.value == nil {
-                    provider.loadInPlaceFileRepresentation(
-                        forTypeIdentifier: UTType.data.identifier
-                    ) { fileURL, _, _ in
-                        url.value = fileURL
-                        sem.signal()
-                    }
-                    sem.wait()
-                }
-                return url.value
-            }
-        }.value
-    }
-
-    /// A tiny Sendable mutable box for cross-closure capture (semaphore
-    /// ordered, so no locking is needed).
-    private final class SendableBox<T>: @unchecked Sendable {
-        var value: T?
-        init() { value = nil }
     }
 
     private func handleHover(_ hovering: Bool) {
