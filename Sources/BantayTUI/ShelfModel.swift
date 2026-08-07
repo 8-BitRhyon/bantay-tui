@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// One clipboard entry captured from the system pasteboard.
@@ -13,7 +14,9 @@ struct ClipboardItem: Identifiable, Equatable, Sendable {
     }
 }
 
-/// One dropped file held on the shelf.
+/// One dropped file held on the shelf. The `url` points at the file the shelf
+/// owns (a copy in Bantay's data dir once the file has been through
+/// `ShelfStore.add`), so the shelf is safe against the source moving.
 struct ShelfFile: Identifiable, Equatable, Sendable {
     let id: UUID
     let url: URL
@@ -25,6 +28,17 @@ struct ShelfFile: Identifiable, Equatable, Sendable {
         self.url = url
         self.name = url.lastPathComponent
         self.createdAt = createdAt
+    }
+
+    /// File size for the shelf card footer, or nil.
+    var byteCount: Int? {
+        (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+    }
+
+    /// The workspace icon for this file's type — instant, always available
+    /// (the card uses this; richer QuickLook thumbnails are a future upgrade).
+    var icon: NSImage? {
+        NSWorkspace.shared.icon(forFile: url.path)
     }
 }
 

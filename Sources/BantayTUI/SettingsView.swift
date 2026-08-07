@@ -29,6 +29,7 @@ struct SettingsView: View {
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
     @State private var showShelf = NotchHUDConfig.shared.showShelfTab
     @State private var shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
+    @State private var shelfKeepDuration = NotchHUDConfig.shared.shelfKeepDuration
     @State private var followMouse = NotchHUDConfig.shared.followMouseScreen
     @State private var floatingPill = NotchHUDConfig.shared.floatingPillOnNoNotch
     @State private var showInFullScreen = NotchHUDConfig.shared.showInFullScreen
@@ -204,6 +205,16 @@ struct SettingsView: View {
                     .onChange(of: shelfLimit) { newValue in
                         NotchHUDConfig.shared.shelfLimit = newValue
                     }
+                Picker("Keep files for", selection: $shelfKeepDuration) {
+                    ForEach(ShelfKeepDuration.allCases) { option in
+                        Text(option.rawValue).tag(option.rawValue)
+                    }
+                }
+                .help("Dropped files auto-expire after this long.")
+                .onChange(of: shelfKeepDuration) { newValue in
+                    NotchHUDConfig.shared.shelfKeepDuration = newValue
+                    ShelfStore.shared.cleanExpired()
+                }
             }
             Section("Displays") {
                 Toggle("Follow mouse screen", isOn: $followMouse)

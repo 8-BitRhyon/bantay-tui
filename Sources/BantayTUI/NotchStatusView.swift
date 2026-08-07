@@ -29,7 +29,10 @@ struct NotchStatusView: View {
     @State private var peekText: String = ""
     @State private var peekTask: Task<Void, Never>?
     @State private var clipboardItems: [ClipboardItem] = []
-    @State private var shelfFiles: [ShelfFile] = []
+    /// Brief glow on the shelf panel when a drop lands (user feedback).
+    @State private var shelfDropGlow = false
+    /// The persisted, thumbnail-rendering shelf (ShelfStore owns files).
+    @ObservedObject private var shelfStore = ShelfStore.shared
     @State private var lastChangeCount = NSPasteboard.general.changeCount
     @State private var legacyKeyMonitor: Any?
     /// Keyboard-navigation cursor over `mergedRoster` (plan 016 4b). Nil means
@@ -1179,52 +1182,33 @@ struct NotchStatusView: View {
 
     private var shelfContent: some View {
         VStack(spacing: 0) {
-            if clipboardItems.isEmpty && shelfFiles.isEmpty {
-                Text("Drop files here or copy text — it lands on the shelf.")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.4))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: IslandMetrics.rowHeight)
-            }
-            ForEach(shelfFiles) { file in
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.fill").font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.6))
-                    Text(file.name)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .layoutPriority(0)
-                    Spacer(minLength: 4)
-                    Button(action: { ShelfQuickLook.show(file.url) }) {
-                        Image(systemName: "eye").font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-                    .help("QuickLook preview")
-                    .layoutPriority(1)
-                    Button(action: { NSWorkspace.shared.open(file.url) }) {
-                        Image(systemName: "arrow.up.right").font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open file")
-                    .layoutPriority(1)
-                    Button(action: { shelfFiles = ShelfFiles.removing(file.url, from: shelfFiles) })
-                    {
-                        Image(systemName: "xmark").font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove")
-                    .layoutPriority(1)
+            if shelfStore.files.isEmpty && clipboardItems.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "tray.and.arrow.down.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.white.opacity(0.35))
+                    Text("Drop files here to keep them")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.55))
+                    Text(retentionHint)
+                        .font(.system(size: 9, weight: .regular))
+                        .foregroundColor(.white.opacity(0.35))
                 }
-                .padding(.horizontal, 16)
-                .frame(height: IslandMetrics.rowHeight)
-                .draggable(file.url)
-                .onTapGesture(count: 2) { ShelfQuickLook.show(file.url) }
+                .frame(maxWidth: .infinity)
+                .frame(height: 92)
+            }
+            if !shelfStore.files.isEmpty {
+                // Thumbnail card strip — the actual "shelf" feel.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(shelfStore.files) { file in
+                            shelfCard(file)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+                .frame(height: 84)
             }
             ForEach(clipboardItems) { item in
                 HStack(spacing: 8) {
@@ -1255,10 +1239,76 @@ struct NotchStatusView: View {
             }
             Spacer(minLength: 0)
         }
+        // Glow feedback when a drop lands.
+        .overlay {
+            if shelfDropGlow {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.blue.opacity(0.8), lineWidth: 2)
+                    .padding(2)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.4), value: shelfDropGlow)
         // Drops are handled at the window level (KeyablePanel posts
         // .notchFilesDropped → handleFilesDropped). No SwiftUI .dropDestination
         // here: registering it alongside the window's NSDraggingDestination
         // creates two competing targets and the drop gets refused.
+    }
+
+    /// "kept for X" hint driven by the configured retention.
+    private var retentionHint: String {
+        let keep = ShelfKeepDuration.from(
+            configRaw: NotchHUDConfig.shared.shelfKeepDuration)
+        switch keep {
+        case .forever: return "Files stay until you remove them."
+        default: return "Files auto-expire after \(keep.rawValue.lowercased())."
+        }
+    }
+
+    /// One thumbnail card: icon, name, hover actions (QuickLook / open /
+    /// remove), draggable back out. Mirrors NotchDrop's DropItemView.
+    private func shelfCard(_ file: ShelfFile) -> some View {
+        VStack(spacing: 3) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+                if let icon = file.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 34, height: 34)
+                } else {
+                    Image(systemName: "doc.fill").font(.system(size: 16))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+            }
+            .frame(width: 48, height: 48)
+            .overlay(alignment: .topTrailing) {
+                // Remove (⌥-style): a small ✕ always present, like NotchDrop's
+                // option-key reveal but simpler to discover.
+                Button(action: { shelfStore.remove(file) }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.7))
+                        .background(Color.black.opacity(0.6).clipShape(Circle()))
+                }
+                .buttonStyle(.plain)
+                .help("Remove from shelf")
+                .offset(x: 4, y: -4)
+            }
+            Text(file.name)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(.white.opacity(0.75))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 64)
+        }
+        .frame(width: 68)
+        .contentShape(Rectangle())
+        .draggable(file.url)
+        .onTapGesture(count: 1) { ShelfQuickLook.show(file.url) }
+        .help("Preview / drag out / open")
     }
 
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
@@ -1822,6 +1872,7 @@ struct NotchStatusView: View {
     /// tab so the drop target is visible and armed. Mirrors NotchDrop's
     /// drop-on-notch behavior.
     private func handleFileDragEntered() {
+        NSLog("bantay-drop: handleFileDragEntered")
         showAttention = false
         showShelf = true
         expandTo(true)
@@ -1829,15 +1880,18 @@ struct NotchStatusView: View {
 
     /// Files were dropped onto the notch: land them on the shelf.
     private func handleFilesDropped(_ urls: [URL]) {
-        let now = Date()
-        let files = urls.map { ShelfFile(url: $0, createdAt: now) }
-        shelfFiles = ShelfFiles.adding(
-            files, to: shelfFiles,
-            limit: NotchHUDConfig.shared.clampedShelfLimit)
+        NSLog("bantay-drop: handleFilesDropped count=%d", urls.count)
+        // The ShelfStore owns persistence, copy-to-storage, and retention.
+        ShelfStore.shared.add(urls: urls)
         // Show the shelf so the landed files are immediately visible.
         showAttention = false
         showShelf = true
         expandTo(true)
+        // Brief glow so the drop "lands" with feedback.
+        withAnimation(.easeOut(duration: 0.4)) { shelfDropGlow = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            withAnimation(.easeOut(duration: 0.6)) { shelfDropGlow = false }
+        }
     }
 
     private func handleHover(_ hovering: Bool) {

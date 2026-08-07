@@ -51,6 +51,7 @@ final class FileDropContentView<Content: View>: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         let pb = sender.draggingPasteboard
         let hasFile = FileDropTypes.all.contains { pb.availableType(from: [$0]) != nil }
+        NSLog("bantay-drop: draggingEntered hasFile=%d", hasFile)
         guard hasFile else { return [] }
         // Announce so the island expands to the shelf while hovering.
         NotificationCenter.default.post(name: .notchFileDragEntered, object: nil)
@@ -62,14 +63,14 @@ final class FileDropContentView<Content: View>: NSView {
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
+        NSLog("bantay-drop: draggingExited")
         // No-op: keep the shelf open while the drop is in flight.
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard
-            let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self])
-                as? [URL], !urls.isEmpty
-        else {
+        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]
+        NSLog("bantay-drop: performDragOperation urls=%d", urls?.count ?? -1)
+        guard let urls, !urls.isEmpty else {
             return false
         }
         NotificationCenter.default.post(

@@ -235,6 +235,12 @@ final class NotchHUDConfig {
     var clampedShelfLimit: Int {
         min(max(shelfLimit, 1), 50)
     }
+    /// How long dropped files stay on the shelf before auto-expiring
+    /// ("1 Hour", "1 Day", "3 Days", "1 Week", "Forever"). Raw string so the
+    /// harness doesn't depend on the enum; `ShelfKeepDuration` maps it.
+    var shelfKeepDuration: String = ShelfKeepDuration.oneDay.rawValue {
+        didSet { defaults.set(shelfKeepDuration, forKey: "shelfKeepDuration") }
+    }
     var followMouseScreen = true {
         didSet { defaults.set(followMouseScreen, forKey: "followMouseScreen") }
     }
@@ -409,6 +415,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "shelfLimit") as? NSNumber {
             shelfLimit = min(max(v.intValue, 1), 50)
+        }
+        if let v = defaults.object(forKey: "shelfKeepDuration") as? String {
+            shelfKeepDuration = v
         }
         if let v = defaults.object(forKey: "followMouseScreen") as? Bool {
             followMouseScreen = v
