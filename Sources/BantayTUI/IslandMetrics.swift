@@ -168,6 +168,9 @@ public enum IslandMetrics: Sendable {
     public static let dividerHeight: CGFloat = 1
     /// "+N more waiting" overflow row height.
     public static let overflowRowHeight: CGFloat = 18
+    /// Section header height inside the grouped expanded roster (one per
+    /// non-empty group).
+    public static let sectionHeaderHeight: CGFloat = 18
     /// Footer health-bar height.
     public static let footerHeight: CGFloat = 22
     /// Group order for the expanded roster: needs input first, then working,
@@ -193,6 +196,13 @@ public enum IslandMetrics: Sendable {
         case 4: return "Idle"
         default: return ""
         }
+    }
+
+    /// How many non-empty roster groups the grouped expanded list will render
+    /// section headers for. Mirrors `expandedGroupRank` bucketing (0...4), so
+    /// the height math reserves exactly the header rows the UI draws.
+    static func groupHeaderCount(kinds: [AgentEventKind]) -> Int {
+        Set(kinds.map(expandedGroupRank)).count
     }
 
     /// Aggregated counts shown in the control-plane header/footer.
@@ -226,18 +236,23 @@ public enum IslandMetrics: Sendable {
     }
 
     /// Expanded panel height accounting for the header, approval queue,
-    /// roster rows, and footer — capped at the island max.
+    /// roster rows, grouped section headers, and footer — capped at the
+    /// island max. `footerVisible: false` drops the footer term (used when the
+    /// panel renders no footer bar).
     public static func expandedSize(
         topInset: CGFloat, agentCount: Int, queueCount: Int,
         shelfTabVisible: Bool = false, overflowCount: Int = 0,
-        headerHeight: CGFloat = headerHeight, rowHeight: CGFloat = rowHeight
+        headerHeight: CGFloat = headerHeight, rowHeight: CGFloat = rowHeight,
+        groupCount: Int = 0, footerVisible: Bool = true
     ) -> CGSize {
         let chrome =
             (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
             + CGFloat(max(overflowCount, 0)) * overflowRowHeight
         let h =
             topInset + headerHeight + chrome + CGFloat(queueCount) * queueCardHeight
-            + CGFloat(agentCount) * rowHeight + footerHeight + contentSpacing
+            + CGFloat(agentCount) * rowHeight
+            + CGFloat(max(groupCount, 0)) * sectionHeaderHeight
+            + (footerVisible ? footerHeight : 0) + contentSpacing
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
     }
 
@@ -619,23 +634,30 @@ public enum IslandMetrics: Sendable {
 
     public static func contentHeight(
         isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0,
-        shelfTabVisible: Bool = false, overflowCount: Int = 0
+        shelfTabVisible: Bool = false, overflowCount: Int = 0, groupCount: Int = 0,
+        footerVisible: Bool = true
     ) -> CGFloat {
         if isExpanded {
             return expandedSize(
                 topInset: topInset, agentCount: agentCount, queueCount: queueCount,
-                shelfTabVisible: shelfTabVisible, overflowCount: overflowCount
+                shelfTabVisible: shelfTabVisible, overflowCount: overflowCount,
+                groupCount: groupCount, footerVisible: footerVisible
             ).height - topInset
         }
         return pillHeight
     }
 
     /// F13 stable roster viewport: reserve one row even when the roster is
-    /// empty, then cap growth at the available viewport height.
+    /// empty, then cap growth at the available viewport height. `groupCount`
+    /// adds the grouped section-header rows to the natural height so the
+    /// scroll area fits its headers without scrolling when they fit.
     static func stableRosterHeight(
-        agentCount: Int, availableHeight: CGFloat, rowHeight: CGFloat = rowHeight
+        agentCount: Int, availableHeight: CGFloat, rowHeight: CGFloat = rowHeight,
+        groupCount: Int = 0
     ) -> CGFloat {
-        let natural = CGFloat(max(agentCount, 0)) * rowHeight
+        let natural =
+            CGFloat(max(agentCount, 0)) * rowHeight
+            + CGFloat(max(groupCount, 0)) * sectionHeaderHeight
         return max(min(max(natural, rowHeight), max(availableHeight, 0)), 0)
     }
 

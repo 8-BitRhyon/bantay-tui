@@ -17,28 +17,38 @@ enum ClaudeHookInstaller {
         return "curl -s -X POST --data-binary @- http://127.0.0.1:\(port)/events"
     }
 
-    /// The Claude settings.json `hooks` section Bantay installs. We only
-    /// touch `PermissionPrompt` and `Stop` — everything else is preserved.
+    /// The Claude settings.json `hooks` section Bantay installs. We touch
+    /// approval + stop + notification events and preserve everything else.
+    /// `PermissionPrompt` is kept as a legacy alias for older Claude Code;
+    /// `PermissionRequest` is the current event name. `Notification` fires
+    /// with matchers `agent_needs_input`/`agent_completed` — native "needs
+    /// you" and "done" signals that need no screen detection. `StopFailure`
+    /// carries typed failure reasons (rate_limit, auth, billing, …).
     static func hooksSection(port: Int, token: String? = nil) -> [String: Any] {
         let command = hookCommand(port: port, token: token)
+        let eventEntry: [[String: Any]] = [
+            [
+                "matcher": "",
+                "hooks": [
+                    ["type": "command", "command": command]
+                ],
+            ]
+        ]
+        let notificationEntry: [[String: Any]] = [
+            [
+                "matcher": "agent_needs_input|agent_completed|permission_prompt|idle_prompt",
+                "hooks": [
+                    ["type": "command", "command": command]
+                ],
+            ]
+        ]
         return [
             "hooks": [
-                "PermissionPrompt": [
-                    [
-                        "matcher": "",
-                        "hooks": [
-                            ["type": "command", "command": command]
-                        ],
-                    ]
-                ],
-                "Stop": [
-                    [
-                        "matcher": "",
-                        "hooks": [
-                            ["type": "command", "command": command]
-                        ],
-                    ]
-                ],
+                "PermissionPrompt": eventEntry,
+                "PermissionRequest": eventEntry,
+                "Stop": eventEntry,
+                "StopFailure": eventEntry,
+                "Notification": notificationEntry,
             ]
         ]
     }
@@ -179,13 +189,13 @@ enum ClaudeHookInstaller {
             } ?? toolName
 
         switch eventName {
-        case "PermissionPrompt":
+        case "PermissionPrompt", "PermissionRequest":
             var payload: [String: Any] = [
                 "source": "claude",
                 "type": "access_request",
                 "title": title,
                 "message": "Claude needs approval",
-                "variance": "yes_no",
+                "variance": "yes-no",
             ]
             if let mode, mode == "bypassPermissions" {
                 payload["message"] = "Claude (bypass-permissions mode)"
@@ -198,6 +208,42 @@ enum ClaudeHookInstaller {
                 "title": title,
                 "message": "Claude finished",
             ]
+        case "StopFailure":
+            let reason =
+                json["error"] as? String ?? json["stop_hook_active"] as? String
+                ?? json["transcript_path"] as? String
+            var payload: [String: Any] = [
+                "source": "claude",
+                "type": "failed",
+                "title": title,
+                "message": reason ?? "Claude stopped with an error",
+            ]
+            if let stopReason = json["stop_reason"] as? String {
+                payload["message"] = "Claude failed: \(stopReason)"
+            }
+            return payload
+        case "Notification":
+            let matcher = json["matcher"] as? String ?? json["message"] as? String ?? ""
+            if matcher.contains("agent_completed") {
+                return [
+                    "source": "claude",
+                    "type": "completed",
+                    "title": title,
+                    "message": "Claude finished",
+                ]
+            }
+            if matcher.contains("agent_needs_input")
+                || matcher.contains("permission_prompt") || matcher.contains("idle_prompt")
+            {
+                return [
+                    "source": "claude",
+                    "type": "access_request",
+                    "title": title,
+                    "message": "Claude needs your input",
+                    "variance": "yes-no",
+                ]
+            }
+            return nil
         default:
             return nil
         }

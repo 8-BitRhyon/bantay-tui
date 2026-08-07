@@ -28,7 +28,8 @@ adversarial corpus (`try to break it`) grows with every plan.
 | 015  | Ecosystem architecture & language boundaries (Swift/Go/wire contract) | P1 | M |  -  | DONE — decisions locked 2026-08-04; master doc for 016–018 |
 | 016  | Phase 1: macOS completion & hardening (stability, Sparkle, deeper UI, multi-display/a11y) | P1 | L | 015 | IN PROGRESS — 1a–1d + 3a/3b/3c/4a/4b shipped (PRs #25–#36); security sweep fixes in (PR #37); 2 Sparkle remains |
 | 017  | Phase 2: multiplexer adapters, universal hook SDK, standalone Go TUI | P1 | L | 015, 016 | DONE — WI-1/2/3/4/5/6/7 all shipped (PRs #39–#47); Go TUI (WI-7) merged 2026-08-05 |
-| 018  | Phase 3: remote devbox bridge, cross-platform overlays, web & mobile companion | P2 | L | 015, 016, 017 | PROPOSED — plan written 2026-08-04, RED tests pending |
+| 018  | Phase 3: remote devbox bridge, cross-platform overlays, web & mobile companion | P2 | L | 015, 016, 017 | REDUCED — see 019: take only the single-devbox bridge + read-only web dashboard; E2E-encrypted relay / iOS+Android companions / PromptCompiler / voice cut or deferred |
+| 019  | Fresh roadmap (independent audit 2026-08-06; owner-first + mobile-first reframe) | P0 | L | — | IN PROGRESS — Phase 0 DONE (2026-08-06: CI dependable via `scripts/build-logic-harness.sh`, wire fixtures L59–L60, usage gated, captureInterval wired, stream caches pruned, probe backoff). Phase A = Mac app genuinely good (this week, borrow BoringNotch/NotchDrop/DynamicNotchKit polish); Phase B = mobile-first parity (next week, phone mirrors the Mac); Phase C = differentiate from Claude Code's chat. Supersedes DEVELOPMENT_PLAN.md remaining-work |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale  -  finding fixed independently or approach
@@ -61,7 +62,8 @@ abandoned)
 
 The adversarial corpus in `.kilo/LogicCheck.swift` (A1–A5) started in a
 deliberately RED state. Both findings it flushed out are now **RESOLVED** — the
-harness is back to `ALL PASS` (194 checks):
+harness is back to `ALL PASS` (881 checks, labels L1–L58; count corrected
+2026-08-06 — earlier docs said 194 / 990):
 
 - **F1 — RESOLVED. Resurrected pane now re-appears silently.** A pane that
   vanishes from the roster and then re-enters with the same kind no longer

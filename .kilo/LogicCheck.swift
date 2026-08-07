@@ -1725,8 +1725,21 @@ struct LogicCheckMain {
             permission?["title"] as? String == "rm -rf build",
             "L20 tool_input command becomes title")
         check(
-            permission?["variance"] as? String == "yes_no",
-            "L20 prompt defaults to yes_no")
+            permission?["variance"] as? String == "yes-no",
+            "L20 prompt defaults to yes-no")
+        // Round-trip: the mapped payload must decode through AgentEventPayload
+        // (the same decoder the events file / ingest use). A producer that
+        // emits a raw value the enum rejects drops the whole event silently —
+        // this pins the producer↔decoder contract so it can't regress.
+        if let permission {
+            let data = try? JSONSerialization.data(withJSONObject: permission)
+            let decoded = data.flatMap {
+                try? JSONDecoder().decode(AgentEventPayload.self, from: $0)
+            }
+            check(
+                decoded?.type == .accessRequest && decoded?.variance == .yesNo,
+                "L20 mapped payload round-trips through AgentEventPayload")
+        }
         let stop = ClaudeHookInstaller.mapToEventPayload([
             "hook_event_name": "Stop",
             "tool_name": "Bash",
@@ -4420,6 +4433,62 @@ struct LogicCheckMain {
         check(
             IslandMetrics.morphMatchesContent(reduceMotion: true),
             "L58 content + morph both near-instant with reduceMotion")
+
+        // L59. Push-stream wire contract (herdr events.subscribe). The stream
+        // parses pane records into HerdrStreamPane; fromJSON is the pure
+        // decode the whole real-time roster depends on. Pin the exact field
+        // mapping the live socket emits (verified: underscore event names like
+        // pane_updated, snake_case payload keys).
+        let streamPane = HerdrStreamPane.fromJSON([
+            "pane_id": "w3:p3",
+            "agent": "kilo",
+            "agent_status": "blocked",
+            "cwd": "/Users/me/proj",
+            "workspace_id": "w3",
+            "terminal_title_stripped": "Kilo CLI",
+            "focused": true,
+        ])
+        check(streamPane != nil, "L59 fromJSON parses a full pane record")
+        check(streamPane?.paneId == "w3:p3", "L59 pane_id mapped")
+        check(streamPane?.agent == "kilo", "L59 agent mapped")
+        check(streamPane?.agentStatus == "blocked", "L59 agent_status mapped")
+        check(streamPane?.cwd == "/Users/me/proj", "L59 cwd mapped")
+        check(streamPane?.workspaceId == "w3", "L59 workspace_id mapped")
+        check(streamPane?.terminalTitle == "Kilo CLI", "L59 title_stripped preferred")
+        check(streamPane?.focused == true, "L59 focused mapped")
+        let fallbackTitle = HerdrStreamPane.fromJSON([
+            "pane_id": "w3:p4",
+            "terminal_title": "codex | working",
+        ])
+        check(
+            fallbackTitle?.terminalTitle == "codex | working",
+            "L59 terminal_title fallback when stripped absent")
+        check(
+            HerdrStreamPane.fromJSON(["agent": "no-pane-id"]) == nil,
+            "L59 record without pane_id rejected")
+
+        // L60. ntfy payload builder — the push body/priority contract. Empty
+        // topic disables; known kinds get the right text + urgency mapping.
+        check(
+            AgentAlertNotifier.messageBody(
+                source: "codex", kind: .accessRequest, title: "run tests"
+            ) == "codex needs your approval: run tests",
+            "L60 accessRequest body")
+        check(
+            AgentAlertNotifier.messageBody(source: "kilo", kind: .failed, title: nil)
+                == "kilo failed",
+            "L60 failed body without title")
+        check(
+            AgentAlertNotifier.messageBody(source: "claude", kind: .completed, title: "done")
+                == "claude finished: done",
+            "L60 completed body")
+        // Redaction: home paths are stripped, long titles truncated.
+        let home = NSHomeDirectory()
+        let long = String(repeating: "x", count: 300)
+        let redacted = AgentAlertNotifier.redactedTitle("\(home)/proj/some long title \(long)")
+        check(
+            !(redacted ?? "").contains(home) && (redacted ?? "").hasSuffix("…"),
+            "L60 redacts home path and truncates long titles")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

@@ -10,15 +10,13 @@ struct SettingsView: View {
     @State private var soundVolume = Int(NotchHUDConfig.shared.soundVolume * 100)
     @State private var autoClearTTL = Int(NotchHUDConfig.shared.autoClearTTL)
     @State private var stickyTTL = Int(NotchHUDConfig.shared.stickyApprovalTTL)
-    @State private var launchAtLogin = LaunchAgent.isLoaded()
+    @State private var launchAtLogin = false
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
     @State private var showIslandWhenIdle = NotchHUDConfig.shared.showIslandWhenIdle
     @State private var muteInTerminal = NotchHUDConfig.shared.muteInTerminal
     @State private var dockSide = NotchHUDConfig.shared.islandDockSide.rawValue
     @State private var idleStyle = NotchHUDConfig.shared.idleStyle.rawValue
     @State private var idleMaxChips = NotchHUDConfig.shared.clampedIdleMaxChips
-    @State private var expandedQueueCap = NotchHUDConfig.shared.clampedExpandedQueueCap
-    @State private var expandedShowQueue = NotchHUDConfig.shared.expandedShowQueue
     @State private var expandedGroupByState = NotchHUDConfig.shared.expandedGroupByState
     @State private var hotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
     @State private var keyboardShortcuts = NotchHUDConfig.shared.keyboardShortcuts
@@ -26,8 +24,7 @@ struct SettingsView: View {
     @State private var showElapsed = NotchHUDConfig.shared.showElapsedTime
     @State private var menuBadge = NotchHUDConfig.shared.menuBarBadge
     @State private var standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
-    @State private var showUsage = NotchHUDConfig.shared.showUsageGauge
-    @State private var usageBudget = Int(NotchHUDConfig.shared.usageBudgetUSD)
+    @State private var showUsage = NotchHUDConfig.shared.usageTrackingEnabled
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
     @State private var showShelf = NotchHUDConfig.shared.showShelfTab
@@ -43,10 +40,15 @@ struct SettingsView: View {
     @State private var quietHoursStart = NotchHUDConfig.shared.quietHoursStart
     @State private var quietHoursEnd = NotchHUDConfig.shared.quietHoursEnd
     @State private var notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
+    @State private var ntfyTopic = NotchHUDConfig.shared.ntfyTopic
+    @State private var ntfyServer = NotchHUDConfig.shared.ntfyServer
+    @State private var tmuxStatusEnabled = NotchHUDConfig.shared.tmuxStatusEnabled
     @State private var attentionFilter = NotchHUDConfig.shared.attentionFilterEnabled
     @State private var volumePreviewTask: Task<Void, Never>?
     @State private var herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
         manifestPath: Self.herdrManifestPath)
+    @State private var opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
+    @State private var opencodePluginError = ""
 
     var body: some View {
         Form {
@@ -75,15 +77,14 @@ struct SettingsView: View {
                     .onChange(of: standaloneScan) { newValue in
                         NotchHUDConfig.shared.standaloneScanEnabled = newValue
                     }
-                Toggle("Usage gauge in footer", isOn: $showUsage)
-                    .help("Token/cost bar from agent transcripts.")
+                Toggle("Track token/cost usage", isOn: $showUsage)
+                    .help(
+                        "Reads agent transcripts to compute token + cost usage. "
+                            + "Off by default (nothing displays it yet; spend "
+                            + "history is planned)."
+                    )
                     .onChange(of: showUsage) { newValue in
-                        NotchHUDConfig.shared.showUsageGauge = newValue
-                    }
-                Stepper("Usage budget: $\(usageBudget)", value: $usageBudget, in: 1...100)
-                    .help("Gauge turns amber at 70%, red at 90% of budget.")
-                    .onChange(of: usageBudget) { newValue in
-                        NotchHUDConfig.shared.usageBudgetUSD = Double(newValue)
+                        NotchHUDConfig.shared.usageTrackingEnabled = newValue
                     }
             }
             Section("Muted sources") {
@@ -163,6 +164,35 @@ struct SettingsView: View {
                             uninstallHerdrPlugin()
                         }
                     }
+            }
+            Section("openCode integration") {
+                Toggle("Stream openCode events", isOn: $opencodePluginInstalled)
+                    .help(
+                        "Installs a plugin into ~/.config/opencode/plugins so "
+                            + "openCode sessions show on the notch (working / "
+                            + "needs approval / done / failed). No-op when "
+                            + "Bantay isn't running."
+                    )
+                    .onChange(of: opencodePluginInstalled) { newValue in
+                        if newValue {
+                            opencodePluginError =
+                                OpenCodePluginInstaller.install() ?? ""
+                            opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
+                        } else {
+                            let error = OpenCodePluginInstaller.remove() ?? ""
+                            opencodePluginError = error
+                            // Only show off if the removal actually happened.
+                            opencodePluginInstalled =
+                                error.isEmpty
+                                ? false
+                                : OpenCodePluginInstaller.isInstalled()
+                        }
+                    }
+                if !opencodePluginError.isEmpty {
+                    Text(opencodePluginError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
             Section("Shelf") {
                 Toggle("Shelf tab in expanded view", isOn: $showShelf)
@@ -278,6 +308,53 @@ struct SettingsView: View {
                     Text("Test notification is available in debug builds only.")
                 #endif
             }
+            Section("Push notifications (ntfy.sh)") {
+                TextField("Topic", text: $ntfyTopic)
+                    .textFieldStyle(.roundedBorder)
+                    .help(
+                        "Leave empty to disable. Any ntfy topic works — "
+                            + "create a private one at ntfy.sh first."
+                    )
+                    .onChange(of: ntfyTopic) { newValue in
+                        NotchHUDConfig.shared.ntfyTopic = newValue
+                    }
+                TextField("Server", text: $ntfyServer)
+                    .textFieldStyle(.roundedBorder)
+                    .help("Default https://ntfy.sh — override for self-hosted.")
+                    .onChange(of: ntfyServer) { newValue in
+                        NotchHUDConfig.shared.ntfyServer = newValue
+                    }
+                Text(
+                    ntfyTopic.isEmpty
+                        ? "Push is off — set a topic to receive approvals, failures and completions on other devices."
+                        : "Push on: \(ntfyServer)/\(ntfyTopic)"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Section("tmux status bar") {
+                Toggle("Show agent status in tmux", isOn: $tmuxStatusEnabled)
+                    .help(
+                        "Adds a live one-line summary (◐ working · ⚠ blocked) "
+                            + "to tmux's status-right via bantay-status."
+                    )
+                    .onChange(of: tmuxStatusEnabled) { newValue in
+                        NotchHUDConfig.shared.tmuxStatusEnabled = newValue
+                        let script = TmuxStatusInstaller.scriptPath()
+                        if newValue {
+                            _ = TmuxStatusInstaller.install(scriptPath: script)
+                        } else {
+                            _ = TmuxStatusInstaller.remove(scriptPath: script)
+                        }
+                    }
+                Text(
+                    TmuxStatusInstaller.isInstalled(scriptPath: TmuxStatusInstaller.scriptPath())
+                        ? "Installed — agent status shows in tmux status-right."
+                        : "Not installed — enable above to add it to tmux."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
             Section("Quiet hours") {
                 Toggle("Silence alert sounds", isOn: $quietHoursEnabled)
                     .help(
@@ -389,24 +466,11 @@ struct SettingsView: View {
                     .onChange(of: attentionFilter) { newValue in
                         NotchHUDConfig.shared.attentionFilterEnabled = newValue
                     }
-                Toggle("Pin approval queue on top", isOn: $expandedShowQueue)
-                    .help("Blocked agents get approve/deny cards above the roster.")
-                    .onChange(of: expandedShowQueue) { newValue in
-                        NotchHUDConfig.shared.expandedShowQueue = newValue
-                    }
                 Toggle("Group agents by state", isOn: $expandedGroupByState)
                     .help("Need-input first, then working, done, failed, idle.")
                     .onChange(of: expandedGroupByState) { newValue in
                         NotchHUDConfig.shared.expandedGroupByState = newValue
                     }
-                Stepper(
-                    "Approval queue cards: \(expandedQueueCap)",
-                    value: $expandedQueueCap, in: 1...5
-                )
-                .help("Extra blocked agents collapse into '+N more'.")
-                .onChange(of: expandedQueueCap) { newValue in
-                    NotchHUDConfig.shared.expandedQueueCap = newValue
-                }
             }
             Section("Quick actions") {
                 Toggle("Global shortcut ⌥Space", isOn: $hotkeyEnabled)
@@ -461,7 +525,12 @@ struct SettingsView: View {
         claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
         herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
             manifestPath: Self.herdrManifestPath)
-        launchAtLogin = LaunchAgent.isLoaded()
+        // `launchctl print` is slow; probe off the main thread so opening
+        // Settings can never beachball.
+        Task.detached(priority: .utility) {
+            let loaded = LaunchAgent.isLoaded()
+            await MainActor.run { launchAtLogin = loaded }
+        }
     }
 
     private func terminalLabel(_ bundleID: String) -> String {
@@ -627,7 +696,10 @@ struct SettingsView: View {
 
 struct WelcomeView: View {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
-    @State private var launchAtLogin = LaunchAgent.isLoaded()
+    /// `launchctl print` is slow (and can block seconds on the GUI domain),
+    /// so probe it off the main thread and default to off until it resolves —
+    /// a beachball on the welcome screen is a non-starter.
+    @State private var launchAtLogin = false
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
     @Environment(\.dismiss) private var dismiss
 
@@ -661,5 +733,11 @@ struct WelcomeView: View {
         }
         .padding(20)
         .frame(width: 430)
+        .onAppear {
+            Task.detached(priority: .utility) {
+                let loaded = LaunchAgent.isLoaded()
+                await MainActor.run { launchAtLogin = loaded }
+            }
+        }
     }
 }

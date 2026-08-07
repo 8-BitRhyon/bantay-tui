@@ -23,9 +23,6 @@ final class NotchHUDConfig {
     var captureInterval: TimeInterval = 2.0 {
         didSet { defaults.set(captureInterval, forKey: "captureInterval") }
     }
-    var idlePollInterval: TimeInterval = 10.0 {
-        didSet { defaults.set(idlePollInterval, forKey: "idlePollInterval") }
-    }
     var soundCooldown: TimeInterval = 5.0 {
         didSet { defaults.set(soundCooldown, forKey: "soundCooldown") }
     }
@@ -36,6 +33,30 @@ final class NotchHUDConfig {
     /// island is hidden (snoozed / hide-at-startup). Opt-in; default off.
     var notifyWhenHidden = false {
         didSet { defaults.set(notifyWhenHidden, forKey: "notifyWhenHidden") }
+    }
+    /// ntfy.sh push notification topic (e.g. "bantay-agent-alerts"). When set
+    /// and non-empty, blocked/approval events are pushed to the topic so they
+    /// reach you on other devices. Works with any ntfy server; override the
+    /// base URL for self-hosted instances.
+    var ntfyTopic: String = "" {
+        didSet { defaults.set(ntfyTopic, forKey: "ntfyTopic") }
+    }
+    var ntfyServer: String = "https://ntfy.sh" {
+        didSet { defaults.set(ntfyServer, forKey: "ntfyServer") }
+    }
+    /// The ntfy push is only enabled when a topic is configured.
+    var ntfyEnabled: Bool { !ntfyTopic.isEmpty }
+    /// Gate for the transcript token/cost enumeration. Off by default: nothing
+    /// in the UI renders it (the footer gauge was removed), so paying for the
+    /// per-poll transcript read + disk I/O is pure waste. Phase C (spend
+    /// history) turns this on when there is a consumer.
+    var usageTrackingEnabled = false {
+        didSet { defaults.set(usageTrackingEnabled, forKey: "usageTrackingEnabled") }
+    }
+    /// Show a live agent-status line in the tmux status bar via
+    /// `#(bantay-status)`. Opt-in; installs on the next launch when enabled.
+    var tmuxStatusEnabled = false {
+        didSet { defaults.set(tmuxStatusEnabled, forKey: "tmuxStatusEnabled") }
     }
     /// Show the F8 "Attention" tab (needs-input + failed triage). Default off.
     var attentionFilterEnabled = false {
@@ -264,9 +285,6 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "captureInterval") as? NSNumber {
             captureInterval = v.doubleValue
         }
-        if let v = defaults.object(forKey: "idlePollInterval") as? NSNumber {
-            idlePollInterval = v.doubleValue
-        }
         if let v = defaults.object(forKey: "soundCooldown") as? NSNumber {
             soundCooldown = v.doubleValue
         }
@@ -275,6 +293,15 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "notifyWhenHidden") as? Bool {
             notifyWhenHidden = v
+        }
+        if let v = defaults.object(forKey: "ntfyTopic") as? String {
+            ntfyTopic = v
+        }
+        if let v = defaults.object(forKey: "ntfyServer") as? String {
+            ntfyServer = v
+        }
+        if let v = defaults.object(forKey: "tmuxStatusEnabled") as? Bool {
+            tmuxStatusEnabled = v
         }
         if let v = defaults.object(forKey: "attentionFilterEnabled") as? Bool {
             attentionFilterEnabled = v

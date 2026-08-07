@@ -53,30 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: swiftc logic harness
-        run: |
-          swiftc -o /tmp/logic-check \
-            Sources/BantayTUI/AgentEventKind.swift \
-            Sources/BantayTUI/AgentDetector.swift \
-            Sources/BantayTUI/ClaudeHookInstaller.swift \
-            Sources/BantayTUI/NotchHUDConfig.swift \
-            Sources/BantayTUI/HerdrSocketAdapter.swift \
-            Sources/BantayTUI/HerdrSocketClient.swift \
-            Sources/BantayTUI/ControlGateway.swift \
-            Sources/BantayTUI/IslandMetrics.swift \
-            Sources/BantayTUI/PlexerAdapter.swift \
-            Sources/BantayTUI/ZellijAdapter.swift \
-            Sources/BantayTUI/AgentEventManager.swift \
-            Sources/BantayTUI/UsageTracker.swift \
-            Sources/BantayTUI/EventIngestServer.swift \
-            Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
-            Sources/BantayTUI/TerminalFocusser.swift \
-            Sources/BantayTUI/TmuxAdapter.swift \
-            Sources/BantayTUI/PaneFocusRouter.swift \
-            Sources/BantayTUI/LaunchAgent.swift \
-            Sources/BantayTUI/ProcessRunner.swift \
-            Sources/BantayTUI/HookSdk.swift \
-            .kilo/LogicCheck.swift
-          /tmp/logic-check
+        run: bash scripts/build-logic-harness.sh
 
   smoke:
     name: Layer 4.5 · Launch smoke
@@ -144,30 +121,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: swiftc logic harness
-        run: |
-          swiftc -o /tmp/logic-check \
-            Sources/BantayTUI/AgentEventKind.swift \
-            Sources/BantayTUI/AgentDetector.swift \
-            Sources/BantayTUI/ClaudeHookInstaller.swift \
-            Sources/BantayTUI/NotchHUDConfig.swift \
-            Sources/BantayTUI/HerdrSocketAdapter.swift \
-            Sources/BantayTUI/HerdrSocketClient.swift \
-            Sources/BantayTUI/ControlGateway.swift \
-            Sources/BantayTUI/IslandMetrics.swift \
-            Sources/BantayTUI/PlexerAdapter.swift \
-            Sources/BantayTUI/ZellijAdapter.swift \
-            Sources/BantayTUI/AgentEventManager.swift \
-            Sources/BantayTUI/UsageTracker.swift \
-            Sources/BantayTUI/EventIngestServer.swift \
-            Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift \
-            Sources/BantayTUI/TerminalFocusser.swift \
-            Sources/BantayTUI/TmuxAdapter.swift \
-            Sources/BantayTUI/PaneFocusRouter.swift \
-            Sources/BantayTUI/LaunchAgent.swift \
-            Sources/BantayTUI/ProcessRunner.swift \
-            Sources/BantayTUI/HookSdk.swift \
-            .kilo/LogicCheck.swift
-          /tmp/logic-check
+        run: bash scripts/build-logic-harness.sh
 
   # ------------------------------------------------------------------
   # Static gates (ubuntu, independent).

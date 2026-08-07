@@ -204,6 +204,7 @@ private struct PeekPanelView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
+        .frame(width: 480, height: 420)
     }
 
     @ViewBuilder

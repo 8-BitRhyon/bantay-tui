@@ -153,6 +153,49 @@ fi
 
 cp "$BINARY" "$INSTALLED_BIN"
 cp "$(cd "$(dirname "$0")" && pwd)/setup.sh" "$DATA_DIR/setup.sh"
+# Ship the tmux status-bar helper alongside the app.
+cp "$(cd "$(dirname "$0")" && pwd)/bantay-status.sh" "$DATA_DIR/bantay-status.sh"
+chmod +x "$DATA_DIR/bantay-status.sh"
+# Ship the openCode plugin so Settings can install it into openCode.
+cp "$(cd "$(dirname "$0")" && pwd)/bantay-opencode.js" "$DATA_DIR/bantay-opencode.js"
+
+# Run from a minimal .app bundle so the process has a bundle identifier —
+# UNUserNotificationCenter (approval notification actions) requires one and
+# crashes with `bundleProxyForCurrentProcess is nil` for a bare binary.
+APP_BUNDLE="$DATA_DIR/Bantay-TUI.app"
+APP_BIN="$APP_BUNDLE/Contents/MacOS/bantay"
+LAUNCH_BIN="$APP_BIN"
+mkdir -p "$APP_BUNDLE/Contents/MacOS"
+cp "$BINARY" "$APP_BIN"
+cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Bantay-TUI</string>
+    <key>CFBundleDisplayName</key>
+    <string>Bantay-TUI</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.bantay-tui</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>bantay</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+PLIST
 
 cat > "$AGENTS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -164,7 +207,7 @@ cat > "$AGENTS_PLIST" <<PLIST
     <string>com.bantay-tui.agent</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$INSTALLED_BIN</string>
+        <string>$LAUNCH_BIN</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

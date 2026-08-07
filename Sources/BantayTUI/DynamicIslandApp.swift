@@ -5,6 +5,9 @@ extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
     static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
     static let settingsWillOpen = Notification.Name("settingsWillOpen")
+    /// Posted when file(s) are dropped onto the island window; `userInfo`
+    /// carries `"urls"` as `[URL]`.
+    static let notchFilesDropped = Notification.Name("notchFilesDropped")
 }
 
 @main
@@ -18,8 +21,60 @@ struct DynamicIslandApp: App {
     }
 }
 
-final class KeyablePanel: NSPanel {
+/// The island's borderless panel. Also serves as an `NSDraggingDestination`
+/// so dropping files onto the notch — expanded or not, on any tab — opens
+/// the shelf and lands the files there (NotchDrop-style drop-on-notch).
+final class KeyablePanel: NSPanel, NSDraggingDestination {
     override var canBecomeKey: Bool { true }
+
+    override func awakeFromNib() {
+        super.awakeFromNib()
+        MainActor.assumeIsolated { setupFileDrag() }
+    }
+
+    override init(
+        contentRect: NSRect, styleMask style: NSWindow.StyleMask,
+        backing: NSWindow.BackingStoreType,
+        defer flag: Bool
+    ) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
+        MainActor.assumeIsolated { setupFileDrag() }
+    }
+
+    private func setupFileDrag() {
+        registerForDraggedTypes([.fileURL])
+    }
+
+    /// Accept any drag carrying file URLs; announce so the view can expand
+    /// and switch to the shelf tab while the user is hovering over the notch.
+    func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard
+            let urls = sender.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self]
+            ) as? [URL], !urls.isEmpty
+        else {
+            return []
+        }
+        NotificationCenter.default.post(name: .notchFileDragEntered, object: nil)
+        return .copy
+    }
+
+    func draggingExited(_ sender: NSDraggingInfo?) {
+        // No-op: the panel stays on the shelf tab; only a successful drop
+        // matters. The expanded state collapses on hover-exit as usual.
+    }
+
+    func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard
+            let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self])
+                as? [URL], !urls.isEmpty
+        else {
+            return false
+        }
+        NotificationCenter.default.post(
+            name: .notchFilesDropped, object: nil, userInfo: ["urls": urls])
+        return true
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -44,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var wakeObserver: NSObjectProtocol?
     @MainActor private static var settleTask: Task<Void, Never>?
     private var hotkeyMonitors: [Any] = []
+    private var dragMonitor: NotchDragMonitor?
     private var didLogHotkeyPermissionWarning = false
     private var badgeTimer: Timer?
     private var ingestServer: EventIngestServer?
@@ -133,6 +189,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installMenuBar()
         observeScreenChanges()
         updateGlobalHotkeyMonitor()
+        let monitor = NotchDragMonitor()
+        dragMonitor = monitor
+        monitor.start()
         startBadgeTimer()
         updateIngestServer()
         updateControlGateway()
@@ -593,13 +652,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(noneItem)
         } else {
             for agent in agents {
-                let item = NSMenuItem(
-                    title: "\(agent.source) · \(agent.kind.label)",
-                    action: #selector(focusAgent(_:)),
-                    keyEquivalent: "")
-                item.target = self
-                item.representedObject = agent.paneId
-                menu.addItem(item)
+                let isBlocked =
+                    agent.kind == .accessRequest || agent.kind == .waiting
+                if isBlocked, agent.paneId != nil {
+                    // Submenu per blocked agent: Approve / Deny (+ choices).
+                    let submenu = NSMenu()
+                    let header = NSMenuItem(
+                        title: "\(agent.source) needs approval", action: nil,
+                        keyEquivalent: "")
+                    header.isEnabled = false
+                    submenu.addItem(header)
+                    submenu.addItem(.separator())
+                    let controls = agent.approval
+                    if controls.isYesNo {
+                        submenu.addItem(
+                            menuItem(
+                                title: "Approve", action: #selector(approveAgent(_:)),
+                                paneId: agent.paneId!))
+                        submenu.addItem(
+                            menuItem(
+                                title: "Deny", action: #selector(denyAgent(_:)),
+                                paneId: agent.paneId!))
+                    } else if controls.isMulti {
+                        let labels = controls.optionLabels
+                        for (index, label) in labels.enumerated() {
+                            let text =
+                                controls.choices.indices.contains(index)
+                                ? controls.choices[index] : "Option \(label)"
+                            submenu.addItem(
+                                menuItem(
+                                    title: "\(label). \(text)",
+                                    action: #selector(approveChoiceAgent(_:)),
+                                    paneId: agent.paneId!,
+                                    extra: String(index)))
+                        }
+                        submenu.addItem(
+                            menuItem(
+                                title: "Approve (all selected)",
+                                action: #selector(approveAgent(_:)),
+                                paneId: agent.paneId!))
+                    } else {
+                        let labels = controls.optionLabels
+                        for (index, label) in labels.enumerated() {
+                            let text =
+                                controls.choices.indices.contains(index)
+                                ? controls.choices[index] : "Option \(label)"
+                            submenu.addItem(
+                                menuItem(
+                                    title: "\(label). \(text)",
+                                    action: #selector(approveChoiceAgent(_:)),
+                                    paneId: agent.paneId!,
+                                    extra: String(index)))
+                        }
+                        if controls.optionLabels.isEmpty {
+                            submenu.addItem(
+                                menuItem(
+                                    title: "Approve", action: #selector(approveAgent(_:)),
+                                    paneId: agent.paneId!))
+                        }
+                    }
+                    submenu.addItem(.separator())
+                    submenu.addItem(
+                        menuItem(
+                            title: "Focus terminal", action: #selector(focusAgent(_:)),
+                            paneId: agent.paneId!))
+                    let item = NSMenuItem(
+                        title: "⚠︎ \(agent.source) — \(agent.title ?? "needs approval")",
+                        action: nil, keyEquivalent: "")
+                    item.submenu = submenu
+                    menu.addItem(item)
+                } else {
+                    let item = NSMenuItem(
+                        title: "\(agent.source) · \(agent.kind.label)",
+                        action: #selector(focusAgent(_:)),
+                        keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = agent.paneId
+                    menu.addItem(item)
+                }
             }
         }
 
@@ -729,6 +859,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func focusAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
         HerdrSocketAdapter().paneFocus(paneId: paneId)
+    }
+
+    /// Helper for a menu item whose target is this delegate and whose
+    /// representedObject is the pane id (optionally with an index suffix for
+    /// numbered choices).
+    @MainActor
+    private func menuItem(
+        title: String, action: Selector, paneId: String, extra: String? = nil
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.representedObject = extra.map { "\(paneId)|\($0)" } ?? paneId
+        return item
+    }
+
+    @MainActor
+    @objc private func approveAgent(_ sender: NSMenuItem) {
+        guard let paneId = sender.representedObject as? String else { return }
+        AgentEventManager.shared.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+    }
+
+    @MainActor
+    @objc private func denyAgent(_ sender: NSMenuItem) {
+        guard let paneId = sender.representedObject as? String else { return }
+        AgentEventManager.shared.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+    }
+
+    @MainActor
+    @objc private func approveChoiceAgent(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let index = Int(parts[1]) else { return }
+        let paneId = parts[0]
+        let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+        AgentEventManager.shared.performAction(paneId: paneId) {
+            $0.approveChoice(paneId: paneId, choice: number)
+        }
     }
 
     @MainActor

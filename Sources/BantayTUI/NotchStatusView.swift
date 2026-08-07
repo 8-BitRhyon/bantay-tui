@@ -13,7 +13,6 @@ struct NotchStatusView: View {
     @State private var composingPaneId: String?
     @State private var promptText = ""
     @State private var pulse = false
-    @State private var selectedChoices: Set<Int> = []
     @State private var queueSelections: [String: Set<Int>] = [:]
     @State private var showWelcome = false
     @State private var glowPulse = false
@@ -29,11 +28,6 @@ struct NotchStatusView: View {
     @State private var peekingPaneId: String?
     @State private var peekText: String = ""
     @State private var peekTask: Task<Void, Never>?
-    /// Per-agent `git diff --shortstat` summary ("+12 −3"), the glanceable
-    /// "did this agent actually do work" meter (Codex/Conductor pattern).
-    /// Keyed by (id, cwd): standalone agents share `paneId == nil` so id alone
-    /// collides, and a summary is only valid for the cwd it was computed in.
-    @State private var diffStats: [IslandMetrics.DiffStatCacheKey: String] = [:]
     @State private var clipboardItems: [ClipboardItem] = []
     @State private var shelfFiles: [ShelfFile] = []
     @State private var lastChangeCount = NSPasteboard.general.changeCount
@@ -142,13 +136,23 @@ struct NotchStatusView: View {
             chipWidth: closedPillWidth)
     }
 
+    /// Number of section headers the grouped roster will draw (0 when
+    /// grouping is off). Fed into the height math so the panel grows to fit
+    /// its headers instead of clipping the roster against the rounded bottom.
+    private var rosterGroupCount: Int {
+        guard NotchHUDConfig.shared.expandedGroupByState else { return 0 }
+        return IslandMetrics.groupHeaderCount(kinds: visibleAgents.map(\.kind))
+    }
+
     private var islandHeight: CGFloat {
         if isExpanded {
             return IslandMetrics.expandedSize(
                 topInset: chipTopOffset, agentCount: mergedRoster.count,
-                queueCount: expandedQueueSplit.shown,
+                queueCount: 0,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
-                overflowCount: expandedQueueSplit.overflow
+                overflowCount: 0,
+                groupCount: rosterGroupCount,
+                footerVisible: false
             ).height
         }
         return IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
@@ -157,16 +161,11 @@ struct NotchStatusView: View {
     private var contentHeight: CGFloat {
         IslandMetrics.contentHeight(
             isExpanded: isExpanded, topInset: chipTopOffset,
-            agentCount: mergedRoster.count, queueCount: expandedQueueSplit.shown,
+            agentCount: mergedRoster.count, queueCount: 0,
             shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
-            overflowCount: expandedQueueSplit.overflow)
-    }
-
-    /// Approval-queue split used for both layout height and rendering.
-    private var expandedQueueSplit: (shown: Int, overflow: Int) {
-        IslandMetrics.queueSplit(
-            blockedCount: approvalQueueAgents.count,
-            cap: NotchHUDConfig.shared.clampedExpandedQueueCap)
+            overflowCount: 0,
+            groupCount: rosterGroupCount,
+            footerVisible: false)
     }
 
     /// Content frame width: the split centered strip spans the whole window
@@ -234,7 +233,6 @@ struct NotchStatusView: View {
                 .animation(morphAnimation, value: isExpanded)
                 .frame(width: contentFrameWidth, height: contentHeight, alignment: .top)
                 .offset(y: chipTopOffset)
-                .clipped()
         }
         .overlay(edgeGlow)
         .scaleEffect(activeHoverScale, anchor: .top)
@@ -265,7 +263,11 @@ struct NotchStatusView: View {
         .onDisappear { removeLegacyKeyMonitor() }
         .onChange(of: isExpanded) { _ in
             if !isExpanded { cancelComposing() }
-            if isExpanded { eventManager.markRecentCompletionsSeen() }
+            // Clear recents on COLLAPSE, not expand: marking them seen when
+            // the panel opens would wipe the very list you just expanded to
+            // see. "Since you last looked" semantics — the recents are a
+            // what-happened-while-away buffer.
+            if !isExpanded { eventManager.markRecentCompletionsSeen() }
             eventManager.setActive(isExpanded)
         }
         .onChange(of: eventManager.currentEvent) { _ in handleEventChange() }
@@ -274,6 +276,18 @@ struct NotchStatusView: View {
             NotificationCenter.default.publisher(for: .notchVisibilityChanged)
         ) { _ in
             updateIslandVisibility()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchFileDragEntered)
+        ) { _ in
+            handleFileDragEntered()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchFilesDropped)
+        ) { note in
+            if let urls = note.userInfo?["urls"] as? [URL] {
+                handleFilesDropped(urls)
+            }
         }
         .onReceive(
             Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -360,7 +374,19 @@ struct NotchStatusView: View {
         }
         switch shortcut {
         case .approve:
-            eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+            // Multi-select: Y submits the toggled selection; otherwise plain
+            // approve. The pill and the roster share queueSelections (keyed
+            // by pane id), so digits + Y work consistently from both.
+            if agent.approval.isMulti {
+                let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
+                    queueSelections[paneId] ?? [])
+                eventManager.performAction(paneId: paneId) {
+                    $0.approveMulti(paneId: paneId, selections: numbers)
+                }
+                queueSelections.removeValue(forKey: paneId)
+            } else {
+                eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+            }
         case .deny:
             eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
         case .option(let number):
@@ -481,39 +507,6 @@ struct NotchStatusView: View {
         peekTask = nil
     }
 
-    /// Compute a `git diff --shortstat` summary for the agent's cwd off the
-    /// main actor and cache it by (id, cwd). Cheap (one Process); only fetches
-    /// once per (id, cwd) so the row isn't recomputing every poll. Runs
-    /// through the non-blocking `ProcessRunner` with a timeout so a git
-    /// process in a huge/mounted repo can never hang the row. The composite
-    /// key means an old-cwd task that lands late writes its own (id, cwd)
-    /// slot — never the agent's current one — and the prune then drops it.
-    private func fetchDiffStats(_ agent: AgentSnapshot) {
-        guard let cwd = agent.cwd else { return }
-        let key = IslandMetrics.DiffStatCacheKey(id: agent.id, cwd: cwd)
-        guard diffStats[key] == nil else { return }
-        Task.detached {
-            let result = await ProcessRunner.run(
-                executableURL: URL(fileURLWithPath: "/usr/bin/git"),
-                arguments: ["-C", cwd, "diff", "--shortstat"],
-                timeout: 3.0)
-            let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let summary = IslandMetrics.DiffStatCache.parseShortstat(raw) else { return }
-            await MainActor.run {
-                if self.diffStats[key] == nil {
-                    self.diffStats[key] = summary
-                }
-                let liveKeys = Set(
-                    self.eventManager.agents.compactMap { agent in
-                        agent.cwd.map { IslandMetrics.DiffStatCacheKey(id: agent.id, cwd: $0) }
-                    }
-                )
-                self.diffStats = IslandMetrics.DiffStatCache.prune(
-                    self.diffStats, liveKeys: liveKeys)
-            }
-        }
-    }
-
     /// Cancels composing on Escape. `.onKeyPress` is macOS 14+; on older
     /// systems the compose row's ✕ button remains the cancel affordance.
     private struct EscapeCancelsModifier: ViewModifier {
@@ -618,25 +611,33 @@ struct NotchStatusView: View {
             }
     }
 
+    /// Notch-hugging corner wing. The blend version (`destinationOut` inside a
+    /// mask) flakes into a stray solid square on macOS 26, so this is a pure
+    /// path silhouette: the cap sliver the square-minus-rounded-cut composite
+    /// actually produces. Verified pixel-identical to the blend's output at 4×
+    /// (213 px vs 209 px, ±antialiasing).
     private func cornerCutout(topLeading: Bool) -> some View {
-        ZStack(alignment: topLeading ? .topLeading : .topTrailing) {
-            Rectangle()
-                .fill(.black)
-                .frame(width: cornerRad, height: cornerRad)
-            Rectangle()
-                .fill(.white)
-                .clipShape(
-                    topLeading
-                        ? .rect(topLeadingRadius: cornerRad)
-                        : .rect(topTrailingRadius: cornerRad)
-                )
-                .frame(
-                    width: cornerRad + IslandMetrics.contentSpacing,
-                    height: cornerRad + IslandMetrics.contentSpacing
-                )
-                .blendMode(.destinationOut)
+        let extent = cornerRad + IslandMetrics.contentSpacing
+        let shape = Path { path in
+            if topLeading {
+                path.move(to: CGPoint(x: 0, y: 0))
+                path.addLine(to: CGPoint(x: cornerRad, y: 0))
+                path.addArc(
+                    center: CGPoint(x: cornerRad, y: cornerRad), radius: cornerRad,
+                    startAngle: .degrees(270), endAngle: .degrees(180), clockwise: true)
+            } else {
+                path.move(to: CGPoint(x: extent, y: 0))
+                path.addLine(to: CGPoint(x: extent - cornerRad, y: 0))
+                path.addArc(
+                    center: CGPoint(x: extent - cornerRad, y: cornerRad), radius: cornerRad,
+                    startAngle: .degrees(270), endAngle: .degrees(360), clockwise: false)
+            }
+            path.closeSubpath()
         }
-        .compositingGroup()
+        return
+            shape
+            .fill(.black)
+            .frame(width: extent, height: extent)
     }
 
     // MARK: - Content
@@ -652,11 +653,11 @@ struct NotchStatusView: View {
             approvalPill(event: event, paneId: paneId)
                 .transition(contentTransition)
         } else if isCenteredClosed {
-            // Centered idle: the pill sits over/behind the physical notch,
-            // so it carries no content at all — no status dot, no chips,
-            // and no closed pill (a working agent's purple progress dot on
-            // the left edge reads as noise against the menu bar).
-            emptyBar
+            // Centered idle: the pill sits over/behind the physical notch and
+            // the window spans the full width, so agent details leak out to
+            // BOTH sides of the notch (working → left, needs-you → right)
+            // instead of an empty bar. Tap anywhere to expand.
+            centeredSplitStrip
                 .transition(contentTransition)
                 .onTapGesture { expandTo(true) }
         } else if let event = eventManager.currentEvent {
@@ -690,6 +691,88 @@ struct NotchStatusView: View {
 
     private var emptyBar: some View {
         Rectangle().fill(.clear).frame(width: islandWidth, height: IslandMetrics.pillHeight)
+    }
+
+    /// Centered idle strip: the pill covers the notch and the window spans
+    /// the full width, so agent details leak out to both sides — working
+    /// agents as chips anchored to the left edge, anything that needs you as
+    /// an amber count anchored to the right edge. Tap either side to expand.
+    @ViewBuilder
+    private var centeredSplitStrip: some View {
+        let agents = eventManager.agents
+        let needsYou = agents.filter { $0.kind == .accessRequest || $0.kind == .waiting }
+        let working = agents.filter { $0.kind.isOngoing && $0.kind != .accessRequest }
+        let failed = agents.filter { $0.kind == .failed }
+        let left = working.prefix(3)
+        let windowW = IslandMetrics.windowSize().width
+        let sideWidth =
+            (windowW
+                - IslandMetrics.notchWidth(
+                    screenWidth: AppDelegate.islandScreen()?.frame.width ?? windowW,
+                    auxLeft: AppDelegate.auxLeftWidth,
+                    auxRight: AppDelegate.auxRightWidth,
+                    safeTop: AppDelegate.topInset)) / 2
+        let notchPad: CGFloat = 8
+
+        HStack(spacing: 0) {
+            // Left: working agents leak out toward the menu-bar clear space.
+            HStack(spacing: IslandMetrics.idleChipGap) {
+                ForEach(Array(left.enumerated()), id: \.element.id) { _, agent in
+                    HStack(spacing: IslandMetrics.idleChipDotGap) {
+                        Circle()
+                            .fill(Color(hex: agent.kind.color))
+                            .frame(
+                                width: IslandMetrics.idleDotSize,
+                                height: IslandMetrics.idleDotSize)
+                        Text(agent.source)
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, IslandMetrics.idleChipHPad)
+                    .frame(height: 20)
+                    .background(Color.white.opacity(0.10), in: Capsule())
+                }
+                if working.count > left.count {
+                    Text("+\(working.count - left.count)")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            }
+            .frame(maxWidth: sideWidth, alignment: .leading)
+            .padding(.leading, notchPad)
+
+            Spacer(minLength: 0)
+
+            // Right: needs-you count (amber) and failed count (red), leaking
+            // toward the right edge so failures stay visible at idle.
+            HStack(spacing: 5) {
+                if !needsYou.isEmpty {
+                    Circle().fill(Color(hex: AgentEventKind.accessRequest.color))
+                        .frame(width: 7, height: 7)
+                    Text("\(needsYou.count) need you")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                if !failed.isEmpty {
+                    Circle().fill(Color(hex: AgentEventKind.failed.color))
+                        .frame(width: 7, height: 7)
+                    Text("\(failed.count) failed")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+            }
+            .padding(.horizontal, IslandMetrics.idleChipHPad)
+            .frame(height: 20)
+            .background(
+                (needsYou.isEmpty && failed.isEmpty)
+                    ? Color.clear : Color.white.opacity(0.10), in: Capsule()
+            )
+            .frame(maxWidth: sideWidth, alignment: .trailing)
+            .padding(.trailing, notchPad)
+        }
+        .frame(width: windowW, height: IslandMetrics.pillHeight, alignment: .top)
+        .contentShape(Rectangle())
     }
 
     private func closedPill(
@@ -880,25 +963,24 @@ struct NotchStatusView: View {
             ForEach(0..<choices.count, id: \.self) { index in
                 approvalActionButton(
                     label: Text("\(index + 1)"),
-                    color: selectedChoices.contains(index) ? .green : .white.opacity(0.6),
+                    color: queueSelections[paneId]?.contains(index + 1) == true
+                        ? .green : .white.opacity(0.6),
                     help: choices[index]
                 ) {
-                    if selectedChoices.contains(index) {
-                        selectedChoices.remove(index)
-                    } else {
-                        selectedChoices.insert(index)
-                    }
+                    queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
+                        queueSelections[paneId] ?? [], index: index)
                 }
             }
             approvalActionButton(
                 systemName: "checkmark.circle.fill", color: .green, help: "Submit",
                 disabled: resolving
             ) {
-                let selections = selectedChoices.sorted().map { $0 + 1 }
+                let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
+                    queueSelections[paneId] ?? [])
                 eventManager.performAction(paneId: paneId) {
-                    $0.approveMulti(paneId: paneId, selections: selections)
+                    $0.approveMulti(paneId: paneId, selections: numbers)
                 }
-                selectedChoices.removeAll()
+                queueSelections.removeValue(forKey: paneId)
             }
         }
     }
@@ -927,7 +1009,8 @@ struct NotchStatusView: View {
             label
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundColor(disabled ? color.opacity(0.3) : color)
-                .frame(width: 20, height: 20)
+                .padding(.horizontal, 5)
+                .frame(minWidth: 20, minHeight: 20)
         }
         .buttonStyle(.plain)
         .help(help)
@@ -935,29 +1018,27 @@ struct NotchStatusView: View {
         .disabled(disabled)
     }
 
-    /// ▸ affordance that opens the full-log + diff preview overlay (plan 016
+    /// Affordance that opens the full-log + diff preview overlay (plan 016
     /// 3a). One overlay at a time; the controller cancels any in-flight fetch
     /// when the overlay is dismissed.
     private func peekButton(agent: AgentSnapshot) -> some View {
         Button {
             PeekPanelController.shared.show(agent: agent, adapter: adapter)
         } label: {
-            Text("▸")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundColor(.white.opacity(0.55))
+            Image(systemName: "eye")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
                 .frame(width: 20, height: 20)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Peek full log + diff preview")
-        .accessibilityLabel("Peek log for \(agent.source)")
+        .help("View live output + git diff")
+        .accessibilityLabel("View live output for \(agent.source)")
     }
 
     private var expandedList: some View {
         let counts = IslandMetrics.agentCounts(
             kinds: visibleAgents.map(\.kind))
-        let queue = approvalQueueAgents
-        let queueSplit = expandedQueueSplit
         return VStack(spacing: 0) {
             headerBar(counts: counts)
 
@@ -972,33 +1053,17 @@ struct NotchStatusView: View {
             } else if showShelf {
                 shelfContent
             } else {
-                queueAndRoster(queue: queue, queueSplit: queueSplit, counts: counts)
+                rosterContent
             }
         }
         .frame(width: islandWidth, height: contentHeight, alignment: .top)
     }
 
+    /// One list: blocked agents render as rows with inline approve/deny
+    /// controls, everything else as plain rows. No separate queue section.
     @ViewBuilder
-    private func queueAndRoster(
-        queue: [AgentSnapshot],
-        queueSplit: (shown: Int, overflow: Int),
-        counts: IslandMetrics.AgentCounts
-    ) -> some View {
+    private var rosterContent: some View {
         VStack(spacing: 0) {
-            if NotchHUDConfig.shared.expandedShowQueue {
-                ForEach(queue.prefix(queueSplit.shown)) { agent in
-                    approvalQueueCard(agent: agent)
-                }
-                if queueSplit.overflow > 0 {
-                    Text("+\(queueSplit.overflow) more waiting")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .frame(height: 18)
-                }
-            }
-
             if visibleAgents.isEmpty {
                 Text("No active agents")
                     .font(.system(size: 10, weight: .medium))
@@ -1018,9 +1083,6 @@ struct NotchStatusView: View {
             }
             .frame(height: rosterScrollHeight)
             .scrollIndicators(.hidden)
-
-            Spacer(minLength: 0)
-            footerBar(counts: counts, queueCount: queue.count)
         }
     }
 
@@ -1037,38 +1099,28 @@ struct NotchStatusView: View {
                     .frame(height: IslandMetrics.rowHeight)
             }
             ForEach(rows) { agent in
-                if agent.kind == .accessRequest || agent.kind == .waiting,
-                    agent.paneId != nil
-                {
-                    approvalQueueCard(agent: agent)
-                } else {
-                    agentRow(agent: agent)
-                }
+                agentRow(agent: agent)
             }
             Spacer(minLength: 0)
         }
     }
 
     /// Roster scroll area: natural row height from the rendered roster
-    /// (muted sources excluded), capped so header/tabs/queue/footer always
-    /// stay visible inside the island (scrolls when 6+ rows overflow). The
-    /// queue section (approval cards + overflow rows) is subtracted from the
-    /// available height so the roster never clips against the panel's rounded
-    /// bottom.
+    /// (muted sources excluded), capped so header/tabs always stay visible
+    /// inside the island (scrolls when 6+ rows overflow). The roster includes
+    /// blocked agents as inline rows, so their height is counted in
+    /// `agentCount` — no separate queue section to subtract.
     private var rosterScrollHeight: CGFloat {
-        let queueSection =
-            CGFloat(expandedQueueSplit.shown) * IslandMetrics.queueCardHeight
-            + CGFloat(expandedQueueSplit.overflow) * IslandMetrics.overflowRowHeight
         let chrome =
-            IslandMetrics.headerHeight + IslandMetrics.footerHeight
-            + queueSection
+            IslandMetrics.headerHeight
             + (NotchHUDConfig.shared.showShelfTab
                 ? IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight : 0)
         let available = max(
             contentHeight - chrome - IslandMetrics.contentSpacing,
             0)
         return IslandMetrics.stableRosterHeight(
-            agentCount: mergedRoster.count, availableHeight: available)
+            agentCount: mergedRoster.count, availableHeight: available,
+            groupCount: rosterGroupCount)
     }
 
     private var shelfTabBar: some View {
@@ -1132,6 +1184,13 @@ struct NotchStatusView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .layoutPriority(0)
                     Spacer(minLength: 4)
+                    Button(action: { ShelfQuickLook.show(file.url) }) {
+                        Image(systemName: "eye").font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("QuickLook preview")
+                    .layoutPriority(1)
                     Button(action: { NSWorkspace.shared.open(file.url) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.6))
@@ -1150,6 +1209,8 @@ struct NotchStatusView: View {
                 }
                 .padding(.horizontal, 16)
                 .frame(height: IslandMetrics.rowHeight)
+                .draggable(file.url)
+                .onTapGesture(count: 2) { ShelfQuickLook.show(file.url) }
             }
             ForEach(clipboardItems) { item in
                 HStack(spacing: 8) {
@@ -1192,20 +1253,19 @@ struct NotchStatusView: View {
 
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
         HStack(spacing: 8) {
-            Circle().fill(Color(hex: AgentEventKind.idle.color)).frame(width: 7, height: 7)
             if counts.needsInput > 0 {
                 Text("\(counts.needsInput) need you")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.yellow)
             }
             if counts.working > 0 {
                 Text("\(counts.working) working")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.white)
             }
             if counts.needsInput == 0 && counts.working == 0 {
                 Text("Agents")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.white)
             }
             Spacer(minLength: 8)
@@ -1242,82 +1302,6 @@ struct NotchStatusView: View {
         .frame(height: IslandMetrics.headerHeight)
     }
 
-    private func approvalQueueCard(agent: AgentSnapshot) -> some View {
-        let controls = agent.approval
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Circle().fill(Color(hex: agent.kind.color)).frame(width: 7, height: 7)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(agent.source)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(agent.title ?? agent.message ?? agent.kind.label)
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.white.opacity(0.6))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(0)
-                Spacer(minLength: 4)
-                if let paneId = agent.paneId {
-                    queueCardActions(controls: controls, paneId: paneId, agentID: agent.id)
-                        .layoutPriority(1)
-                    approvalActionButton(
-                        systemName: "terminal.fill", color: .white.opacity(0.55),
-                        help: "Force focus terminal"
-                    ) {
-                        adapter.attachPane(paneId: paneId)
-                        _ = TerminalFocusser.focus(
-                            preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
-                    }
-                    .layoutPriority(1)
-                    approvalActionButton(
-                        systemName: "arrow.clockwise", color: .white.opacity(0.55),
-                        help: "Retry / re-check agent"
-                    ) {
-                        Task { await eventManager.pollHerdrAgents() }
-                    }
-                    .layoutPriority(1)
-                    peekButton(agent: agent)
-                        .layoutPriority(1)
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(height: IslandMetrics.queueCardHeight)
-            if let paneId = agent.paneId, peekingPaneId == paneId, !peekText.isEmpty {
-                Text(peekText)
-                    .font(.system(size: 8.5, weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
-                    .lineLimit(6)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 6)
-                    .accessibilityLabel("Latest output for \(agent.source)")
-            }
-        }
-        .background(Color.white.opacity(0.05))
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            if let paneId = agent.paneId, hovering {
-                fetchPeek(paneId: paneId)
-            } else if peekingPaneId == agent.paneId {
-                endPeek()
-            }
-        }
-        .contextMenu {
-            if let title = agent.title {
-                Button("Copy prompt") { copyToClipboard(title) }
-            }
-            if let message = agent.message {
-                Button("Copy message") { copyToClipboard(message) }
-            }
-        }
-    }
-
     private func copyToClipboard(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -1336,89 +1320,6 @@ struct NotchStatusView: View {
             limit: NotchHUDConfig.shared.clampedShelfLimit)
     }
 
-    @ViewBuilder
-    private func queueCardActions(
-        controls: IslandMetrics.ApprovalControls, paneId: String, agentID: String
-    ) -> some View {
-        let resolving = eventManager.isResolving(paneId: paneId)
-        if controls.isYesNo {
-            approvalActionButton(
-                systemName: "checkmark.circle.fill", color: .green, help: "Approve",
-                disabled: resolving
-            ) {
-                eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
-            }
-            approvalActionButton(
-                systemName: "xmark.circle.fill", color: .red, help: "Deny",
-                disabled: resolving
-            ) {
-                eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
-            }
-        } else if controls.isMulti {
-            let labels = controls.displayedLabels()
-            let overflow = controls.overflowCount()
-            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                approvalActionButton(
-                    label: Text(label),
-                    color: queueSelections[agentID]?.contains(
-                        IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    ) == true ? .green : .white.opacity(0.6),
-                    help: controls.choices[index]
-                ) {
-                    queueSelections[agentID] = IslandMetrics.ApprovalControls.toggling(
-                        queueSelections[agentID] ?? [], index: index)
-                }
-            }
-            if overflow > 0 {
-                Text("+\(overflow)")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.45))
-            }
-            approvalActionButton(
-                systemName: "checkmark.circle.fill", color: .green, help: "Submit",
-                disabled: resolving
-            ) {
-                let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-                    queueSelections[agentID] ?? [])
-                eventManager.performAction(paneId: paneId) {
-                    $0.approveMulti(paneId: paneId, selections: numbers)
-                }
-                queueSelections.removeValue(forKey: agentID)
-            }
-        } else {
-            let labels = controls.displayedLabels()
-            let overflow = controls.overflowCount()
-            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                approvalActionButton(
-                    label: Text(label),
-                    color: .white,
-                    help: controls.choices[index],
-                    disabled: resolving
-                ) {
-                    eventManager.performAction(paneId: paneId) {
-                        $0.approveChoice(
-                            paneId: paneId,
-                            choice: IslandMetrics.ApprovalControls.optionNumber(
-                                forIndex: index))
-                    }
-                }
-            }
-            if overflow > 0 {
-                Text("+\(overflow)")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.45))
-            }
-            if controls.optionLabels.isEmpty {
-                approvalActionButton(
-                    systemName: "checkmark.circle.fill", color: .green, help: "Approve",
-                    disabled: resolving
-                ) {
-                    eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
-                }
-            }
-        }
-    }
-
     private var groupedAgentRows: some View {
         let grouped = Dictionary(grouping: mergedRoster) { agent in
             IslandMetrics.expandedGroupRank(agent.kind)
@@ -1435,6 +1336,7 @@ struct NotchStatusView: View {
                     }
                 }
             }
+            recentActivitySection
         }
     }
 
@@ -1450,9 +1352,53 @@ struct NotchStatusView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
-        .frame(height: 18)
+        .frame(height: IslandMetrics.sectionHeaderHeight)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title), \(count) agents")
+    }
+
+    /// "What happened recently" — the last few completions/failures, newest
+    /// first. Answers "did it actually do work" without opening the peek
+    /// overlay: source + done/failed + what it was doing + when.
+    @ViewBuilder
+    private var recentActivitySection: some View {
+        let recents = eventManager.recentCompletions
+        if !recents.isEmpty {
+            sectionHeader("Recent", count: recents.count, color: "#8a8aa8")
+            ForEach(recents) { recent in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(
+                            recent.kind == .failed
+                                ? Color(hex: AgentEventKind.failed.color)
+                                : Color(hex: AgentEventKind.completed.color)
+                        )
+                        .frame(width: 6, height: 6)
+                    Text(recent.source)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let title = recent.title {
+                        Text(title)
+                            .font(.system(size: 8.5, weight: .regular))
+                            .foregroundColor(.white.opacity(0.6))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 8)
+                    Text(IslandMetrics.elapsedLabel(since: recent.createdAt, now: now))
+                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.4))
+                }
+                .padding(.horizontal, 16)
+                .frame(height: IslandMetrics.rowHeight)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "\(recent.source) \(recent.kind == .failed ? "failed" : "completed")"
+                        + (recent.title.map { ": \($0)" } ?? ""))
+            }
+        }
     }
 
     private var flatAgentRows: some View {
@@ -1464,94 +1410,111 @@ struct NotchStatusView: View {
                             ? Color.accentColor.opacity(0.18) : Color.clear
                     )
             }
+            recentActivitySection
         }
     }
 
-    private func footerBar(counts: IslandMetrics.AgentCounts, queueCount: Int) -> some View {
-        HStack(spacing: 8) {
-            Text("\(counts.total) agents")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.5))
-            if counts.done > 0 {
-                Text("· \(counts.done) done").foregroundColor(
-                    Color(hex: AgentEventKind.completed.color)
-                )
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-            }
-            if counts.error > 0 {
-                Text("· \(counts.error) failed").foregroundColor(
-                    Color(hex: AgentEventKind.failed.color)
-                )
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-            }
-            Spacer(minLength: 8)
-            usageGauge
-                .layoutPriority(1)
-            Text(adapter.kind.label)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.4))
-                .layoutPriority(1)
-            if queueCount > 0 {
-                Text("\(queueCount) pending")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.yellow)
-                    .layoutPriority(1)
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(height: IslandMetrics.footerHeight)
+    /// Row height: always the compact height — choice/multi prompts render
+    /// numbered buttons ("1", "2", "3") that fit inline, with the full option
+    /// text in each button's tooltip and the agent's title carrying context.
+    private func rowHeight(for agent: AgentSnapshot) -> CGFloat {
+        _ = agent
+        return IslandMetrics.rowHeight
     }
 
-    /// Compact token/cost gauge: budget fraction bar + totals.
+    /// Inline approve/deny (or choice / multi-select) controls for a blocked
+    /// agent row. Same logic the old queue cards used, rendered compactly in
+    /// the row's trailing action cluster.
     @ViewBuilder
-    private var usageGauge: some View {
-        let config = NotchHUDConfig.shared
-        let usage = eventManager.usage
-        if config.showUsageGauge, usage.totalTokens > 0 || usage.costUSD > 0 {
-            let fraction = UsageTracker.fractionUsed(
-                costUSD: usage.costUSD, budgetUSD: config.usageBudgetUSD)
-            let color: Color =
-                fraction >= 0.9
-                ? Color(hex: "#ff6b6b")
-                : fraction >= 0.7
-                    ? Color(hex: "#ffe066")
-                    : Color(hex: "#4ecdc4")
-            HStack(spacing: 4) {
-                if usage.costUSD > 0 {
-                    Text(String(format: "$%.2f", usage.costUSD))
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.6))
+    private func inlineApprovalControls(agent: AgentSnapshot) -> some View {
+        if let paneId = agent.paneId {
+            let controls = agent.approval
+            let resolving = eventManager.isResolving(paneId: paneId)
+            if controls.isYesNo {
+                approvalActionButton(
+                    systemName: "checkmark.circle.fill", color: .green, help: "Approve",
+                    disabled: resolving
+                ) {
+                    eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
                 }
-                Text(UsageTracker.compactTokens(usage.totalTokens))
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.6))
-                if usage.totalTokens > 0,
-                    let tokensPerMinute = eventManager.usageRate.tokensPerMinute
-                {
-                    let rateLevel = UsageTracker.rateLevel(
-                        rate: tokensPerMinute, warn: config.usageRateWarnTokensPerMin)
-                    let rateColor: Color =
-                        rateLevel == .red
-                        ? Color(hex: "#ff6b6b")
-                        : rateLevel == .warn
-                            ? Color(hex: "#ffe066")
-                            : .white.opacity(0.6)
-                    Text("· \(UsageTracker.compactTokens(Int(tokensPerMinute)))/min")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(rateColor)
+                approvalActionButton(
+                    systemName: "xmark.circle.fill", color: .red, help: "Deny",
+                    disabled: resolving
+                ) {
+                    eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
                 }
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.12))
-                        Capsule().fill(color)
-                            .frame(width: geo.size.width * fraction)
+            } else if controls.isMulti {
+                let labels = controls.displayedLabels()
+                ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
+                    let optionText =
+                        controls.choices.indices.contains(index)
+                        ? controls.choices[index] : "Option \(label)"
+                    approvalActionButton(
+                        label: Text(label),
+                        color: queueSelections[paneId]?.contains(
+                            IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+                        ) == true ? .green : .white.opacity(0.6),
+                        help: optionText,
+                        disabled: false,
+                        accessibilityLabel: optionText
+                    ) {
+                        queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
+                            queueSelections[paneId] ?? [], index: index)
                     }
                 }
-                .frame(width: 36, height: 4)
+                let overflow = controls.overflowCount()
+                if overflow > 0 {
+                    Text("+\(overflow)")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.45))
+                }
+                approvalActionButton(
+                    systemName: "checkmark.circle.fill", color: .green, help: "Submit",
+                    disabled: resolving
+                ) {
+                    let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
+                        queueSelections[paneId] ?? [])
+                    eventManager.performAction(paneId: paneId) {
+                        $0.approveMulti(paneId: paneId, selections: numbers)
+                    }
+                    queueSelections.removeValue(forKey: paneId)
+                }
+            } else {
+                let labels = controls.displayedLabels()
+                ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
+                    let optionText =
+                        controls.choices.indices.contains(index)
+                        ? controls.choices[index] : "Option \(label)"
+                    approvalActionButton(
+                        label: Text(label),
+                        color: .white,
+                        help: optionText,
+                        disabled: resolving,
+                        accessibilityLabel: optionText
+                    ) {
+                        eventManager.performAction(paneId: paneId) {
+                            $0.approveChoice(
+                                paneId: paneId,
+                                choice: IslandMetrics.ApprovalControls.optionNumber(
+                                    forIndex: index))
+                        }
+                    }
+                }
+                let overflow = controls.overflowCount()
+                if overflow > 0 {
+                    Text("+\(overflow)")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.45))
+                }
+                if controls.optionLabels.isEmpty {
+                    approvalActionButton(
+                        systemName: "checkmark.circle.fill", color: .green, help: "Approve",
+                        disabled: resolving
+                    ) {
+                        eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                    }
+                }
             }
-            .help(
-                "Tokens \(usage.totalTokens) · budget $\(String(format: "%.0f", config.usageBudgetUSD))"
-            )
         }
     }
 
@@ -1621,27 +1584,28 @@ struct NotchStatusView: View {
                                         .foregroundColor(.white).lineLimit(1).truncationMode(
                                             .middle)
                                 }
-                                Text(agent.source)
-                                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
                             }
                             HStack(spacing: 5) {
-                                Text(agent.kind.label)
-                                    .font(.system(size: 8.5, weight: .medium))
-                                    .foregroundColor(.secondary).lineLimit(1)
-                                if let cwd = agent.cwd,
-                                    let diff = diffStats[
-                                        IslandMetrics.DiffStatCacheKey(id: agent.id, cwd: cwd)]
-                                {
-                                    Text(diff)
-                                        .font(
-                                            .system(
-                                                size: 8.5, weight: .semibold, design: .monospaced)
-                                        )
-                                        .foregroundColor(.white.opacity(0.6))
+                                if agent.kind == .failed, let reason = agent.message {
+                                    // Failure reason (rate_limit/auth/billing…)
+                                    // must be visible, not just "Failed".
+                                    Text(reason)
+                                        .font(.system(size: 8.5, weight: .medium))
+                                        .foregroundColor(Color(hex: AgentEventKind.failed.color))
                                         .lineLimit(1)
+                                        .truncationMode(.tail)
+                                } else if let live = agent.title ?? agent.message,
+                                    agent.kind.isOngoing
+                                {
+                                    Text(live)
+                                        .font(.system(size: 8.5, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.75))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                } else {
+                                    Text(agent.kind.label)
+                                        .font(.system(size: 8.5, weight: .medium))
+                                        .foregroundColor(.secondary).lineLimit(1)
                                 }
                                 if NotchHUDConfig.shared.showElapsedTime,
                                     let startedAt = agent.startedAt,
@@ -1656,7 +1620,7 @@ struct NotchStatusView: View {
                             }
                         }
                         Spacer(minLength: 4)
-                        if let title = agent.title {
+                        if let title = agent.title, !agent.kind.isOngoing {
                             Text(title)
                                 .font(.system(size: 9, weight: .regular))
                                 .foregroundColor(.white.opacity(0.6))
@@ -1669,14 +1633,16 @@ struct NotchStatusView: View {
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(0)
-                .onAppear { fetchDiffStats(agent) }
-                .onChange(of: agent.cwd) { _ in
-                    // No manual dict clear: the key change makes the old-cwd
-                    // entry unreachable and the prune (on the next write)
-                    // drops it. Clearing here would reintroduce the race.
-                    fetchDiffStats(agent)
-                }
                 if let paneId = agent.paneId {
+                    if agent.kind == .accessRequest || agent.kind == .waiting {
+                        // Approval controls stay visible — those need attention.
+                        inlineApprovalControls(agent: agent)
+                            .layoutPriority(1)
+                    }
+                    // Focus/stop/peek are revealed on row hover to keep rows
+                    // calm (BoringNotch HoverButton pattern). Always
+                    // reachable: hover or tab already shows the row bg.
+                    let rowHovered = hoveredRow == agent.id
                     Button(action: { focusAgentPane(paneId) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.6))
@@ -1685,6 +1651,8 @@ struct NotchStatusView: View {
                     .help("Focus pane")
                     .accessibilityLabel("Focus \(agent.source)")
                     .layoutPriority(1)
+                    .opacity(rowHovered ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: rowHovered)
                     Button(action: {
                         eventManager.performAction(paneId: paneId) {
                             $0.stop(paneId: paneId)
@@ -1697,13 +1665,33 @@ struct NotchStatusView: View {
                     .help("Stop (Ctrl-C)")
                     .accessibilityLabel("Stop \(agent.source)")
                     .layoutPriority(1)
+                    .opacity(rowHovered ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: rowHovered)
                     peekButton(agent: agent)
                         .layoutPriority(1)
+                        .opacity(rowHovered ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.15), value: rowHovered)
+                } else if agent.kind == .accessRequest || agent.kind == .waiting {
+                    // Standalone agent (opencode/Claude outside herdr): there
+                    // is no pane to send keys to, so an Approve/Deny would be
+                    // a silent phantom. The honest action is to raise the
+                    // terminal where the prompt is waiting.
+                    Button(action: {
+                        _ = TerminalFocusser.focus(
+                            preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+                    }) {
+                        Image(systemName: "terminal.fill").font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open terminal — answer there (no herdr pane)")
+                    .accessibilityLabel("Open terminal for \(agent.source)")
+                    .layoutPriority(1)
                 }
             }
         }
         .padding(.horizontal, 16)
-        .frame(height: IslandMetrics.rowHeight)
+        .frame(height: rowHeight(for: agent))
         .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -1766,7 +1754,8 @@ struct NotchStatusView: View {
         case .none:
             return
         case .terminalOnly:
-            _ = TerminalFocusser.focus()
+            _ = TerminalFocusser.focus(
+                preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
         case .muxFocus, .both:
             if let command = PaneFocusRouter.focusCommand(target: target) {
                 ProcessRunner.launch(
@@ -1774,7 +1763,8 @@ struct NotchStatusView: View {
                     arguments: ["env"] + command)
             }
             if action == .both {
-                _ = TerminalFocusser.focus()
+                _ = TerminalFocusser.focus(
+                    preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
             }
         }
     }
@@ -1818,6 +1808,25 @@ struct NotchStatusView: View {
         }
     }
 
+    /// A file drag has entered the island window: expand and open the shelf
+    /// tab so the drop target is visible and armed. Mirrors NotchDrop's
+    /// drop-on-notch behavior.
+    private func handleFileDragEntered() {
+        showAttention = false
+        showShelf = true
+        expandTo(true)
+    }
+
+    /// Files were dropped onto the notch: land them on the shelf.
+    private func handleFilesDropped(_ urls: [URL]) {
+        let now = Date()
+        let files = urls.map { ShelfFile(url: $0, createdAt: now) }
+        shelfFiles = ShelfFiles.adding(
+            files, to: shelfFiles,
+            limit: NotchHUDConfig.shared.clampedShelfLimit)
+        expandTo(true)
+    }
+
     private func handleHover(_ hovering: Bool) {
         hoverTask?.cancel()
         isHovered = hovering
@@ -1846,7 +1855,6 @@ struct NotchStatusView: View {
         eventManager.setActive(eventManager.currentEvent != nil)
         updateIslandVisibility()
         showDetail = false
-        selectedChoices.removeAll()
         if let event = eventManager.currentEvent {
             if !reduceMotion {
                 withAnimation(.easeInOut(duration: 0.15)) { pulse = true }
@@ -1876,7 +1884,11 @@ struct NotchStatusView: View {
                 notifyWhenHidden: config.notifyWhenHidden,
                 kind: event.kind)
             {
-                postHiddenApprovalNotification(for: event)
+                ApprovalNotificationController.shared.postApproval(
+                    source: event.sourceKey,
+                    paneId: event.paneId,
+                    title: event.title ?? event.message,
+                    choices: event.choices)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 withAnimation(.easeInOut(duration: 0.3)) { showDetail = true }
@@ -1910,6 +1922,14 @@ struct NotchStatusView: View {
 
     private func handleAgentsChange() {
         updateIslandVisibility()
+        // Prune multi-select state for panes that are no longer blocked so a
+        // new prompt never renders with stale pre-selected options.
+        let blocked = Set(
+            eventManager.agents
+                .filter { $0.kind == .accessRequest || $0.kind == .waiting }
+                .compactMap { $0.paneId ?? $0.source })
+        let stale = queueSelections.keys.filter { !blocked.contains($0) }
+        for pane in stale { queueSelections.removeValue(forKey: pane) }
         if IslandMetrics.shouldCollapse(
             isExpanded: isExpanded, hasAgents: !eventManager.agents.isEmpty)
         {
@@ -1962,24 +1982,6 @@ struct NotchStatusView: View {
         guard let sound = NSSound(named: event.kind.soundName) else { return }
         sound.volume = config.soundVolume
         sound.play()
-    }
-
-    /// Notification Center fallback for approvals that arrive while the
-    /// island is hidden. Best-effort: delivery failures are logged, never
-    /// silently dropped.
-    private func postHiddenApprovalNotification(for event: AgentEvent) {
-        let content = UNMutableNotificationContent()
-        content.title = "\(event.source ?? "agent") needs approval"
-        content.body = event.title ?? event.message ?? event.kind.label
-        content.sound = .default
-        let request = UNNotificationRequest(
-            identifier: event.identityKey, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error {
-                AppDelegate.dbg(
-                    "notify: delivery failed for \(event.identityKey): \(error)")
-            }
-        }
     }
 
     private func isTerminalFocused() -> Bool {

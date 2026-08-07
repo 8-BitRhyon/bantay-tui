@@ -10,9 +10,13 @@ Agents run inside herdr, tmux, zellij, or a plain terminal — Bantay detects th
 ## Highlights
 
 - **Live idle strip beside the notch** — agent chips with severity dots (dot/name/summary styles), `+N` overflow, density pin; hover or tap expands.
-- **Expanded control plane** — counts header ("N need you · M working"), a **pinned approval queue** with one-click approve/deny/choice/submit, state-grouped roster (need-input → working → done → failed → idle), and a footer health bar with a token/cost usage gauge.
+- **Expanded control plane** — counts header ("N need you · M working"), a clean single-list roster with blocked agents handled **inline** (approve/deny/choice/submit right on the row), state-grouped by default, live "what is it doing" status, a Recent section showing what finished, and inline Focus / Stop / Peek actions.
 - **Full approval execution in-UI** — yes/no, numbered choices, multi-select toggle+submit. Never open the terminal for a permission prompt.
+- **Real-time by default** — a persistent herdr `events.subscribe` push stream drives the roster (sub-millisecond status transitions, no polling); the poll loop is a slow safety net.
+- **Push notifications (ntfy.sh)** — approvals, failures, and completions pushed to your phone/other devices via a configurable topic.
+- **tmux status-bar integration** — optional one-line agent summary (`◐ working · ⚠ blocked`) inside tmux `status-right`.
 - **Universal agent detection** — herdr panes *plus* standalone Claude Code, Codex, Gemini, Cursor, and opencode processes (with latest-activity tailing from transcripts). No multiplexer required.
+- **Drop files onto the notch** — drag a file/photo over the notch to expand it, open the Shelf, and land the file there.
 - **Workflow from anywhere** — global `⌥Space` to show/hide the island, `Y`/`N`/`1-9` roster shortcuts, edge-glow when agents need you, menu-bar badge with pending count, clipboard + file shelf, per-agent prompt composition.
 - **Engineered for the hard cases** — approval heartbeat (no phantom prompts), full-screen & space transitions, menu-bar icon collision avoidance, display hot-swap re-anchoring, terminal-agnostic focus (Ghostty/Warp/WezTerm/Alacritty/iTerm2/VSCode).
 
@@ -32,21 +36,20 @@ The strip yields to menu-bar icons: when `avoidMenuBarIcons` is on (default), th
 
 Hover (or `⌥Space`) to expand the island into a control plane:
 
-- **Header** — "N need you · M working" counts + current event title.
-- **Approval queue** (pinned on top, capped cards + `+N more`) — each blocked agent gets its prompt plus inline controls:
+- **Header** — "N need you · M working" counts + pin.
+- **One list, no queue cards** — blocked agents render as normal roster rows with **inline** controls:
   - **Yes/No**: Approve / Deny.
   - **Choices**: numbered buttons (`1`/`2`/`3` → choice + Enter).
   - **Multi-select**: toggle buttons (green = selected) + Submit (`1,3` + Enter).
-  - Plus **Force Focus Terminal** (activates your terminal via bundle-ID registry) and **Retry** (re-polls the agent).
-- **Roster** — grouped by state (need-input → working → done → failed → idle, toggleable to flat); each row shows status dot, agent, state, elapsed time, latest activity; click to compose a prompt, hover for Focus / Stop (Ctrl-C) actions.
-- **Shelf tab** — drop files or copy text; both land on the shelf with open/copy-back actions.
-- **Footer** — totals, done/failed counts, token/cost usage gauge (budget bar, amber ≥70% / red ≥90%), multiplexer badge, pending count.
+- **Roster** — grouped by state (need-input → working → done → failed → idle, toggleable to flat); each row shows status dot, agent, the current `title`/`message` (what it's doing right now), elapsed time, and hover actions: Focus, Stop (Ctrl-C), and an eye to open the live log + diff overlay.
+- **Recent** — the last few completions/failures (source, what it was doing, when) so you can see what happened at a glance.
+- **Shelf tab** — drop files (or onto the notch itself) or copy text; both land on the shelf with open/copy-back actions.
 
 ## Reliability engineering
 
 Bantay ships fixes for the five hard problems that plague notch apps:
 
-1. **Phantom prompts** — an approval heartbeat re-verifies pinned prompts against live agent state every poll. If the agent actually moved on (dropped hook), the phantom self-clears; unknowns never phantom-clear. Fallback buttons (Force Focus / Retry) are one click away.
+1. **Phantom prompts** — an approval heartbeat re-verifies pinned prompts against live agent state every poll. If the agent actually moved on (dropped hook), the phantom self-clears; unknowns never phantom-clear.
 2. **Full-screen & spaces** — the panel uses `fullScreenAuxiliary`/`canJoinAllSpaces`/top-level window level, and enter/exit full-screen + space-change transitions re-anchor it after a settle delay.
 3. **Menu-bar collisions** — idle chips are clamped to the OS-reported auxiliary-area geometry.
 4. **Display hot-swap / clamshell ghosts** — display-change and wake events debounce, detect visible windows off every screen, and re-anchor before the WindowServer race can strand a ghost.
@@ -54,11 +57,17 @@ Bantay ships fixes for the five hard problems that plague notch apps:
 
 ## Agent detection
 
-Three sources feed the same event pipeline:
+Sources feed the same event pipeline:
 
-1. **herdr** (default when present) — polls `herdr agent list` every `captureInterval` seconds; statuses map `blocked → access_request`, `working → progress`, `done → completed`, etc. No plugin required.
+1. **herdr push stream** (default when present) — a persistent `events.subscribe`
+   socket subscription drives status transitions instantly (`pane.updated`,
+   `pane.agent_detected`, `pane.closed`); a slow `agent list` poll acts as a
+   safety net. Statuses map `blocked → access_request`, `working → progress`,
+   `done → completed`, etc.
 2. **Standalone scan** (default on) — classifies running processes into canonical agents (claude/codex/gemini/cursor/opencode), skips herdr-managed processes, and tails each agent's newest transcript for a live activity line. Runs off the main actor so the UI never blocks.
 3. **Event file / remote ingest** (optional) — tails `~/Library/Application Support/Bantay-TUI/agent-events.jsonl` for richer state labels, and a localhost listener (off by default) accepts POSTed event lines from remote agents over `ssh -R <port>:localhost:<port>`.
+
+Claude Code hooks installed by Bantay cover `PermissionPrompt`/`PermissionRequest`, `Stop`/`StopFailure`, and `Notification` (matchers `agent_needs_input` / `agent_completed` / `permission_prompt` / `idle_prompt`) — approval and completion signals arrive natively without screen detection.
 
 Approval prompts in the event stream carry an optional `variance` (`yes_no`/`choices`/`multi`) and `choices` array; nil variance defaults to yes/no.
 
@@ -68,8 +77,12 @@ Approval prompts in the event stream carry an optional `variance` (`yes_no`/`cho
 |---|---|
 | Show/hide island | `⌥Space` (global, from any app) |
 | Approve / Deny / Choose | `Y` / `N` / `1-9` with the island focused |
+| View live log + diff | Eye icon on an agent row |
+| Drop a file onto the notch | Drag it over the island → shelf opens and accepts it |
 | Compose a prompt | Click an agent row |
 | Copy prompt/message | Right-click an approval card |
+| Push to phone (ntfy) | Settings → Push notifications → set a topic |
+| Show status inside tmux | Settings → tmux status bar → enable |
 | Snooze alerts | Tray menu → Snooze… (15m / 1h / 4h / until restart) |
 | Test alert sound | Settings → Play alert sound preview |
 
@@ -82,7 +95,7 @@ swift build -c release
 bash scripts/setup.sh        # copies binary + installs launch agent (auto-start, keep-alive)
 ```
 
-`setup.sh` installs to `~/Library/Application Support/Bantay-TUI/bantay` with a `com.bantay-tui.agent` launch agent. Restart after a rebuild:
+`setup.sh` installs to `~/Library/Application Support/Bantay-TUI/bantay` with a `com.bantay-tui.agent` launch agent, and copies `scripts/bantay-status.sh` (tmux status-bar helper) beside it. Restart after a rebuild:
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.bantay-tui.agent
@@ -156,7 +169,7 @@ Source: [`docs/ci-pipeline.mmd`](docs/ci-pipeline.mmd)
 | 1 · Format | `swift format lint --recursive --strict Sources Tests` | Style deviation (`.swift-format`) |
 | 2 · Compile | `swift build` | Compiler errors or warnings-as-failures |
 | 3 · Tests | `swift test` | Failing unit test (`BantayTUILogicTests`) |
-| 3.5 · Logic checks | `swiftc` + run `.kilo/LogicCheck.swift` | Any failing L1–L18 harness assertion (runs without XCTest) |
+| 3.5 · Logic checks | `swiftc` + run `.kilo/LogicCheck.swift` | Any failing L1–L64 harness assertion (runs without XCTest) |
 | 4 · Release | `swift build -c release` | Release-mode build failure |
 | 5 · Security | gitleaks + SHA-pin audit | Leaked secrets; unpinned third-party actions |
 
@@ -169,9 +182,7 @@ Stored in `UserDefaults` (domain `BantayTUI`). Most settings live in **Settings�
 | `islandDockSide` | `right` | Idle strip placement: right / left / center |
 | `idleStyle` | `names` | Idle strip style: `names` / `dots` / `summary` |
 | `idleMaxChips` | `3` | Max agent chips before `+N` (1–6) |
-| `expandedShowQueue` | `true` | Pin the approval queue on top |
 | `expandedGroupByState` | `true` | Group roster by state (else flat) |
-| `expandedQueueCap` | `3` | Queue cards before `+N` (1–5) |
 | `globalHotkeyEnabled` | `true` | `⌥Space` toggle from any app |
 | `keyboardShortcuts` | `true` | `Y`/`N`/`1-9` roster shortcuts |
 | `edgeGlowEnabled` | `true` | Pulsing amber border when agents need you |
@@ -182,10 +193,11 @@ Stored in `UserDefaults` (domain `BantayTUI`). Most settings live in **Settings�
 | `showInFullScreen` | `true` | Keep island visible over full-screen apps |
 | `avoidMenuBarIcons` | `true` | Clamp idle strip to menu-bar clear space |
 | `standaloneScanEnabled` | `true` | Detect agents outside any multiplexer |
-| `showUsageGauge` / `usageBudgetUSD` | `true` / `10.0` | Token/cost gauge + budget (1–100) |
+| `ntfyTopic` / `ntfyServer` | `""` / `https://ntfy.sh` | Push notifications for approvals/failures/completions (empty = off) |
+| `tmuxStatusEnabled` | `false` | Add `#(bantay-status)` to tmux `status-right` |
 | `ingestEnabled` / `ingestPort` | `false` / `41817` | Remote event ingest over SSH (off by default) |
 | `preferredTerminalBundleID` | nil | Terminal for Force Focus (nil = auto) |
-| `captureEnabled` / `captureInterval` | `true` / `2.0` | Poll herdr's live agent list |
+| `captureEnabled` / `captureInterval` | `true` / `2.0` | herdr push stream + safety-net poll |
 | `enableAgentAlerts` / `soundVolume` | `true` / `0.35` | Event sounds + volume |
 | `autoClearTTL` / `stickyApprovalTTL` | `3.0` / `30.0` | Event auto-clear / sticky approval TTLs |
 | `snoozedUntil` / `snoozeUntilRestart` | nil / `false` | Snooze state |
@@ -204,8 +216,12 @@ swift test                                                 # CI Layer 3 (require
 swiftc -o /tmp/logic-check <harness sources> && /tmp/logic-check   # CI Layer 3.5
 ```
 
-The `.kilo/LogicCheck.swift` harness (L1–L18) runs without XCTest and is the primary local gate: idle-strip geometry, expanded control-plane metrics, approval controls, heartbeat/phantom protection, screen selection, menu-bar clearance, usage parsing, ingest parsing, shelf logic, terminal registry, and facet persistence. Unit tests live in `Tests/BantayTUILogicTests`.
+The `.kilo/LogicCheck.swift` harness (L1–L64) runs without XCTest and is the primary local gate: idle-strip geometry, expanded control-plane metrics, approval controls, heartbeat/phantom protection, screen selection, menu-bar clearance, usage parsing, ingest parsing, shelf logic, terminal registry, and facet persistence. Unit tests live in `Tests/BantayTUILogicTests`.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).

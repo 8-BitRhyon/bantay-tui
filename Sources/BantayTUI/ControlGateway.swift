@@ -192,11 +192,19 @@ final class ControlGatewayServer: @unchecked Sendable {
         parameters.requiredLocalEndpoint = NWEndpoint.unix(path: socketPath)
         let listener = try? NWListener(using: parameters)
         self.listener = listener
+        // The control socket carries keystroke + command verbs; restrict it
+        // to the owning user (same as the ingest socket). Without this it is
+        // world-connectable (umask 022 → srwxr-xr-x) and any local account
+        // can inject keys / run commands in any pane.
+        _ = chmod(socketPath, 0o600)
         listener?.newConnectionHandler = { [weak self] connection in
             guard let self else {
                 connection.cancel()
                 return
             }
+            // Peer-credential check: only the same uid may talk to the
+            // gateway. NWConnection has no direct getpeereid, so the socket
+            // mode is the primary gate; keep the handler strict regardless.
             Self.accept(connection, server: self)
         }
         listener?.start(queue: .main)
