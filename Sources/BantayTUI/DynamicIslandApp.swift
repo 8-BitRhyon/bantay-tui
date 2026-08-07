@@ -5,9 +5,6 @@ extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
     static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
     static let settingsWillOpen = Notification.Name("settingsWillOpen")
-    /// Posted when file(s) are dropped onto the island window; `userInfo`
-    /// carries `"urls"` as `[URL]`.
-    static let notchFilesDropped = Notification.Name("notchFilesDropped")
 }
 
 @main
@@ -258,10 +255,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .ignoresCycle,
         ]
         window.canBecomeVisibleWithoutLogin = true
-        let hostingController = NSHostingController(
+        // Use a DragAcceptingHostingView (not NSHostingController) so the
+        // content view itself is the NSDraggingDestination — drag events land
+        // on the view under the cursor, and a window-level registration never
+        // fires because the hosting view swallows the drag.
+        let hosting = DragAcceptingHostingView(
             rootView: NotchStatusView().environmentObject(AgentEventManager.shared))
-        hostingController.sizingOptions = []
-        window.contentViewController = hostingController
+        window.contentView = hosting
 
         Self.window = window
     }

@@ -3,6 +3,9 @@ import AppKit
 extension Notification.Name {
     /// Posted when a file drag enters the notch rectangle (before any drop).
     static let notchFileDragEntered = Notification.Name("notchFileDragEntered")
+    /// Posted when file(s) are dropped onto the island window; `userInfo`
+    /// carries `"urls"` as `[URL]`.
+    static let notchFilesDropped = Notification.Name("notchFilesDropped")
 }
 
 /// Detects a file drag approaching the notch and announces it so the island
