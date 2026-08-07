@@ -18,70 +18,11 @@ struct DynamicIslandApp: App {
     }
 }
 
-/// The island's borderless panel. Also serves as an `NSDraggingDestination`
-/// so dropping files onto the notch — expanded or not, on any tab — opens
-/// the shelf and lands the files there (NotchDrop-style drop-on-notch).
-final class KeyablePanel: NSPanel, NSDraggingDestination {
+/// The island's borderless panel. File drops are handled by SwiftUI `.onDrop`
+/// on the island content (NotchDrop pattern) — no AppKit drag machinery here,
+/// which fought the hosting view and refused every drop.
+final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
-
-    override func awakeFromNib() {
-        super.awakeFromNib()
-        MainActor.assumeIsolated { setupFileDrag() }
-    }
-
-    override init(
-        contentRect: NSRect, styleMask style: NSWindow.StyleMask,
-        backing: NSWindow.BackingStoreType,
-        defer flag: Bool
-    ) {
-        super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
-        MainActor.assumeIsolated { setupFileDrag() }
-    }
-
-    private func setupFileDrag() {
-        registerForDraggedTypes([.fileURL])
-    }
-
-    /// Accept any drag carrying file URLs; announce so the view can expand
-    /// and switch to the shelf tab while the user is hovering over the notch.
-    /// Uses a TYPE check (`availableType`) not `readObjects`: reading the
-    /// drag pasteboard during draggingEntered returns empty on modern macOS,
-    /// which makes the window refuse the drop (the circle-with-cross cursor).
-    /// The actual URLs are read in performDragOperation, where reading works.
-    func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let pb = sender.draggingPasteboard
-        guard
-            pb.availableType(from: [.fileURL]) != nil
-                || pb.availableType(from: [NSPasteboard.PasteboardType(rawValue: "public.file-url")]
-                )
-                    != nil
-        else {
-            return []
-        }
-        NotificationCenter.default.post(name: .notchFileDragEntered, object: nil)
-        return .copy
-    }
-
-    func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        .copy
-    }
-
-    func draggingExited(_ sender: NSDraggingInfo?) {
-        // No-op: the panel stays on the shelf tab; only a successful drop
-        // matters. The expanded state collapses on hover-exit as usual.
-    }
-
-    func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard
-            let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self])
-                as? [URL], !urls.isEmpty
-        else {
-            return false
-        }
-        NotificationCenter.default.post(
-            name: .notchFilesDropped, object: nil, userInfo: ["urls": urls])
-        return true
-    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -255,11 +196,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .ignoresCycle,
         ]
         window.canBecomeVisibleWithoutLogin = true
-        // Use a DragAcceptingHostingView (not NSHostingController) so the
-        // content view itself is the NSDraggingDestination — drag events land
-        // on the view under the cursor, and a window-level registration never
-        // fires because the hosting view swallows the drag.
-        let hosting = DragAcceptingHostingView(
+        // Plain hosting view: file drops are handled by SwiftUI `.onDrop` on
+        // the island content (NotchDrop pattern), not by an AppKit
+        // NSDraggingDestination — that machinery fought AppKit's own drag
+        // plumbing and refused every drop.
+        let hosting = NSHostingView(
             rootView: NotchStatusView().environmentObject(AgentEventManager.shared))
         window.contentView = hosting
 
