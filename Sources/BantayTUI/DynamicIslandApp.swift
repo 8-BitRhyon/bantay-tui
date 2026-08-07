@@ -47,16 +47,26 @@ final class KeyablePanel: NSPanel, NSDraggingDestination {
 
     /// Accept any drag carrying file URLs; announce so the view can expand
     /// and switch to the shelf tab while the user is hovering over the notch.
+    /// Uses a TYPE check (`availableType`) not `readObjects`: reading the
+    /// drag pasteboard during draggingEntered returns empty on modern macOS,
+    /// which makes the window refuse the drop (the circle-with-cross cursor).
+    /// The actual URLs are read in performDragOperation, where reading works.
     func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let pb = sender.draggingPasteboard
         guard
-            let urls = sender.draggingPasteboard.readObjects(
-                forClasses: [NSURL.self]
-            ) as? [URL], !urls.isEmpty
+            pb.availableType(from: [.fileURL]) != nil
+                || pb.availableType(from: [NSPasteboard.PasteboardType(rawValue: "public.file-url")]
+                )
+                    != nil
         else {
             return []
         }
         NotificationCenter.default.post(name: .notchFileDragEntered, object: nil)
         return .copy
+    }
+
+    func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        .copy
     }
 
     func draggingExited(_ sender: NSDraggingInfo?) {

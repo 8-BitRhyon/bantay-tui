@@ -217,7 +217,12 @@ struct NotchStatusView: View {
     /// background morph: opacity + top-anchored scale when motion is on (the
     /// text fades as the notch morphs, no pop), opacity-only under reduce
     /// motion (the short linear morph drives it, so it snaps near-instantly).
+    /// Centered idle is a pure fade: the split strip is full-window-width and
+    /// scale would make it appear to sweep laterally while the pill morphs.
     private var contentTransition: AnyTransition {
+        if isCenteredIdle {
+            return .opacity
+        }
         guard IslandMetrics.contentTransition(reduceMotion: reduceMotion) == .synced else {
             return .opacity
         }
@@ -236,7 +241,16 @@ struct NotchStatusView: View {
         }
         .overlay(edgeGlow)
         .scaleEffect(activeHoverScale, anchor: .top)
-        .frame(width: islandWidth + cornerRad * 2, height: islandHeight, alignment: .top)
+        // Centered idle spans the full window width so the split strip can
+        // leak chips past the notch on both sides; everything else hugs the
+        // pill. Framing the ZStack to the pill width in centered idle would
+        // clip the leak AND collapse the clip boundary while content grows
+        // during the collapse morph — the right-to-left glitch.
+        .frame(
+            width: isCenteredIdle ? IslandMetrics.windowSize().width : islandWidth + cornerRad * 2,
+            height: islandHeight,
+            alignment: .top
+        )
         .clipped()
         .onHover { hovering in
             eventManager.setActive(hovering)
@@ -1241,14 +1255,10 @@ struct NotchStatusView: View {
             }
             Spacer(minLength: 0)
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            let now = Date()
-            let files = urls.map { ShelfFile(url: $0, createdAt: now) }
-            shelfFiles = ShelfFiles.adding(
-                files, to: shelfFiles,
-                limit: NotchHUDConfig.shared.clampedShelfLimit)
-            return true
-        }
+        // Drops are handled at the window level (KeyablePanel posts
+        // .notchFilesDropped → handleFilesDropped). No SwiftUI .dropDestination
+        // here: registering it alongside the window's NSDraggingDestination
+        // creates two competing targets and the drop gets refused.
     }
 
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
