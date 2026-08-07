@@ -188,7 +188,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.backgroundColor = .clear
         window.hasShadow = false
         window.isMovable = false
-        window.level = .init(rawValue: Int(Int32.max - 3))
+        // `.statusBar + 8` (NotchDrop's proven level): above normal windows
+        // AND the menu bar, but within the range where drag-and-drop routes
+        // to the window. `Int32.max - 3` was so far above everything that
+        // Finder drags fell through to the wallpaper instead of the island.
+        window.level = .statusBar + 8
         window.collectionBehavior = [
             .fullScreenAuxiliary,
             .stationary,
