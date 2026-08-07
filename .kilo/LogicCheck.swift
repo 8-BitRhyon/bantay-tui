@@ -4482,6 +4482,20 @@ struct LogicCheckMain {
             AgentAlertNotifier.messageBody(source: "claude", kind: .completed, title: "done")
                 == "claude finished: done",
             "L60 completed body")
+        // L60b. opencode control channel routing: pane id parsing + the
+        // decision-file contract the plugin polls.
+        check(
+            OpenCodeActionWriter.isOpenCodePane("opencode:myproj"),
+            "L60b opencode pane detected by prefix")
+        check(
+            !OpenCodeActionWriter.isOpenCodePane("w3:p1"),
+            "L60b herdr pane is not opencode")
+        check(
+            OpenCodeActionWriter.projectKey(for: "opencode:myproj") == "myproj",
+            "L60b project key stripped from prefix")
+        check(
+            OpenCodeActionWriter.projectKey(for: "opencode:a/b") == "a/b",
+            "L60b project key preserves nested id")
         // Redaction: home paths are stripped, long titles truncated.
         let home = NSHomeDirectory()
         let long = String(repeating: "x", count: 300)
