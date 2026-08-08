@@ -2603,6 +2603,33 @@ struct LogicCheckMain {
             check(
                 manager.recentCompletions.first?.source == "agent-6",
                 "L38 recents newest first")
+            let rcCheck = RecentCompletion(
+                id: "r1", source: "s1", kind: .completed, title: "t1", createdAt: Date(),
+                duration: 12.5)
+            check(rcCheck.duration == 12.5, "L38 RecentCompletion preserves optional duration")
+            // L38b. The actual duration computation: showEvent reads the
+            // working-burst start for the pane and reports createdAt − start.
+            let start = Date()
+            manager.recordStartForTesting(pane: "dur", at: start.addingTimeInterval(-90))
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "dur-agent", kind: .completed, title: "done", message: nil,
+                    paneId: "dur", workspaceId: nil, variance: nil, choices: nil,
+                    playSound: false, persistent: false))
+            let durRecent = manager.recentCompletions.first { $0.source == "dur-agent" }
+            check(
+                durRecent?.duration != nil && abs((durRecent?.duration ?? 0) - 90) < 2,
+                "L38b duration computed from working-burst start (got \(String(describing: durRecent?.duration)))")
+            // A completion with no recorded start reports nil duration.
+            manager.clearStartForTesting(pane: "nodur")
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "nodur-agent", kind: .completed, title: "done", message: nil,
+                    paneId: "nodur", workspaceId: nil, variance: nil, choices: nil,
+                    playSound: false, persistent: false))
+            check(
+                manager.recentCompletions.first { $0.source == "nodur-agent" }?.duration == nil,
+                "L38b no start -> nil duration")
             manager.setActive(true)
             manager.publishEventForTesting(
                 AgentEvent(

@@ -161,6 +161,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
 /// --stat` preview below. Text is selectable so users can copy log lines.
 private struct PeekPanelView: View {
     @ObservedObject var model: PeekPanelModel
+    @State private var appeared = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -171,14 +172,14 @@ private struct PeekPanelView: View {
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text("Esc to close")
                     .font(.system(size: 8.5, weight: .medium))
                     .foregroundColor(.white.opacity(0.35))
             }
-            .padding(.horizontal, 12)
-            .frame(height: 30)
+            .padding(.horizontal, 14)
+            .frame(height: 32)
             Divider().overlay(Color.white.opacity(0.15))
             tailSection
             if let diff = model.diffPreview {
@@ -190,20 +191,37 @@ private struct PeekPanelView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         Text(diff)
                             .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                            .monospacedDigit()
                             .foregroundColor(.white.opacity(0.7))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .padding(10)
+                .padding(8)
+                .background(
+                    Color.white.opacity(0.04),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .padding(6)
             }
         }
         .background(Color(red: 0.06, green: 0.06, blue: 0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
+        .scaleEffect(appeared ? 1.0 : 0.95, anchor: .topLeading)
+        .opacity(appeared ? 1.0 : 0.0)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.16)) {
+                appeared = true
+            }
+        }
         .frame(width: 480, height: 420)
     }
 

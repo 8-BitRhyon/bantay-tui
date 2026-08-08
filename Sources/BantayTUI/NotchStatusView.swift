@@ -41,6 +41,17 @@ struct NotchStatusView: View {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Brief white border flash when the global hotkey fires (item 10).
+    @State private var hotkeyBlink = false
+    /// Cancels the pending hotkey-blink reset so rapid presses extend the
+    /// flash rather than stacking resets.
+    @State private var hotkeyBlinkResetTask: Task<Void, Never>?
+    /// Namespace for tab bar underline matchedGeometryEffect (item 11).
+    @Namespace private var tabBarNamespace
+    /// Tracks whether a file drag is in progress over the island (item 14).
+    @State private var fileDragActive = false
+    /// Brief "Copied" tooltip feedback when output is copied (item 7).
+    @State private var copiedPaneId: String?
     private let adapter = HerdrSocketAdapter()
 
     /// Docked idle chips sit flush in the notch row; only expanded/center drop
@@ -345,6 +356,18 @@ struct NotchStatusView: View {
                 expandTo(false)
             } else if !eventManager.agents.isEmpty {
                 expandTo(true)
+            } else {
+                // Nothing to expand — blink the pill so the user knows the
+                // hotkey was received (item 10: hotkey feedback). Cancel any
+                // pending reset so rapid presses extend the blink instead of
+                // stacking resets that truncate it.
+                hotkeyBlinkResetTask?.cancel()
+                withAnimation(.easeOut(duration: 0.12)) { hotkeyBlink = true }
+                hotkeyBlinkResetTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(220))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 0.15)) { hotkeyBlink = false }
+                }
             }
         }
         .sheet(isPresented: $showWelcome) {
@@ -608,8 +631,14 @@ struct NotchStatusView: View {
             .frame(width: islandWidth + cornerRad * 2, height: islandHeight)
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
-                    .strokeBorder(.white.opacity(isExpanded ? 0.09 : 0.04), lineWidth: 1)
+                    .strokeBorder(
+                        hotkeyBlink
+                            ? .white.opacity(0.45)
+                            : .white.opacity(isExpanded ? 0.09 : 0.04),
+                        lineWidth: hotkeyBlink ? 1.5 : 1
+                    )
                     .frame(width: islandWidth, height: islandHeight)
+                    .animation(.easeOut(duration: 0.12), value: hotkeyBlink)
             }
     }
 
@@ -916,6 +945,15 @@ struct NotchStatusView: View {
             Text(event.kind.label)
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white)
+            // Item 5: variance badge — distinguish yes/no from choice/multi.
+            if variance != .yesNo {
+                Text(variance.label)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+                    .padding(.horizontal, 5)
+                    .frame(height: 14)
+                    .background(Color.white.opacity(0.12), in: Capsule())
+            }
             if showDetail, let title = event.title, !title.isEmpty {
                 Text("·").foregroundStyle(.secondary)
                 Text(title)
@@ -1010,9 +1048,10 @@ struct NotchStatusView: View {
             Image(systemName: systemName)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(disabled ? color.opacity(0.3) : color)
-                .frame(width: 20, height: 20)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ScalePressButtonStyle())
         .help(help)
         .accessibilityLabel(label ?? help)
         .disabled(disabled)
@@ -1025,11 +1064,13 @@ struct NotchStatusView: View {
         Button(action: action) {
             label
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
                 .foregroundColor(disabled ? color.opacity(0.3) : color)
-                .padding(.horizontal, 5)
-                .frame(minWidth: 20, minHeight: 20)
+                .padding(.horizontal, 6)
+                .frame(minWidth: 24, minHeight: 24)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ScalePressButtonStyle())
         .help(help)
         .accessibilityLabel(accessibilityLabel ?? help)
         .disabled(disabled)
@@ -1045,10 +1086,10 @@ struct NotchStatusView: View {
             Image(systemName: "eye")
                 .font(.system(size: 9, weight: .medium))
                 .foregroundColor(.white.opacity(0.6))
-                .frame(width: 20, height: 20)
+                .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ScalePressButtonStyle())
         .help("View live output + git diff")
         .accessibilityLabel("View live output for \(agent.source)")
     }
@@ -1080,27 +1121,36 @@ struct NotchStatusView: View {
     /// controls, everything else as plain rows. No separate queue section.
     @ViewBuilder
     private var rosterContent: some View {
-        VStack(spacing: 0) {
-            if visibleAgents.isEmpty {
-                Text("No active agents")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.4))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: IslandMetrics.rowHeight)
-            }
-
-            ScrollView(.vertical) {
-                VStack(spacing: 0) {
-                    if NotchHUDConfig.shared.expandedGroupByState {
-                        groupedAgentRows
-                    } else {
-                        flatAgentRows
+        ScrollView(.vertical) {
+            VStack(spacing: 0) {
+                if visibleAgents.isEmpty {
+                    // Item 4: structured empty state for new users. Lives
+                    // inside the scroll viewport so it isn't clipped by the
+                    // panel height when the roster is empty.
+                    VStack(spacing: 8) {
+                        Image(systemName: "terminal.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.white.opacity(0.25))
+                        Text("No agents detected")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.55))
+                        Text("Start Claude Code, Codex, or opencode\nand they'll appear here.")
+                            .font(.system(size: 9, weight: .regular))
+                            .foregroundColor(.white.opacity(0.3))
+                            .multilineTextAlignment(.center)
+                            .lineSpacing(2)
                     }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: rosterScrollHeight)
+                } else if NotchHUDConfig.shared.expandedGroupByState {
+                    groupedAgentRows
+                } else {
+                    flatAgentRows
                 }
             }
-            .frame(height: rosterScrollHeight)
-            .scrollIndicators(.hidden)
         }
+        .frame(height: rosterScrollHeight)
+        .scrollIndicators(.hidden)
     }
 
     /// F8 triage view: only agents that need you (blocked) or failed.
@@ -1135,13 +1185,20 @@ struct NotchStatusView: View {
         let available = max(
             contentHeight - chrome - IslandMetrics.contentSpacing,
             0)
+        // Reserve room for the structured empty state when there are no
+        // agents, so it isn't clipped to a sliver of the viewport.
+        if visibleAgents.isEmpty {
+            return max(available, 92)
+        }
         return IslandMetrics.stableRosterHeight(
             agentCount: mergedRoster.count, availableHeight: available,
             groupCount: rosterGroupCount)
     }
 
+    /// Item 11: underline tab bar with matchedGeometryEffect for a sliding
+    /// indicator, replacing the capsule pills. Feels more native on macOS.
     private var shelfTabBar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 12) {
             shelfTabButton(title: "Agents", selected: !showShelf && !showAttention) {
                 showShelf = false
                 showAttention = false
@@ -1168,16 +1225,30 @@ struct NotchStatusView: View {
         -> some View
     {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: 9, weight: selected ? .semibold : .medium))
-                .foregroundColor(selected ? .white : .white.opacity(0.5))
-                .padding(.horizontal, 8)
-                .frame(height: 16)
-                .background(
-                    selected ? Color.white.opacity(0.14) : Color.clear, in: Capsule())
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Text(title)
+                    .font(.system(size: 9, weight: selected ? .semibold : .medium))
+                    .foregroundColor(selected ? .white : .white.opacity(0.5))
+                    .padding(.horizontal, 2)
+                Spacer(minLength: 0)
+                // Item 11: sliding underline indicator.
+                if selected {
+                    Rectangle()
+                        .fill(.white)
+                        .frame(height: 1.5)
+                        .matchedGeometryEffect(id: "tabIndicator", in: tabBarNamespace)
+                } else {
+                    Rectangle()
+                        .fill(.clear)
+                        .frame(height: 1.5)
+                }
+            }
+            .frame(height: 20)
         }
         .buttonStyle(.plain)
         .accessibilityValue(selected ? "selected" : "not selected")
+        .animation(.easeInOut(duration: 0.2), value: selected)
     }
 
     private var shelfContent: some View {
@@ -1273,6 +1344,10 @@ struct NotchStatusView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                    )
                 if let icon = file.icon {
                     Image(nsImage: icon)
                         .resizable()
@@ -1293,7 +1368,7 @@ struct NotchStatusView: View {
                         .foregroundColor(.white.opacity(0.7))
                         .background(Color.black.opacity(0.6).clipShape(Circle()))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ScalePressButtonStyle())
                 .help("Remove from shelf")
                 .offset(x: 4, y: -4)
             }
@@ -1307,8 +1382,18 @@ struct NotchStatusView: View {
         .frame(width: 68)
         .contentShape(Rectangle())
         .draggable(file.url)
+        .onTapGesture(count: 2) { NSWorkspace.shared.open(file.url) }
         .onTapGesture(count: 1) { ShelfQuickLook.show(file.url) }
-        .help("Preview / drag out / open")
+        .help("Click: preview · Double-click: open")
+        // Item 9: right-click context menu for shelf cards.
+        .contextMenu {
+            Button("Open") { NSWorkspace.shared.open(file.url) }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([file.url])
+            }
+            Divider()
+            Button("Remove") { shelfStore.remove(file) }
+        }
     }
 
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
@@ -1316,11 +1401,13 @@ struct NotchStatusView: View {
             if counts.needsInput > 0 {
                 Text("\(counts.needsInput) need you")
                     .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
                     .foregroundColor(.yellow)
             }
             if counts.working > 0 {
                 Text("\(counts.working) working")
                     .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
                     .foregroundColor(.white)
             }
             if counts.needsInput == 0 && counts.working == 0 {
@@ -1350,10 +1437,10 @@ struct NotchStatusView: View {
                 Image(systemName: panelPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(panelPinned ? .white : .white.opacity(0.5))
-                    .frame(width: 18, height: 18)
+                    .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ScalePressButtonStyle())
             .help(panelPinned ? "Unpin panel" : "Pin panel open")
             .accessibilityLabel(panelPinned ? "Unpin panel" : "Pin panel open")
             .accessibilityValue(panelPinned ? "pinned" : "unpinned")
@@ -1434,11 +1521,13 @@ struct NotchStatusView: View {
                                 : Color(hex: AgentEventKind.completed.color)
                         )
                         .frame(width: 6, height: 6)
+                    // Item 12: truncation consistency — agent source uses .tail
+                    // so the differentiator at the end stays visible.
                     Text(recent.source)
                         .font(.system(size: 9.5, weight: .semibold))
                         .foregroundColor(.white.opacity(0.85))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
                     if let title = recent.title {
                         Text(title)
                             .font(.system(size: 8.5, weight: .regular))
@@ -1447,8 +1536,19 @@ struct NotchStatusView: View {
                             .truncationMode(.tail)
                     }
                     Spacer(minLength: 8)
+                    // Item 8: show duration on completed rows when available.
+                    if let duration = recent.duration {
+                        Text(
+                            IslandMetrics.elapsedLabel(
+                                since: Date(timeIntervalSinceNow: -duration), now: Date())
+                        )
+                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundColor(.white.opacity(0.3))
+                    }
                     Text(IslandMetrics.elapsedLabel(since: recent.createdAt, now: now))
                         .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .monospacedDigit()
                         .foregroundColor(.white.opacity(0.4))
                 }
                 .padding(.horizontal, 16)
@@ -1464,11 +1564,22 @@ struct NotchStatusView: View {
     private var flatAgentRows: some View {
         VStack(spacing: 0) {
             ForEach(Array(mergedRoster.enumerated()), id: \.element.id) { index, agent in
-                agentRow(agent: agent)
-                    .background(
-                        focusedRow == index
-                            ? Color.accentColor.opacity(0.18) : Color.clear
-                    )
+                VStack(spacing: 0) {
+                    // Item 13: 1px separator between rows (not before first).
+                    if index > 0 {
+                        Rectangle().fill(.white.opacity(0.04)).frame(height: 1)
+                    }
+                    agentRow(agent: agent)
+                        .background(
+                            focusedRow == index
+                                ? Color.accentColor.opacity(0.18) : Color.clear
+                        )
+                }
+                // Item 1: staggered appear animation per row.
+                .transition(.opacity.combined(with: .offset(y: 4)))
+                .animation(
+                    .easeOut(duration: 0.2).delay(Double(index) * 0.03),
+                    value: mergedRoster.count)
             }
             recentActivitySection
         }
@@ -1581,7 +1692,16 @@ struct NotchStatusView: View {
     private func agentRow(agent: AgentSnapshot) -> some View {
         let composing = composingPaneId == agent.paneId
         return HStack(spacing: 8) {
+            // Item 2: pulsing dot for working agents. The pulse modifier is on
+            // the dot itself (a same-color overlay composites to constant
+            // color and is invisible), and only .progress/.started pulse —
+            // blocked rows shouldn't read as "busy". `enabled` carries the
+            // reduce-motion + kind gate so the modifier type-checks fast.
             Circle().fill(Color(hex: agent.kind.color)).frame(width: 6, height: 6)
+                .modifier(
+                    PulsingDotModifier(
+                        enabled: (agent.kind == .progress || agent.kind == .started)
+                            && !reduceMotion))
             if composing {
                 TextField("Ask agent…", text: $promptText)
                     .textFieldStyle(.plain)
@@ -1619,13 +1739,15 @@ struct NotchStatusView: View {
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 5) {
                                 if let ctx = agent.projectContext {
+                                    // Item 12: .tail truncation so the
+                                    // differentiating suffix stays visible.
                                     Text(ctx.project)
                                         .font(
                                             .system(
                                                 size: 10.5, weight: .semibold, design: .monospaced)
                                         )
                                         .foregroundColor(.white).lineLimit(1).truncationMode(
-                                            .middle)
+                                            .tail)
                                     if let branch = ctx.branch {
                                         Text(branch)
                                             .font(
@@ -1642,7 +1764,7 @@ struct NotchStatusView: View {
                                                 size: 10.5, weight: .semibold, design: .monospaced)
                                         )
                                         .foregroundColor(.white).lineLimit(1).truncationMode(
-                                            .middle)
+                                            .tail)
                                 }
                             }
                             HStack(spacing: 5) {
@@ -1703,6 +1825,30 @@ struct NotchStatusView: View {
                     // calm (BoringNotch HoverButton pattern). Always
                     // reachable: hover or tab already shows the row bg.
                     let rowHovered = hoveredRow == agent.id
+                    // Item 7: copy last output button.
+                    if copiedPaneId == paneId {
+                        Text("Copied")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundColor(.green)
+                            .layoutPriority(1)
+                            .transition(.opacity)
+                    } else {
+                        Button(action: { copyAgentOutput(paneId: paneId) }) {
+                            Image(systemName: "doc.on.doc").font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy last output")
+                        .accessibilityLabel("Copy output of \(agent.source)")
+                        .layoutPriority(1)
+                        .opacity(rowHovered ? 1 : 0)
+                        // Item 3: asymmetric hover timing (quick out, deliberate in).
+                        .animation(
+                            rowHovered
+                                ? .easeOut(duration: 0.12)
+                                : .easeOut(duration: 0.06),
+                            value: rowHovered)
+                    }
                     Button(action: { focusAgentPane(paneId) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.6))
@@ -1712,7 +1858,12 @@ struct NotchStatusView: View {
                     .accessibilityLabel("Focus \(agent.source)")
                     .layoutPriority(1)
                     .opacity(rowHovered ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.15), value: rowHovered)
+                    // Item 3: asymmetric hover timing.
+                    .animation(
+                        rowHovered
+                            ? .easeOut(duration: 0.12)
+                            : .easeOut(duration: 0.06),
+                        value: rowHovered)
                     Button(action: {
                         eventManager.performAction(paneId: paneId) {
                             $0.stop(paneId: paneId)
@@ -1726,11 +1877,19 @@ struct NotchStatusView: View {
                     .accessibilityLabel("Stop \(agent.source)")
                     .layoutPriority(1)
                     .opacity(rowHovered ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.15), value: rowHovered)
+                    .animation(
+                        rowHovered
+                            ? .easeOut(duration: 0.12)
+                            : .easeOut(duration: 0.06),
+                        value: rowHovered)
                     peekButton(agent: agent)
                         .layoutPriority(1)
                         .opacity(rowHovered ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.15), value: rowHovered)
+                        .animation(
+                            rowHovered
+                                ? .easeOut(duration: 0.12)
+                                : .easeOut(duration: 0.06),
+                            value: rowHovered)
                 } else if agent.kind == .accessRequest || agent.kind == .waiting {
                     // Standalone agent (opencode/Claude outside herdr): there
                     // is no pane to send keys to, so an Approve/Deny would be
@@ -1778,6 +1937,34 @@ struct NotchStatusView: View {
             } else {
                 Button("Mute \(agent.source)") {
                     NotchHUDConfig.shared.mutedSources.insert(agent.source)
+                }
+            }
+        }
+    }
+
+    /// Fetch the last 20 lines of cleaned output for `paneId` and copy to clipboard.
+    /// Briefly shows "Copied" feedback (item 7).
+    private func copyAgentOutput(paneId: String) {
+        Task.detached { [adapter] in
+            let tail = await adapter.captureTail(paneId: paneId, lines: 20)
+            let cleaned = LogFormatter.cleanedTail(tail, maxLines: 20, maxLineLength: 120)
+                .joined(separator: "\n")
+            await MainActor.run {
+                // Don't wipe the clipboard with an empty string when the pane
+                // has no output (socket/CLI failure or genuinely empty).
+                guard !cleaned.isEmpty else { return }
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(cleaned, forType: .string)
+                withAnimation(.easeIn(duration: 0.15)) {
+                    self.copiedPaneId = paneId
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        if self.copiedPaneId == paneId {
+                            self.copiedPaneId = nil
+                        }
+                    }
                 }
             }
         }
@@ -2073,5 +2260,37 @@ extension Color {
         let g = Double((int >> 8) & 0xFF) / 255
         let b = Double(int & 0xFF) / 255
         self.init(red: r, green: g, blue: b)
+    }
+}
+
+/// Tactile scale-on-press feedback (make-interfaces-feel-better principle 12).
+/// Applies a subtle scale(0.96) on press for buttons across the control plane.
+struct ScalePressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+/// Item 2: breathing opacity cycle for working-agent status dots. The dot
+/// pulses 0.4→1.0→0.4 over 1.5s, the universal "I'm busy" signifier. When
+/// `enabled` is false (reduce-motion or a non-working kind) it's an identity
+/// modifier, keeping the row's modifier type stable.
+private struct PulsingDotModifier: ViewModifier {
+    let enabled: Bool
+    @State private var pulsing = false
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .opacity(pulsing ? 0.35 : 1.0)
+                .animation(
+                    .easeInOut(duration: 0.75).repeatForever(autoreverses: true),
+                    value: pulsing
+                )
+                .onAppear { pulsing = true }
+        } else {
+            content
+        }
     }
 }

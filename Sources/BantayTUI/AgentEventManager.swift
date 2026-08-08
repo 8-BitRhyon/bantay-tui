@@ -132,6 +132,23 @@ struct RecentCompletion: Identifiable, Equatable, Sendable {
     let kind: AgentEventKind
     let title: String?
     let createdAt: Date
+    let duration: TimeInterval?
+
+    init(
+        id: String,
+        source: String,
+        kind: AgentEventKind,
+        title: String?,
+        createdAt: Date,
+        duration: TimeInterval? = nil
+    ) {
+        self.id = id
+        self.source = source
+        self.kind = kind
+        self.title = title
+        self.createdAt = createdAt
+        self.duration = duration
+    }
 }
 
 @MainActor
@@ -392,6 +409,13 @@ final class AgentEventManager: ObservableObject {
                 ApprovalNotificationController.shared.removeForPane(paneKey)
             }
         }
+        var completionDuration: TimeInterval?
+        if event.kind == .completed || event.kind == .failed {
+            if let start = startedAtByPane[key] {
+                completionDuration = event.createdAt.timeIntervalSince(start)
+            }
+        }
+
         if event.kind == .progress || event.kind == .started {
             if startedAtByPane[key] == nil {
                 startedAtByPane[key] = event.createdAt
@@ -408,7 +432,8 @@ final class AgentEventManager: ObservableObject {
                 source: event.sourceKey,
                 kind: event.kind,
                 title: event.title ?? event.message,
-                createdAt: event.createdAt)
+                createdAt: event.createdAt,
+                duration: completionDuration)
             recentCompletions = Array(([recent] + recentCompletions).prefix(5))
         }
 
