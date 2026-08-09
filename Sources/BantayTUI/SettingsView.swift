@@ -52,6 +52,8 @@ struct SettingsView: View {
     @State private var menuBadge = NotchHUDConfig.shared.menuBarBadge
     @State private var standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
     @State private var showUsage = NotchHUDConfig.shared.usageTrackingEnabled
+    @State private var dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
+    @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
     @State private var showShelf = NotchHUDConfig.shared.showShelfTab
@@ -77,6 +79,11 @@ struct SettingsView: View {
         manifestPath: Self.herdrManifestPath)
     @State private var opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
     @State private var opencodePluginError = ""
+    @State private var showTokenRate = NotchHUDConfig.shared.showTokenRate
+    @State private var soundThemePreset = NotchHUDConfig.shared.soundThemePreset
+    @State private var approvalSoundName = NotchHUDConfig.shared.approvalSoundName
+    @State private var completionSoundName = NotchHUDConfig.shared.completionSoundName
+    @State private var errorSoundName = NotchHUDConfig.shared.errorSoundName
 
     /// Whether a section title matches the current search query.
     private func matchesSearch(_ title: String) -> Bool {
@@ -260,13 +267,26 @@ struct SettingsView: View {
                         }
                     Toggle("Track token/cost usage", isOn: $showUsage)
                         .help(
-                            "Reads agent transcripts to compute token + cost usage. "
-                                + "Off by default (nothing displays it yet; spend "
-                                + "history is planned)."
+                            "Reads agent transcripts to compute token + cost usage."
                         )
                         .onChange(of: showUsage) { newValue in
                             NotchHUDConfig.shared.usageTrackingEnabled = newValue
                         }
+                    Toggle("Notch spend edge-glow", isOn: $enableSpendGlow)
+                        .help(
+                            "Pulsing cyan/amber/red ambient perimeter stroke around the notch "
+                                + "indicating live daily AI spend."
+                        )
+                        .onChange(of: enableSpendGlow) { newValue in
+                            NotchHUDConfig.shared.enableSpendGlow = newValue
+                        }
+                    Stepper(
+                        "Daily budget limit: $\(Int(dailyBudgetUSD))",
+                        value: $dailyBudgetUSD, in: 1...100
+                    )
+                    .onChange(of: dailyBudgetUSD) { newValue in
+                        NotchHUDConfig.shared.dailyBudgetUSD = Double(newValue)
+                    }
                 }
             }
 
@@ -481,6 +501,88 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.soundVolume = Float(newValue) / 100
                         previewAlertVolume()
                     }
+                    Picker("Sound Theme Preset", selection: $soundThemePreset) {
+                        Text("Sleek Modern (Default)").tag("Sleek Modern")
+                        Text("Retro Synth").tag("Retro Synth")
+                        Text("Minimalist").tag("Minimalist")
+                        Text("Industrial Alert").tag("Industrial")
+                        Text("Custom").tag("Custom")
+                    }
+                    .onChange(of: soundThemePreset) { newValue in
+                        NotchHUDConfig.shared.soundThemePreset = newValue
+                        if newValue != "Custom" {
+                            approvalSoundName = NotchHUDConfig.shared.approvalSoundName
+                            completionSoundName = NotchHUDConfig.shared.completionSoundName
+                            errorSoundName = NotchHUDConfig.shared.errorSoundName
+                        }
+                    }
+
+                    HStack {
+                        Picker("Approval Sound", selection: $approvalSoundName) {
+                            ForEach(
+                                [
+                                    "Glass", "Hero", "Ping", "Pop", "Tink", "Submarine", "Purr",
+                                    "Morse", "Blow", "Funk", "Basso", "Sosumi", "Bottle", "Frog",
+                                ], id: \.self
+                            ) { sound in
+                                Text(sound).tag(sound)
+                            }
+                        }
+                        .onChange(of: approvalSoundName) { newValue in
+                            NotchHUDConfig.shared.approvalSoundName = newValue
+                            if soundThemePreset != "Custom" { soundThemePreset = "Custom" }
+                        }
+                        Button("▶ Test") {
+                            NSSound(named: approvalSoundName)?.play()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Preview approval sound")
+                    }
+
+                    HStack {
+                        Picker("Completion Sound", selection: $completionSoundName) {
+                            ForEach(
+                                [
+                                    "Glass", "Hero", "Ping", "Pop", "Tink", "Submarine", "Purr",
+                                    "Morse", "Blow", "Funk", "Basso", "Sosumi", "Bottle", "Frog",
+                                ], id: \.self
+                            ) { sound in
+                                Text(sound).tag(sound)
+                            }
+                        }
+                        .onChange(of: completionSoundName) { newValue in
+                            NotchHUDConfig.shared.completionSoundName = newValue
+                            if soundThemePreset != "Custom" { soundThemePreset = "Custom" }
+                        }
+                        Button("▶ Test") {
+                            NSSound(named: completionSoundName)?.play()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Preview completion sound")
+                    }
+
+                    HStack {
+                        Picker("Error Sound", selection: $errorSoundName) {
+                            ForEach(
+                                [
+                                    "Glass", "Hero", "Ping", "Pop", "Tink", "Submarine", "Purr",
+                                    "Morse", "Blow", "Funk", "Basso", "Sosumi", "Bottle", "Frog",
+                                ], id: \.self
+                            ) { sound in
+                                Text(sound).tag(sound)
+                            }
+                        }
+                        .onChange(of: errorSoundName) { newValue in
+                            NotchHUDConfig.shared.errorSoundName = newValue
+                            if soundThemePreset != "Custom" { soundThemePreset = "Custom" }
+                        }
+                        Button("▶ Test") {
+                            NSSound(named: errorSoundName)?.play()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Preview error sound")
+                    }
+
                     Toggle("Mute while in Terminal", isOn: $muteInTerminal)
                         .onChange(of: muteInTerminal) { newValue in
                             NotchHUDConfig.shared.muteInTerminal = newValue
@@ -666,7 +768,7 @@ struct SettingsView: View {
                     }
                     .onChange(of: dockSide) { newValue in
                         NotchHUDConfig.shared.islandDockSide =
-                            IslandMetrics.IslandDockSide(rawValue: newValue) ?? .right
+                            IslandMetrics.IslandDockSide(rawValue: newValue) ?? .center
                         NotificationCenter.default.post(
                             name: .notchVisibilityChanged, object: nil)
                     }

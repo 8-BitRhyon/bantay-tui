@@ -622,7 +622,10 @@ public enum IslandMetrics: Sendable {
         CGSize(width: expandedWidth + expandedCornerRadius * 2, height: maxExpandedHeight)
     }
 
-    /// The closed pill content size.
+    /// The closed pill content size. Height = topInset (the menu-bar row) plus
+    /// the pill height so approval controls and idle chips are never clipped —
+    /// trimming to just topInset cut off the bottom of the taller approval
+    /// pill.
     public static func closedSize(topInset: CGFloat, notchWidth: CGFloat) -> CGSize {
         CGSize(width: min(max(notchWidth, 0), expandedWidth), height: topInset + pillHeight)
     }

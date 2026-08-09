@@ -530,8 +530,16 @@ extension AgentEventManager {
             guard let cwd = agent.cwd, !cwd.isEmpty else { return nil }
             return ProjectContext(cwd: cwd)
         }()
+        // Unique id: paneId when present, else source + cwd. Multiple
+        // pane-less agents of the same source (e.g. two herdr/freebuff
+        // processes) must not share an id — ForEach(id:) and Dictionary
+        // keyed on id would crash/duplicate.
+        let id: String =
+            agent.paneId
+            ?? (agent.cwd.map { "\(agent.agent):\($0)" }
+                ?? agent.agent + ":standalone")
         return AgentSnapshot(
-            id: agent.paneId ?? agent.agent,
+            id: id,
             source: agent.agent,
             kind: kind,
             title: agent.terminalTitle,
@@ -716,9 +724,13 @@ extension AgentEventManager {
         // nobody consumed. Phase C (spend history) re-enables it when there's
         // a consumer.
         if NotchHUDConfig.shared.usageTrackingEnabled {
-            let usageRoots: [String] = agents.compactMap {
-                AgentDetector.transcriptSearchPaths(home: NSHomeDirectory(), name: $0.agent).first
-            }
+            // Track ALL transcript roots (flatMap) so the mtime memo matches
+            // the scan — using only the first path per agent left the newly
+            // broadened dirs (transcripts/history/brain) permanently stale.
+            let usageRoots: Set<String> = Set(
+                agents.flatMap {
+                    AgentDetector.transcriptSearchPaths(home: NSHomeDirectory(), name: $0.agent)
+                })
             let changedRoots = usageRoots.filter { root in
                 guard let mtime = UsageTracker.transcriptMtime(root: root) else { return true }
                 return transcriptMtimes[root] != mtime
@@ -742,11 +754,12 @@ extension AgentEventManager {
             self.usageRate = usageAndRate.1
         }
         let liveStatuses: [String: String] = Dictionary(
-            uniqueKeysWithValues: agents.compactMap {
+            agents.compactMap {
                 (agent: HerdrAgentInfo) -> (String, String)? in
                 guard let key = agent.paneId ?? agent.agent as String? else { return nil }
                 return (key, agent.agentStatus ?? "")
-            })
+            },
+            uniquingKeysWith: { first, _ in first })
         // Prune push-stream dedup caches against the live roster so a missed
         // pane_closed event (herdr restart, dropped event) can't grow them
         // unboundedly.

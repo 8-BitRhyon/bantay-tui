@@ -214,7 +214,103 @@ struct LogicCheckMain {
             "worst state sorted last wins the pill")
 
         manager.stop()
-        try? FileManager.default.removeItem(atPath: tmp)
+        // MARK: - ChoiceExtractor tests
+        let textChoices = ChoiceExtractor.extractChoices(
+            from: """
+                Some questions for you:
+                1. Vintage star chart
+                2. Painted brush stars
+                3. Cartoon/illustration stars
+                4. Printed sky + drawn overlay
+                5. Custom
+                """)
+        check(textChoices.count == 5, "ChoiceExtractor parsed 5 options")
+        check(textChoices.first?.label == "Vintage star chart", "ChoiceExtractor option 1 label")
+        check(textChoices.last?.id == 5, "ChoiceExtractor option 5 id")
+
+        // Stacked prompts in one tail: a new prompt restarting at 1 must reset
+        // the list so ids never duplicate (the old code emitted 1,2,3,1,2).
+        let stacked = ChoiceExtractor.extractChoices(
+            from: """
+                Which style?
+                1. Vintage star chart
+                2. Painted brush stars
+                3. Cartoon/illustration stars
+                Which color?
+                1. Red
+                2. Blue
+                """)
+        check(stacked.count == 2, "ChoiceExtractor keeps only the most recent prompt (got \(stacked.count))")
+        check(
+            stacked.map(\.id) == [1, 2] && stacked.first?.label == "Red",
+            "ChoiceExtractor restarted prompt renumbers from 1 (got \(stacked.map { "\($0.id):\($0.label)" }))")
+
+        // MARK: - Kilo / Freebuff / Herdr AgentDetector & UsageTracker tests
+        check(
+            AgentDetector.canonicalName(forProcess: "kilo") == "kilo",
+            "AgentDetector canonical kilo")
+        check(
+            AgentDetector.canonicalName(forProcess: "freebuff") == "freebuff",
+            "AgentDetector canonical freebuff")
+        check(
+            AgentDetector.canonicalName(forProcess: "herdr-server") == "herdr",
+            "AgentDetector canonical herdr")
+        check(
+            AgentDetector.canonicalNameFromCommand("node /usr/local/bin/kilo") == "kilo",
+            "AgentDetector node wrapper kilo")
+        check(
+            AgentDetector.canonicalNameFromCommand("python3 -m freebuff") == "freebuff",
+            "AgentDetector python wrapper freebuff")
+        // False positives: helper/browser subprocesses and lookalike names
+        // must NOT become agents.
+        check(
+            AgentDetector.canonicalNameFromCommand(
+                "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (GPU).app/.../Cursor Helper (GPU)"
+            ) == nil,
+            "AgentDetector ignores Cursor Helper (GPU)")
+        check(
+            AgentDetector.canonicalNameFromCommand("/usr/bin/kilobytesd") == nil,
+            "AgentDetector ignores lookalike 'kilobytesd'")
+        check(
+            AgentDetector.canonicalNameFromCommand("/usr/bin/claude-searchd") == nil,
+            "AgentDetector ignores lookalike 'claude-searchd'")
+        check(
+            AgentDetector.canonicalNameFromCommand("node --run kilo") == "kilo",
+            "AgentDetector still matches real kilo wrapper")
+
+        let kiloPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "kilo")
+        check(
+            kiloPaths.contains("/Users/test/.local/share/kilo/log"), "AgentDetector kilo log path")
+
+        let freebuffPaths = AgentDetector.transcriptSearchPaths(
+            home: "/Users/test", name: "freebuff")
+        check(
+            freebuffPaths.contains("/Users/test/.config/manicode/freebuff"),
+            "AgentDetector freebuff path")
+
+        let herdrPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "herdr")
+        check(herdrPaths.contains("/Users/test/.config/herdr"), "AgentDetector herdr path")
+
+        let parsedKiloUsage = UsageParser.parse(
+            jsonLine: "{\"prompt_tokens\": 150, \"completion_tokens\": 75}")
+        check(parsedKiloUsage?.inputTokens == 150, "UsageParser prompt_tokens alias")
+        check(parsedKiloUsage?.outputTokens == 75, "UsageParser completion_tokens alias")
+        check((parsedKiloUsage?.costUSD ?? 0) > 0, "UsageParser fallback cost calculation")
+
+        // MARK: - Snack A/B/C Settings & Sound Library Tests
+        let config = NotchHUDConfig.shared
+        check(config.showTokenRate == true, "NotchHUDConfig default showTokenRate")
+        check(config.enableGlobalHotkey == true, "NotchHUDConfig default enableGlobalHotkey")
+        check(config.approvalSoundName == "Glass", "NotchHUDConfig default approvalSoundName Glass")
+        config.applySoundThemePreset("Retro Synth")
+        check(config.approvalSoundName == "Tink", "Retro Synth approval sound is Tink")
+        check(config.soundName(for: .accessRequest) == "Tink", "soundName for accessRequest")
+        // Ongoing work must not play the loud approval sound.
+        check(
+            config.soundName(for: .progress) == config.workingSoundName
+                && config.soundName(for: .started) == config.workingSoundName,
+            "progress/started use the quiet working sound, not the approval sound")
+        config.applySoundThemePreset("Sleek Modern")  // restore default
 
         // MARK: - IslandMetrics geometry
 
@@ -875,6 +971,19 @@ struct LogicCheckMain {
             check(
                 unmerged[0].variance == nil && unmerged[0].choices == nil,
                 "L7 idle agents never carry approval data")
+            // Duplicate pane-less agents of the same source must get distinct
+            // ids — two herdr/freebuff processes with nil paneId collided on
+            // `paneId ?? source` and crashed Dictionary/ForEach.
+            let a = HerdrAgentInfo(
+                agent: "herdr", agentStatus: "idle", paneId: nil,
+                workspaceId: "1", terminalTitle: nil, cwd: nil)
+            let b = HerdrAgentInfo(
+                agent: "herdr", agentStatus: "idle", paneId: nil,
+                workspaceId: "1", terminalTitle: nil, cwd: "/Users/a/b")
+            let sa = AgentEventManager.snapshot(for: a)
+            let sb = AgentEventManager.snapshot(for: b)
+            check(sa?.id != sb?.id, "L7 pane-less agents of one source have distinct ids")
+            check(sa?.id == "herdr:standalone", "L7 pane-less id falls back to source:standalone")
         }
 
         // L8. Speed & peripheral-vision snacks: elapsed labels, shortcut
@@ -2619,7 +2728,8 @@ struct LogicCheckMain {
             let durRecent = manager.recentCompletions.first { $0.source == "dur-agent" }
             check(
                 durRecent?.duration != nil && abs((durRecent?.duration ?? 0) - 90) < 2,
-                "L38b duration computed from working-burst start (got \(String(describing: durRecent?.duration)))")
+                "L38b duration computed from working-burst start (got \(String(describing: durRecent?.duration)))"
+            )
             // A completion with no recorded start reports nil duration.
             manager.clearStartForTesting(pane: "nodur")
             manager.publishEventForTesting(

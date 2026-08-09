@@ -46,12 +46,102 @@ final class NotchHUDConfig {
     }
     /// The ntfy push is only enabled when a topic is configured.
     var ntfyEnabled: Bool { !ntfyTopic.isEmpty }
-    /// Gate for the transcript token/cost enumeration. Off by default: nothing
-    /// in the UI renders it (the footer gauge was removed), so paying for the
-    /// per-poll transcript read + disk I/O is pure waste. Phase C (spend
-    /// history) turns this on when there is a consumer.
-    var usageTrackingEnabled = false {
+    /// Gate for the transcript token/cost enumeration. Enabled by default
+    /// for live spend guardrails & edge-glow alerts.
+    var usageTrackingEnabled = true {
         didSet { defaults.set(usageTrackingEnabled, forKey: "usageTrackingEnabled") }
+    }
+    /// Daily spend budget in USD (default $10.00). Triggers peripheral amber glow at
+    /// 70% and pulsing crimson alert glow at 100%.
+    var dailyBudgetUSD: Double = 10.0 {
+        didSet {
+            dailyBudgetUSD = min(max(dailyBudgetUSD, 1), 100)
+            defaults.set(dailyBudgetUSD, forKey: "dailyBudgetUSD")
+        }
+    }
+    /// Ambient notch edge-glow indicating live spend level (cyan/amber/red).
+    var enableSpendGlow: Bool = true {
+        didSet { defaults.set(enableSpendGlow, forKey: "enableSpendGlow") }
+    }
+    /// Live token throughput rate ticker (⚡ t/min) in expanded island header.
+    var showTokenRate: Bool = true {
+        didSet { defaults.set(showTokenRate, forKey: "showTokenRate") }
+    }
+    /// Alias for globalHotkeyEnabled for backwards compatibility.
+    var enableGlobalHotkey: Bool {
+        get { globalHotkeyEnabled }
+        set { globalHotkeyEnabled = newValue }
+    }
+    /// Sound Theme Preset name ("Sleek Modern", "Retro Synth", "Minimalist", "Industrial", "Custom").
+    var soundThemePreset: String = "Sleek Modern" {
+        didSet {
+            defaults.set(soundThemePreset, forKey: "soundThemePreset")
+            if soundThemePreset != "Custom" && !isInitializing {
+                applySoundThemePreset(soundThemePreset)
+            }
+        }
+    }
+    /// Sound effect for approval / access requests.
+    var approvalSoundName: String = "Glass" {
+        didSet { defaults.set(approvalSoundName, forKey: "approvalSoundName") }
+    }
+    /// Sound effect for completed tasks.
+    var completionSoundName: String = "Hero" {
+        didSet { defaults.set(completionSoundName, forKey: "completionSoundName") }
+    }
+    /// Sound effect for errors / failed tasks.
+    var errorSoundName: String = "Basso" {
+        didSet { defaults.set(errorSoundName, forKey: "errorSoundName") }
+    }
+    /// Quiet tick for ongoing work (progress/started) — distinct from the
+    /// louder approval sound so routine activity doesn't chime loudly.
+    var workingSoundName: String = "Purr" {
+        didSet { defaults.set(workingSoundName, forKey: "workingSoundName") }
+    }
+
+    /// Sound effect lookup for an agent event kind. Ongoing work gets a
+    /// distinct quiet tick (was wrongly playing the louder approval sound).
+    func soundName(for kind: AgentEventKind) -> String {
+        switch kind {
+        case .accessRequest, .waiting:
+            return approvalSoundName
+        case .completed:
+            return completionSoundName
+        case .failed:
+            return errorSoundName
+        case .progress, .started:
+            return workingSoundName
+        default:
+            return workingSoundName
+        }
+    }
+
+    /// Apply sound presets from a theme name.
+    func applySoundThemePreset(_ theme: String) {
+        switch theme {
+        case "Sleek Modern":
+            approvalSoundName = "Glass"
+            completionSoundName = "Hero"
+            errorSoundName = "Basso"
+            workingSoundName = "Purr"
+        case "Retro Synth":
+            approvalSoundName = "Tink"
+            completionSoundName = "Pop"
+            errorSoundName = "Morse"
+            workingSoundName = "Frog"
+        case "Minimalist":
+            approvalSoundName = "Ping"
+            completionSoundName = "Purr"
+            errorSoundName = "Submarine"
+            workingSoundName = "Tink"
+        case "Industrial":
+            approvalSoundName = "Blow"
+            completionSoundName = "Funk"
+            errorSoundName = "Sosumi"
+            workingSoundName = "Bottle"
+        default:
+            break
+        }
     }
     /// Show a live agent-status line in the tmux status bar via
     /// `#(bantay-status)`. Opt-in; installs on the next launch when enabled.
@@ -95,7 +185,7 @@ final class NotchHUDConfig {
     var showIslandWhenIdle = true {
         didSet { defaults.set(showIslandWhenIdle, forKey: "showIslandWhenIdle") }
     }
-    var islandDockSide: IslandMetrics.IslandDockSide = .right {
+    var islandDockSide: IslandMetrics.IslandDockSide = .center {
         didSet { defaults.set(islandDockSide.rawValue, forKey: "islandDockSide") }
     }
     var idleStyle: IslandMetrics.IdleStyle = .names {
@@ -272,7 +362,10 @@ final class NotchHUDConfig {
 
     private let defaults = UserDefaults.standard
 
+    private var isInitializing = false
+
     private init() {
+        isInitializing = true
         if let v = defaults.object(forKey: "enableAgentAlerts") as? Bool {
             enableAgentAlerts = v
         }
@@ -309,6 +402,35 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "tmuxStatusEnabled") as? Bool {
             tmuxStatusEnabled = v
         }
+        if let v = defaults.object(forKey: "dailyBudgetUSD") as? NSNumber {
+            dailyBudgetUSD = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "enableSpendGlow") as? Bool {
+            enableSpendGlow = v
+        }
+        if let v = defaults.object(forKey: "showTokenRate") as? Bool {
+            showTokenRate = v
+        }
+        if let v = defaults.object(forKey: "globalHotkeyEnabled") as? Bool {
+            globalHotkeyEnabled = v
+        }
+        // Load per-sound overrides BEFORE applying the theme so a persisted
+        // custom sound isn't wiped by the preset's didSet on first launch.
+        if let v = defaults.string(forKey: "approvalSoundName") {
+            approvalSoundName = v
+        }
+        if let v = defaults.string(forKey: "completionSoundName") {
+            completionSoundName = v
+        }
+        if let v = defaults.string(forKey: "errorSoundName") {
+            errorSoundName = v
+        }
+        if let v = defaults.string(forKey: "workingSoundName") {
+            workingSoundName = v
+        }
+        if let v = defaults.string(forKey: "soundThemePreset") {
+            soundThemePreset = v
+        }
         if let v = defaults.object(forKey: "attentionFilterEnabled") as? Bool {
             attentionFilterEnabled = v
         }
@@ -337,6 +459,9 @@ final class NotchHUDConfig {
             let side = IslandMetrics.IslandDockSide(rawValue: v)
         {
             islandDockSide = side
+        } else {
+            islandDockSide = .center
+            defaults.set("center", forKey: "islandDockSide")
         }
         if let v = defaults.string(forKey: "idleStyle"),
             let style = IslandMetrics.IdleStyle(rawValue: v)
@@ -440,5 +565,6 @@ final class NotchHUDConfig {
         if let v = defaults.array(forKey: "mutedSources") as? [String] {
             mutedSources = Set(v)
         }
+        isInitializing = false
     }
 }

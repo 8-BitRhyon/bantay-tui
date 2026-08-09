@@ -6,6 +6,7 @@ import SwiftUI
 /// after it has been shown.
 final class PeekPanelModel: ObservableObject {
     @Published var source: String = ""
+    @Published var paneId: String? = nil
     @Published var tailLines: [String] = []
     @Published var diffPreview: String?
     @Published var isLoading = false
@@ -86,6 +87,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     private func reload(agent: AgentSnapshot, adapter: HerdrSocketAdapter) {
         fetchTask?.cancel()
         model.source = agent.source
+        model.paneId = agent.paneId
         model.tailLines = []
         model.diffPreview = nil
         model.isLoading = true
@@ -182,6 +184,7 @@ private struct PeekPanelView: View {
             .frame(height: 32)
             Divider().overlay(Color.white.opacity(0.15))
             tailSection
+            choiceSection
             if let diff = model.diffPreview {
                 Divider().overlay(Color.white.opacity(0.15))
                 VStack(alignment: .leading, spacing: 4) {
@@ -251,5 +254,56 @@ private struct PeekPanelView: View {
                 .padding(10)
             }
         }
+    }
+
+    private var choiceSection: some View {
+        let choices = ChoiceExtractor.extractChoices(fromLines: model.tailLines)
+        guard !choices.isEmpty, let paneId = model.paneId else { return AnyView(EmptyView()) }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Image(systemName: "questionmark.circle.fill")
+                        .foregroundColor(.cyan)
+                    Text("Select Answer:")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(choices) { option in
+                            Button {
+                                AgentEventManager.shared.performAction(paneId: paneId) {
+                                    $0.approveChoice(paneId: paneId, choice: option.id)
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text("\(option.id).")
+                                        .font(
+                                            .system(size: 9.5, weight: .bold, design: .monospaced)
+                                        )
+                                        .foregroundColor(.black)
+                                    Text(option.label)
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .foregroundColor(.black)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.cyan, in: Capsule())
+                            }
+                            .buttonStyle(ScalePressButtonStyle())
+                        }
+                    }
+                }
+            }
+            .padding(8)
+            .background(
+                Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.cyan.opacity(0.3), lineWidth: 1)
+            )
+            .padding(6)
+        )
     }
 }

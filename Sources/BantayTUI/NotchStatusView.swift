@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import UserNotifications
 
+@MainActor
 struct NotchStatusView: View {
     @EnvironmentObject var eventManager: AgentEventManager
     @State private var isExpanded = false
@@ -48,10 +49,6 @@ struct NotchStatusView: View {
     @State private var hotkeyBlinkResetTask: Task<Void, Never>?
     /// Namespace for tab bar underline matchedGeometryEffect (item 11).
     @Namespace private var tabBarNamespace
-    /// Tracks whether a file drag is in progress over the island (item 14).
-    @State private var fileDragActive = false
-    /// Brief "Copied" tooltip feedback when output is copied (item 7).
-    @State private var copiedPaneId: String?
     private let adapter = HerdrSocketAdapter()
 
     /// Docked idle chips sit flush in the notch row; only expanded/center drop
@@ -141,9 +138,10 @@ struct NotchStatusView: View {
     }
 
     /// Idle placement: slide the closed chip beside the notch (left/right) or
-    /// keep it centered underneath it. Active events center the pill.
+    /// keep it centered underneath it. Position anchoring stays 100% stable
+    /// regardless of transient event state (eliminates position jumping).
     private var islandOffsetX: CGFloat {
-        guard !isExpanded, !hasTransientEvent else { return 0 }
+        guard !isExpanded else { return 0 }
         return IslandMetrics.dockOffset(
             side: NotchHUDConfig.shared.islandDockSide,
             notchWidth: AppDelegate.notchWidth,
@@ -624,6 +622,22 @@ struct NotchStatusView: View {
 
     // MARK: - Island chrome
 
+    private var spendStrokeColor: Color {
+        guard NotchHUDConfig.shared.enableSpendGlow else {
+            return .white.opacity(isExpanded ? 0.09 : 0.04)
+        }
+        let cost = eventManager.usage.costUSD
+        let budget = max(NotchHUDConfig.shared.dailyBudgetUSD, 0.5)
+        let ratio = cost / budget
+        if ratio >= 1.0 {
+            return .red
+        } else if ratio >= 0.70 {
+            return .orange
+        } else {
+            return .white.opacity(isExpanded ? 0.09 : 0.04)
+        }
+    }
+
     private var islandBackground: some View {
         Rectangle()
             .fill(.black)
@@ -634,7 +648,7 @@ struct NotchStatusView: View {
                     .strokeBorder(
                         hotkeyBlink
                             ? .white.opacity(0.45)
-                            : .white.opacity(isExpanded ? 0.09 : 0.04),
+                            : spendStrokeColor,
                         lineWidth: hotkeyBlink ? 1.5 : 1
                     )
                     .frame(width: islandWidth, height: islandHeight)
@@ -699,13 +713,22 @@ struct NotchStatusView: View {
             approvalPill(event: event, paneId: paneId)
                 .transition(contentTransition)
         } else if isCenteredClosed {
-            // Centered idle: the pill sits over/behind the physical notch and
-            // the window spans the full width, so agent details leak out to
-            // BOTH sides of the notch (working → left, needs-you → right)
-            // instead of an empty bar. Tap anywhere to expand.
-            centeredSplitStrip
-                .transition(contentTransition)
-                .onTapGesture { expandTo(true) }
+            if eventManager.agents.isEmpty && eventManager.currentEvent == nil {
+                // True empty idle: nothing to show, but the pill must stay
+                // tappable to expand.
+                Color.clear
+                    .frame(width: islandWidth, height: islandHeight)
+                    .contentShape(Rectangle())
+                    .onTapGesture { expandTo(true) }
+            } else {
+                // Center-docked idle with agents/events: leak details to BOTH
+                // sides of the physical notch (working → left, needs-you +
+                // failures → right). Hidden-behind-the-notch was a regression
+                // that made the app look dead at idle.
+                centeredSplitStrip
+                    .transition(contentTransition)
+                    .onTapGesture { expandTo(true) }
+            }
         } else if let event = eventManager.currentEvent {
             closedPill(
                 color: event.kind.color,
@@ -741,8 +764,9 @@ struct NotchStatusView: View {
 
     /// Centered idle strip: the pill covers the notch and the window spans
     /// the full width, so agent details leak out to both sides — working
-    /// agents as chips anchored to the left edge, anything that needs you as
-    /// an amber count anchored to the right edge. Tap either side to expand.
+    /// Centered idle/closed live strip: details split to BOTH sides of the physical
+    /// notch cutout. Active/working status renders in the LEFT wing, needs-you/failures
+    /// render in the RIGHT wing. The center camera area contains ZERO text/icons.
     @ViewBuilder
     private var centeredSplitStrip: some View {
         let agents = eventManager.agents
@@ -761,16 +785,39 @@ struct NotchStatusView: View {
         let notchPad: CGFloat = 8
 
         HStack(spacing: 0) {
-            // Left: working agents leak out toward the menu-bar clear space.
+            // Left wing: working agents OR transient ongoing progress (e.g. "Working").
+            // ALWAYS stays to the left of the physical camera notch cutout.
             HStack(spacing: IslandMetrics.idleChipGap) {
-                ForEach(Array(left.enumerated()), id: \.element.id) { _, agent in
+                if !left.isEmpty {
+                    ForEach(Array(left.enumerated()), id: \.element.id) { _, agent in
+                        HStack(spacing: IslandMetrics.idleChipDotGap) {
+                            Circle()
+                                .fill(Color(hex: agent.kind.color))
+                                .frame(
+                                    width: IslandMetrics.idleDotSize,
+                                    height: IslandMetrics.idleDotSize)
+                            Text(agent.source)
+                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, IslandMetrics.idleChipHPad)
+                        .frame(height: 20)
+                        .background(Color.white.opacity(0.10), in: Capsule())
+                    }
+                    if working.count > left.count {
+                        Text("+\(working.count - left.count)")
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                } else if let event = eventManager.currentEvent, event.kind.isOngoing {
                     HStack(spacing: IslandMetrics.idleChipDotGap) {
                         Circle()
-                            .fill(Color(hex: agent.kind.color))
+                            .fill(Color(hex: event.kind.color))
                             .frame(
                                 width: IslandMetrics.idleDotSize,
                                 height: IslandMetrics.idleDotSize)
-                        Text(agent.source)
+                        Text(event.title ?? event.kind.label)
                             .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                             .foregroundColor(.white)
                             .lineLimit(1)
@@ -779,19 +826,13 @@ struct NotchStatusView: View {
                     .frame(height: 20)
                     .background(Color.white.opacity(0.10), in: Capsule())
                 }
-                if working.count > left.count {
-                    Text("+\(working.count - left.count)")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.6))
-                }
             }
             .frame(maxWidth: sideWidth, alignment: .leading)
             .padding(.leading, notchPad)
 
             Spacer(minLength: 0)
 
-            // Right: needs-you count (amber) and failed count (red), leaking
-            // toward the right edge so failures stay visible at idle.
+            // Right wing: needs-you count (amber) and failed count (red).
             HStack(spacing: 5) {
                 if !needsYou.isEmpty {
                     Circle().fill(Color(hex: AgentEventKind.accessRequest.color))
@@ -817,7 +858,7 @@ struct NotchStatusView: View {
             .frame(maxWidth: sideWidth, alignment: .trailing)
             .padding(.trailing, notchPad)
         }
-        .frame(width: windowW, height: IslandMetrics.pillHeight, alignment: .top)
+        .frame(width: windowW, height: islandHeight, alignment: .top)
         .contentShape(Rectangle())
     }
 
@@ -852,14 +893,15 @@ struct NotchStatusView: View {
                     }
                 }
             }
-            .frame(width: islandWidth, height: IslandMetrics.pillHeight)
+            .frame(width: islandWidth, height: islandHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
     /// Idle (closed) live strip: per-agent chips beside the notch, in the style
-    /// the user picked. Tap to expand the full roster.
+    /// the user picked. Tap to expand the full roster. Clipped strictly to
+    /// islandWidth so chips never overflow container boundaries (fixes UI leak).
     @ViewBuilder
     private var agentStrip: some View {
         let agents = eventManager.agents
@@ -904,6 +946,7 @@ struct NotchStatusView: View {
                                 .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                                 .foregroundColor(.white)
                                 .lineLimit(1)
+                                .truncationMode(.tail)
                         }
                         .padding(.horizontal, IslandMetrics.idleChipHPad)
                         .frame(height: 20)
@@ -917,7 +960,8 @@ struct NotchStatusView: View {
                 }
             }
         }
-        .frame(width: islandWidth, height: IslandMetrics.pillHeight)
+        .frame(width: islandWidth, height: islandHeight)
+        .clipped()
         .contentShape(Rectangle())
         .overlay(alignment: .topTrailing) { recentCompletionBadge }
     }
@@ -994,19 +1038,59 @@ struct NotchStatusView: View {
                 eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
             }
         case .choices:
-            ForEach(0..<choices.count, id: \.self) { index in
-                approvalActionButton(
-                    label: Text("\(index + 1)"),
-                    color: .white,
-                    help: choices[index],
-                    disabled: resolving
-                ) {
-                    eventManager.performAction(paneId: paneId) {
-                        $0.approveChoice(paneId: paneId, choice: index + 1)
+            let options: [ChoiceOption] = {
+                if !choices.isEmpty {
+                    return choices.enumerated().map {
+                        ChoiceOption(id: $0.offset + 1, label: $0.element, fullText: $0.element)
                     }
                 }
-            }
-            if choices.isEmpty {
+                if let title = eventManager.currentEvent?.title {
+                    let extracted = ChoiceExtractor.extractChoices(from: title)
+                    if !extracted.isEmpty { return extracted }
+                }
+                return []
+            }()
+
+            if !options.isEmpty {
+                // Numbered buttons for the first four options; a "Choice ▾"
+                // menu only when there are more than four (avoids duplicate
+                // controls for the common 2–4 option case).
+                if options.count > 4 {
+                    Menu {
+                        ForEach(options) { opt in
+                            Button("\(opt.id). \(opt.label)") {
+                                eventManager.performAction(paneId: paneId) {
+                                    $0.approveChoice(paneId: paneId, choice: opt.id)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Choice ▾")
+                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        }
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.cyan, in: Capsule())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .disabled(resolving)
+                    .help("Pick a choice answer for this agent")
+                }
+                ForEach(options.prefix(4)) { opt in
+                    approvalActionButton(
+                        label: Text("\(opt.id)"),
+                        color: .white,
+                        help: opt.label,
+                        disabled: resolving
+                    ) {
+                        eventManager.performAction(paneId: paneId) {
+                            $0.approveChoice(paneId: paneId, choice: opt.id)
+                        }
+                    }
+                }
+            } else {
                 approvalActionButton(
                     systemName: "checkmark.circle.fill", color: .green, help: "Approve",
                     disabled: resolving
@@ -1225,13 +1309,11 @@ struct NotchStatusView: View {
         -> some View
     {
         Button(action: action) {
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
+            VStack(spacing: 2) {
                 Text(title)
-                    .font(.system(size: 9, weight: selected ? .semibold : .medium))
-                    .foregroundColor(selected ? .white : .white.opacity(0.5))
-                    .padding(.horizontal, 2)
-                Spacer(minLength: 0)
+                    .font(.system(size: 10, weight: selected ? .semibold : .medium))
+                    .foregroundColor(selected ? .white : .white.opacity(0.9))
+                    .padding(.horizontal, 8)
                 // Item 11: sliding underline indicator.
                 if selected {
                     Rectangle()
@@ -1244,9 +1326,10 @@ struct NotchStatusView: View {
                         .frame(height: 1.5)
                 }
             }
-            .frame(height: 20)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ScalePressButtonStyle())
         .accessibilityValue(selected ? "selected" : "not selected")
         .animation(.easeInOut(duration: 0.2), value: selected)
     }
@@ -1303,6 +1386,7 @@ struct NotchStatusView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Copy to clipboard")
+                    .accessibilityLabel("Copy text to clipboard")
                     .layoutPriority(1)
                 }
                 .padding(.horizontal, 16)
@@ -1396,6 +1480,51 @@ struct NotchStatusView: View {
         }
     }
 
+    private var spendGaugeBadge: some View {
+        let cost = eventManager.usage.costUSD
+        let budget = max(NotchHUDConfig.shared.dailyBudgetUSD, 0.5)
+        let ratio = cost / budget
+        let formattedCost = String(format: "$%.2f", cost)
+        let formattedBudget = String(format: "$%.2f", budget)
+        let color: Color = ratio >= 1.0 ? .red : (ratio >= 0.7 ? .orange : .cyan)
+        return HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 5, height: 5)
+            Text("\(formattedCost) / \(formattedBudget)")
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundColor(color)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.12), in: Capsule())
+        .help("Daily AI Spend: \(formattedCost) of \(formattedBudget) limit")
+    }
+
+    private var tokenRateBadge: some View {
+        // Use the manager's already-published rate (computed off-main with an
+        // mtime memo). Scanning transcripts synchronously in the body would
+        // beachball the expanded panel on every 1s clock tick.
+        let tpm = Int(eventManager.usageRate.tokensPerMinute ?? 0)
+        let rateText: String = {
+            if tpm >= 1000 {
+                return String(format: "⚡ %.1fk t/m", Double(tpm) / 1000.0)
+            } else {
+                return "⚡ \(tpm) t/m"
+            }
+        }()
+        return HStack(spacing: 3) {
+            Text(rateText)
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundColor(.cyan)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.cyan.opacity(0.12), in: Capsule())
+        .help("Live token processing rate over the last minute")
+        .accessibilityLabel("Token rate \(tpm) tokens per minute")
+    }
+
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
         HStack(spacing: 8) {
             if counts.needsInput > 0 {
@@ -1414,6 +1543,12 @@ struct NotchStatusView: View {
                 Text("Agents")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.white)
+            }
+            if NotchHUDConfig.shared.enableSpendGlow {
+                spendGaugeBadge
+            }
+            if NotchHUDConfig.shared.showTokenRate {
+                tokenRateBadge
             }
             Spacer(minLength: 8)
             if let title = eventManager.currentEvent?.title {
@@ -1825,30 +1960,6 @@ struct NotchStatusView: View {
                     // calm (BoringNotch HoverButton pattern). Always
                     // reachable: hover or tab already shows the row bg.
                     let rowHovered = hoveredRow == agent.id
-                    // Item 7: copy last output button.
-                    if copiedPaneId == paneId {
-                        Text("Copied")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundColor(.green)
-                            .layoutPriority(1)
-                            .transition(.opacity)
-                    } else {
-                        Button(action: { copyAgentOutput(paneId: paneId) }) {
-                            Image(systemName: "doc.on.doc").font(.system(size: 9))
-                                .foregroundColor(.white.opacity(0.6))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Copy last output")
-                        .accessibilityLabel("Copy output of \(agent.source)")
-                        .layoutPriority(1)
-                        .opacity(rowHovered ? 1 : 0)
-                        // Item 3: asymmetric hover timing (quick out, deliberate in).
-                        .animation(
-                            rowHovered
-                                ? .easeOut(duration: 0.12)
-                                : .easeOut(duration: 0.06),
-                            value: rowHovered)
-                    }
                     Button(action: { focusAgentPane(paneId) }) {
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.6))
@@ -1937,34 +2048,6 @@ struct NotchStatusView: View {
             } else {
                 Button("Mute \(agent.source)") {
                     NotchHUDConfig.shared.mutedSources.insert(agent.source)
-                }
-            }
-        }
-    }
-
-    /// Fetch the last 20 lines of cleaned output for `paneId` and copy to clipboard.
-    /// Briefly shows "Copied" feedback (item 7).
-    private func copyAgentOutput(paneId: String) {
-        Task.detached { [adapter] in
-            let tail = await adapter.captureTail(paneId: paneId, lines: 20)
-            let cleaned = LogFormatter.cleanedTail(tail, maxLines: 20, maxLineLength: 120)
-                .joined(separator: "\n")
-            await MainActor.run {
-                // Don't wipe the clipboard with an empty string when the pane
-                // has no output (socket/CLI failure or genuinely empty).
-                guard !cleaned.isEmpty else { return }
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.setString(cleaned, forType: .string)
-                withAnimation(.easeIn(duration: 0.15)) {
-                    self.copiedPaneId = paneId
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        if self.copiedPaneId == paneId {
-                            self.copiedPaneId = nil
-                        }
-                    }
                 }
             }
         }
@@ -2233,7 +2316,8 @@ struct NotchStatusView: View {
         // Quiet hours silence sounds only — the pill and queue stay visible,
         // so an approval can never be missed silently.
         guard !config.isInQuietHours() else { return }
-        guard let sound = NSSound(named: event.kind.soundName) else { return }
+        let soundName = config.soundName(for: event.kind)
+        guard let sound = NSSound(named: soundName) else { return }
         sound.volume = config.soundVolume
         sound.play()
     }

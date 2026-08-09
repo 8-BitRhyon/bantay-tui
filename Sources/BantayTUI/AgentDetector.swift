@@ -20,16 +20,39 @@ enum AgentDetector {
         let homePath = home.isEmpty ? NSHomeDirectory() : home
         switch name {
         case "claude", "claude-code":
-            // ~/.claude/projects/<encoded-path>/<session-id>.jsonl
-            return [homePath + "/.claude/projects"]
+            return [
+                homePath + "/.claude/projects",
+                homePath + "/.claude/transcripts",
+                homePath + "/.claude/history",
+            ]
         case "codex":
-            // ~/.codex/sessions/<session-id>/rollout.jsonl
-            return [homePath + "/.codex/sessions"]
+            return [
+                homePath + "/.codex/sessions",
+                homePath + "/.codex/transcripts",
+            ]
         case "gemini", "gemini-cli":
-            // ~/.gemini/sessions/<session-id>.jsonl
-            return [homePath + "/.gemini/sessions"]
+            return [
+                homePath + "/.gemini/sessions",
+                homePath + "/.gemini/antigravity-ide/brain",
+            ]
         case "cursor", "cursor-agent":
             return [homePath + "/.cursor-agent"]
+        case "kilo", "kilocode":
+            return [
+                homePath + "/.local/share/kilo/log",
+                homePath + "/.local/state/kilo",
+                homePath + "/.config/kilo",
+            ]
+        case "freebuff":
+            return [
+                homePath + "/.config/manicode/freebuff",
+                homePath + "/.config/manicode",
+            ]
+        case "herdr":
+            return [
+                homePath + "/.config/herdr",
+                homePath + "/.local/state/herdr",
+            ]
         default:
             return []
         }
@@ -47,6 +70,12 @@ enum AgentDetector {
             return "gemini"
         case "cursor", "cursor-agent", "cursor-cli":
             return "cursor"
+        case "kilo", "kilocode", "kilo-cli":
+            return "kilo"
+        case "freebuff", "freebuff-cli":
+            return "freebuff"
+        case "herdr", "herdr-cli", "herdr-server":
+            return "herdr"
         case "opencode", "opencode-cli":
             return "opencode"
         case "grok", "grok-cli":
@@ -68,6 +97,63 @@ enum AgentDetector {
         }
     }
 
+    /// Fallback classification by inspecting command line arguments when the
+    /// process name is generic (node, python, npx, bash). Word-boundary
+    /// matching on known agent tokens, and never matches helper/browser
+    /// processes (Cursor Helper (GPU), Renderer, Extension Host) so those
+    /// don't become phantom agents.
+    static func canonicalNameFromCommand(_ command: String) -> String? {
+        let lower = command.lowercased()
+        // Skip obvious helper/browser subprocesses first.
+        if lower.contains("helper")
+            || lower.contains("renderer")
+            || lower.contains("gpu")
+            || lower.contains("extension host")
+            || lower.contains(".app/contents")
+        {
+            return nil
+        }
+        let tokens: [(String, String)] = [
+            ("kilo", "kilo"),
+            ("freebuff", "freebuff"),
+            ("herdr", "herdr"),
+            ("claude", "claude"),
+            ("codex", "codex"),
+            ("gemini", "gemini"),
+            ("cursor", "cursor"),
+            ("opencode", "opencode"),
+            ("aider", "aider"),
+        ]
+        // Lookalike suffixes that are NOT the agent CLI (e.g. claude-searchd,
+        // kilo-daemon, herdr-fs-watch) must not match.
+        let skipSuffixes = ["search", "daemon", "fs-watch", "fs_watch", "watch", "ctl", "agent-"]
+        for (needle, name) in tokens {
+            // Word boundary both sides so "kilobytes" / "claude-searchd" /
+            // "cursor" inside a path don't match unless it's the agent token.
+            let pattern = "(?:^|[^a-z0-9])\(needle)(?:[^a-z0-9]|$)"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+                regex.firstMatch(
+                    in: lower, options: [],
+                    range: NSRange(location: 0, length: lower.utf16.count)) != nil
+            {
+                // Exclude when immediately followed by a known lookalike suffix.
+                if let match = regex.firstMatch(
+                    in: lower, options: [],
+                    range: NSRange(location: 0, length: lower.utf16.count)),
+                    let range = Range(match.range, in: lower),
+                    range.upperBound < lower.endIndex
+                {
+                    let remainder = String(lower[range.upperBound...]).lowercased()
+                    if skipSuffixes.contains(where: { remainder.hasPrefix($0) }) {
+                        continue
+                    }
+                }
+                return name
+            }
+        }
+        return nil
+    }
+
     /// Whether the process's environment marks it as herdr-managed.
     static func isHerdrManaged(environmentLines: [String]) -> Bool {
         environmentLines.contains { $0.hasPrefix("HERDR_ENV=") || $0.hasPrefix("HERDR_PANE_ID=") }
@@ -87,11 +173,14 @@ enum AgentDetector {
         }
         var best: (url: URL, date: Date)?
         for case let url as URL in enumerator {
+            let ext = url.pathExtension.lowercased()
+            let name = url.lastPathComponent.lowercased()
             guard
                 let values = try? url.resourceValues(
                     forKeys: [.contentModificationDateKey, .isRegularFileKey]),
                 values.isRegularFile == true,
-                url.pathExtension == "jsonl" || url.lastPathComponent == "rollout.jsonl"
+                ext == "jsonl" || ext == "log" || ext == "json" || ext == "txt"
+                    || name.contains("log")
             else {
                 continue
             }
@@ -132,7 +221,10 @@ enum StandaloneAgentScanner {
     /// processes that are not known agent CLIs.
     static func detect(samples: [ProcessSample], home: String) -> [DetectedAgent] {
         samples.compactMap { sample in
-            guard let name = AgentDetector.canonicalName(forProcess: sample.name) else {
+            guard
+                let name = AgentDetector.canonicalName(forProcess: sample.name)
+                    ?? AgentDetector.canonicalNameFromCommand(sample.command)
+            else {
                 return nil
             }
             guard !AgentDetector.isHerdrManaged(environmentLines: sample.environmentLines) else {
