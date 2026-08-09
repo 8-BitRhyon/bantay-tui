@@ -187,6 +187,9 @@ final class AgentEventManager: ObservableObject {
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
     /// expensive enumeration + read on each poll.
     private var transcriptMtimes: [String: Date] = [:]
+    /// Last kilo cumulative snapshot + poll interval, for tpm poll-and-diff.
+    private var lastKiloSnapshot: UsageSnapshot?
+    private var kiloPollInterval: TimeInterval = 2.0
     /// When each pane's current working burst started (for elapsed timers).
     /// Set when a pane transitions into progress/started; cleared when it
     /// leaves working state.
@@ -724,34 +727,65 @@ extension AgentEventManager {
         // nobody consumed. Phase C (spend history) re-enables it when there's
         // a consumer.
         if NotchHUDConfig.shared.usageTrackingEnabled {
-            // Track ALL transcript roots (flatMap) so the mtime memo matches
-            // the scan — using only the first path per agent left the newly
-            // broadened dirs (transcripts/history/brain) permanently stale.
-            let usageRoots: Set<String> = Set(
-                agents.flatMap {
-                    AgentDetector.transcriptSearchPaths(home: NSHomeDirectory(), name: $0.agent)
-                })
-            let changedRoots = usageRoots.filter { root in
-                guard let mtime = UsageTracker.transcriptMtime(root: root) else { return true }
-                return transcriptMtimes[root] != mtime
-            }
-            for root in changedRoots {
-                transcriptMtimes[root] = UsageTracker.transcriptMtime(root: root)
-            }
-            let currentUsage = self.usage
-            let currentRate = self.usageRate
-            let usageAndRate = await Task.detached(priority: .utility) {
-                if changedRoots.isEmpty && currentUsage.totalTokens > 0 {
-                    return (currentUsage, currentRate)
+            let hasKilo = agents.contains { $0.agent == "kilo" }
+            let now = Date()
+            if hasKilo, KiloUsageAdapter.detect() {
+                // Kilo's ledger is SQLite — the authoritative source. Quota =
+                // cost over the daily budget; tpm = poll-and-diff cumulative
+                // totals over the poll interval (off-main, WAL-safe read).
+                let pollInterval = NotchHUDConfig.shared.captureInterval
+                let currentUsage = self.usage
+                let currentRate = self.usageRate
+                let lastKilo = self.lastKiloSnapshot
+                let result = await Task.detached(priority: .utility) {
+                    let day = KiloUsageAdapter.snapshot(since: 24 * 3600, now: now)
+                    let window = KiloUsageAdapter.snapshot(since: 60, now: now)
+                    let usage = day ?? UsageSnapshot.zero
+                    let rate: UsageRate =
+                        if let before = lastKilo, let after = window {
+                            UsageRate(
+                                tokensPerMinute: KiloUsageAdapter.rateFromDeltas(
+                                    before: before, after: after, window: pollInterval))
+                        } else if let window {
+                            UsageRate(tokensPerMinute: Double(window.totalTokens))
+                        } else {
+                            currentRate
+                        }
+                    return (usage, rate)
+                }.value
+                self.usage = result.0
+                self.usageRate = result.1
+                self.lastKiloSnapshot = KiloUsageAdapter.snapshot(since: 60, now: now)
+                _ = currentUsage
+            } else {
+                // Non-kilo agents: fall back to transcript parsing (codex/
+                // claude/opencode) with the mtime memo.
+                let usageRoots: Set<String> = Set(
+                    agents.flatMap {
+                        AgentDetector.transcriptSearchPaths(home: NSHomeDirectory(), name: $0.agent)
+                    })
+                let changedRoots = usageRoots.filter { root in
+                    guard let mtime = UsageTracker.transcriptMtime(root: root) else { return true }
+                    return transcriptMtimes[root] != mtime
                 }
-                return UsageTracker.latestUsageAndRate(
-                    home: NSHomeDirectory(),
-                    names: agents.map { $0.agent },
-                    now: Date(),
-                    window: 60)
-            }.value
-            self.usage = usageAndRate.0
-            self.usageRate = usageAndRate.1
+                for root in changedRoots {
+                    transcriptMtimes[root] = UsageTracker.transcriptMtime(root: root)
+                }
+                let currentUsage = self.usage
+                let currentRate = self.usageRate
+                let usageAndRate = await Task.detached(priority: .utility) {
+                    if changedRoots.isEmpty && currentUsage.totalTokens > 0 {
+                        return (currentUsage, currentRate)
+                    }
+                    return UsageTracker.latestUsageAndRate(
+                        home: NSHomeDirectory(),
+                        names: agents.map { $0.agent },
+                        now: Date(),
+                        window: 60)
+                }.value
+                self.usage = usageAndRate.0
+                self.usageRate = usageAndRate.1
+            }
         }
         let liveStatuses: [String: String] = Dictionary(
             agents.compactMap {

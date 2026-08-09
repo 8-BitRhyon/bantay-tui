@@ -64,6 +64,8 @@ if [[ "$PACKAGE" == "yes" ]]; then
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSRemindersUsageDescription</key>
+    <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
 </dict>
 </plist>
 PLIST
@@ -193,6 +195,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSRemindersUsageDescription</key>
+    <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
 </dict>
 </plist>
 PLIST

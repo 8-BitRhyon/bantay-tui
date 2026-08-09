@@ -4,9 +4,12 @@ import SwiftUI
 @MainActor
 public struct TaskWidgetView: View {
     @ObservedObject var taskStore = TaskStore.shared
+    @StateObject private var reminders = RemindersProvider.shared
     @State private var searchText = ""
     @State private var newTaskTitle = ""
     @State private var hoveredTaskID: UUID?
+    @State private var remindersEnabled = false
+    @State private var reminderAddText = ""
 
     public init() {}
 
@@ -49,6 +52,9 @@ public struct TaskWidgetView: View {
             // Scrollable task list categorized into Barrie sections
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 10) {
+                    // Apple Reminders sync section (top, compact).
+                    remindersSection
+
                     let overdue = taskStore.tasks(in: .overdue, searchQuery: newTaskTitle)
                     let today = taskStore.tasks(in: .today, searchQuery: newTaskTitle)
                     let later = taskStore.tasks(in: .later, searchQuery: newTaskTitle)
@@ -96,6 +102,145 @@ public struct TaskWidgetView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
+    }
+
+    /// Apple Reminders section: one-tap sync, quick add, and live items with
+    /// complete/remove. Collapsed to a single row when disabled.
+    @ViewBuilder
+    private var remindersSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "bell.badge")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.blue.opacity(0.9))
+                Text("APPLE REMINDERS")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.blue.opacity(0.9))
+                Spacer()
+                if reminders.isLoading {
+                    ProgressView().controlSize(.mini)
+                }
+                Button {
+                    remindersEnabled.toggle()
+                    if remindersEnabled {
+                        Task { await reminders.refresh() }
+                    }
+                } label: {
+                    Image(systemName: remindersEnabled ? "link.circle.fill" : "link.circle")
+                        .font(.system(size: 13))
+                        .foregroundColor(
+                            remindersEnabled ? .blue : .white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+                .help("Sync Apple Reminders")
+            }
+
+            if remindersEnabled {
+                if !reminders.authorized {
+                    HStack(spacing: 8) {
+                        Text("Allow Reminders access in System Settings to sync.")
+                            .font(.system(size: 9.5))
+                            .foregroundColor(.white.opacity(0.6))
+                        Button("Allow") {
+                            Task {
+                                _ = await reminders.requestAccess()
+                                await reminders.refresh()
+                            }
+                        }
+                        .font(.system(size: 9, weight: .semibold))
+                        .buttonStyle(.borderless)
+                    }
+                } else {
+                    // Quick add into Reminders.
+                    HStack(spacing: 6) {
+                        TextField("Add reminder…", text: $reminderAddText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 10))
+                            .onSubmit {
+                                let title = reminderAddText.trimmingCharacters(
+                                    in: .whitespacesAndNewlines)
+                                guard !title.isEmpty else { return }
+                                Task {
+                                    await reminders.add(title: title)
+                                    reminderAddText = ""
+                                }
+                            }
+                        Button {
+                            let title = reminderAddText.trimmingCharacters(
+                                in: .whitespacesAndNewlines)
+                            guard !title.isEmpty else { return }
+                            Task {
+                                await reminders.add(title: title)
+                                reminderAddText = ""
+                            }
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundColor(.blue)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(6)
+                    .background(
+                        Color.white.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                    if reminders.reminders.isEmpty {
+                        Text("No upcoming reminders.")
+                            .font(.system(size: 9.5))
+                            .foregroundColor(.white.opacity(0.4))
+                            .padding(.vertical, 2)
+                    } else {
+                        ForEach(reminders.reminders.prefix(8), id: \.calendarItemIdentifier) { r in
+                            HStack(spacing: 7) {
+                                Button {
+                                    Task { await reminders.complete(r) }
+                                } label: {
+                                    Image(systemName: "circle")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.white.opacity(0.5))
+                                }
+                                .buttonStyle(.plain)
+                                .help("Complete in Reminders")
+
+                                Text(r.title ?? "(untitled)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+
+                                Spacer(minLength: 4)
+
+                                if let due = r.dueDateComponents?.date {
+                                    Text(IslandMetrics.elapsedLabel(since: due, now: Date()))
+                                        .font(.system(size: 8.5, design: .monospaced))
+                                        .foregroundColor(
+                                            due < Date()
+                                                ? Color(hex: "FF453A")
+                                                : .white.opacity(0.4))
+                                }
+
+                                Button {
+                                    Task { await reminders.remove(r) }
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.white.opacity(0.4))
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove reminder")
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(
+                                Color.white.opacity(0.05),
+                                in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.bottom, 2)
     }
 
     private func taskSection(title: String, tasks: [BantayTask], color: Color) -> some View {

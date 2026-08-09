@@ -1,17 +1,27 @@
 import Foundation
 
-/// Token/cost usage parsed from agent transcripts (Claude Code, Codex).
+/// Token/cost usage parsed from agent transcripts (Claude Code, Codex) or
+/// aggregated from kilo's SQLite ledger. The token buckets follow the
+/// Anthropic-style split (input/output/reasoning/cache read/cache write).
 struct UsageSnapshot: Equatable, Sendable {
     var inputTokens: Int = 0
     var outputTokens: Int = 0
+    var reasoningTokens: Int = 0
     var cacheReadTokens: Int = 0
-    var cacheCreationTokens: Int = 0
+    var cacheWriteTokens: Int = 0
     var costUSD: Double = 0
+
+    /// Legacy alias for the cache-write bucket (transcript parsers use
+    /// "cache creation" terminology).
+    var cacheCreationTokens: Int {
+        get { cacheWriteTokens }
+        set { cacheWriteTokens = newValue }
+    }
 
     static let zero = UsageSnapshot()
 
     var totalTokens: Int {
-        inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
+        inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens
     }
 }
 

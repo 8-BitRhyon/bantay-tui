@@ -393,6 +393,23 @@ struct LogicCheckMain {
         let quotaMascotState = MascotEvaluator.evaluate(agents: [], quotaLow: true)
         check(quotaMascotState == .quotaLow, "Quota warning evaluates to quotaLow mascot state")
 
+        // MARK: - KiloUsageAdapter (real kilo.db ledger)
+        if KiloUsageAdapter.detect() {
+            let day = KiloUsageAdapter.snapshot(since: 24 * 3600)
+            check(day != nil, "Kilo adapter reads a daily snapshot")
+            check((day?.costUSD ?? 0) >= 0, "Kilo daily cost is non-negative")
+            check(day?.totalTokens ?? 0 >= 0, "Kilo daily tokens non-negative")
+            let window = KiloUsageAdapter.snapshot(since: 60)
+            if let window {
+                check(
+                    KiloUsageAdapter.rateFromDeltas(
+                        before: window, after: window, window: 2) == 0,
+                    "Kilo rate from identical snapshots is 0")
+            }
+        } else {
+            check(true, "Kilo adapter skipped (no kilo.db on this machine)")
+        }
+
         // MARK: - IslandMetrics geometry
 
         func assertCGSizeEqual(_ a: CGSize, _ b: CGSize, _ name: String) {
