@@ -321,6 +321,47 @@ struct LogicCheckMain {
         check(parsedTask.assignedAgent == "claude", "TaskStore agent parsing @claude")
         check(parsedTask.priority == .high, "TaskStore priority parsing !!")
 
+        // Barrie-style natural language: dates + times, deterministic and
+        // locale-agnostic (scales to any user — a pure function).
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
+        let eod = cal.date(bySettingHour: 23, minute: 59, second: 0, of: today)!
+
+        let t1 = NaturalLanguageParser.parse("Take out trash before end of day @home")
+        check(t1.cleanTitle == "Take out trash", "NLP strips 'before end of day' + keeps title")
+        check(t1.tags.contains("home"), "NLP parses @home tag")
+        check(t1.dueDate != nil, "NLP sets a due date for EOD")
+        if let d1 = t1.dueDate {
+            check(abs(d1.timeIntervalSince(eod)) < 5, "NLP EOD resolves to today 23:59")
+        }
+
+        let t2 = NaturalLanguageParser.parse("Call dentist tomorrow at 9am")
+        check(t2.dueDate != nil, "NLP parses tomorrow+time")
+        if let d2 = t2.dueDate {
+            check(cal.isDate(d2, inSameDayAs: tomorrow), "NLP tomorrow is next calendar day")
+            check(cal.component(.hour, from: d2) == 9, "NLP 9am hour parsed")
+        }
+
+        let t3 = NaturalLanguageParser.parse("Ship feature in 3 days !")
+        check(t3.priority == .medium, "NLP '!' is medium priority")
+        check(t3.dueDate != nil, "NLP 'in 3 days' sets a date")
+        if let d3 = t3.dueDate {
+            let expected = cal.date(byAdding: .day, value: 3, to: today)!
+            check(cal.isDate(d3, inSameDayAs: expected), "NLP 'in 3 days' offset")
+        }
+
+        let t4 = NaturalLanguageParser.parse("Groceries on tuesday @errands")
+        check(t4.tags.contains("errands"), "NLP @errands tag")
+        check(t4.dueDate != nil, "NLP weekday name sets a date")
+
+        let t5 = NaturalLanguageParser.parse("Pay rent at 5pm !!")
+        check(t5.priority == .high, "NLP trailing !! is high")
+        check(t5.dueDate != nil, "NLP 'at 5pm' sets time")
+        if let d5 = t5.dueDate {
+            check(cal.component(.hour, from: d5) == 17, "NLP 5pm → 17:00")
+        }
+
         var sampleTask = BantayTask(title: "Test Task", dueDate: Date())
         check(sampleTask.category() == .today, "BantayTask category is TODAY")
         sampleTask.isCompleted = true

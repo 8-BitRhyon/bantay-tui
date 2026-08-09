@@ -141,45 +141,28 @@ public final class TaskStore: ObservableObject {
         public var priority: TaskPriority
         public var assignedAgent: String?
         public var dueDate: Date?
-    }
 
-    public static func parseNaturalLanguage(_ input: String) -> ParsedTask {
-        let tokens = input.components(separatedBy: .whitespaces)
-        var cleanTokens: [String] = []
-        var tags: [String] = []
-        var priority: TaskPriority = .medium
-        var assignedAgent: String? = nil
-
-        let knownAgents = [
-            "claude", "codex", "herdr", "kilo", "freebuff", "opencode", "cursor", "aider",
-            "windsurf",
-        ]
-
-        for token in tokens {
-            if token.hasPrefix("!!") {
-                priority = .high
-            } else if token == "!" {
-                priority = .medium
-            } else if token.hasPrefix("@") && token.count > 1 {
-                let tag = String(token.dropFirst()).lowercased()
-                if knownAgents.contains(tag) {
-                    assignedAgent = tag
-                } else {
-                    tags.append(tag)
-                }
-            } else {
-                cleanTokens.append(token)
-            }
+        public init(
+            cleanTitle: String, tags: [String] = [], priority: TaskPriority = .medium,
+            assignedAgent: String? = nil, dueDate: Date? = nil
+        ) {
+            self.cleanTitle = cleanTitle
+            self.tags = tags
+            self.priority = priority
+            self.assignedAgent = assignedAgent
+            self.dueDate = dueDate
         }
 
-        let cleanTitle = cleanTokens.joined(separator: " ").trimmingCharacters(
-            in: .whitespacesAndNewlines)
-        return ParsedTask(
-            cleanTitle: cleanTitle.isEmpty ? input : cleanTitle,
-            tags: tags,
-            priority: priority,
-            assignedAgent: assignedAgent,
-            dueDate: nil
-        )
+        init(from parsed: NaturalLanguageParser.Parsed) {
+            self.cleanTitle = parsed.cleanTitle
+            self.tags = parsed.tags
+            self.priority = parsed.priority
+            self.assignedAgent = parsed.assignedAgent
+            self.dueDate = parsed.dueDate
+        }
+    }
+
+    public static func parseNaturalLanguage(_ input: String, now: Date = Date()) -> ParsedTask {
+        ParsedTask(from: NaturalLanguageParser.parse(input, now: now))
     }
 }

@@ -49,6 +49,8 @@ public struct TaskWidgetView: View {
             .padding(.top, 8)
             .padding(.bottom, 6)
 
+            parsePreview
+
             // Scrollable task list categorized into Barrie sections
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -367,8 +369,55 @@ public struct TaskWidgetView: View {
     private func createNewTask() {
         let title = newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        taskStore.addTask(title)
+        taskStore.addTask(title)  // addTask parses NL internally (date/priority/tags)
         newTaskTitle = ""
+    }
+
+    /// Barrie-style live preview: as the user types, show what the natural
+    /// language parser understood (due date, priority, agent) before saving.
+    @ViewBuilder
+    private var parsePreview: some View {
+        let parsed = TaskStore.parseNaturalLanguage(newTaskTitle)
+        let hasSignal =
+            parsed.dueDate != nil || parsed.priority != .medium
+            || parsed.assignedAgent != nil || !parsed.tags.isEmpty
+        if !newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hasSignal {
+            HStack(spacing: 6) {
+                if let due = parsed.dueDate {
+                    Label(
+                        IslandMetrics.elapsedLabel(since: due, now: Date()),
+                        systemImage: "calendar"
+                    )
+                    .foregroundColor(.orange)
+                }
+                if parsed.priority == .high {
+                    Label("high", systemImage: "exclamationmark")
+                        .foregroundColor(.red)
+                }
+                if let agent = parsed.assignedAgent {
+                    Label(agent, systemImage: "terminal")
+                        .foregroundColor(.cyan)
+                }
+                ForEach(parsed.tags, id: \.self) { tag in
+                    Label(tag, systemImage: "tag")
+                        .foregroundColor(.blue)
+                }
+                Spacer()
+                Text(parsed.cleanTitle)
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .font(.system(size: 9, weight: .medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                Color.white.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .padding(.horizontal, 12)
+            .padding(.bottom, 4)
+        }
     }
 
     private func runWithAgent(_ task: BantayTask, agent: String) {
