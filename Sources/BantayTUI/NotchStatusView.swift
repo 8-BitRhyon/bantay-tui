@@ -20,6 +20,7 @@ struct NotchStatusView: View {
     @State private var now = Date()
     @State private var showShelf = false
     @State private var showAttention = false
+    @State private var showTasks = false
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
     /// icon stays reactive; the config is the single behavioral source of
     /// truth (all logic reads it, and it is the only writer of the defaults).
@@ -158,33 +159,50 @@ struct NotchStatusView: View {
 
     private var islandHeight: CGFloat {
         if isExpanded {
-            return IslandMetrics.expandedSize(
-                topInset: chipTopOffset, agentCount: mergedRoster.count,
-                queueCount: 0,
-                shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
-                overflowCount: 0,
-                groupCount: rosterGroupCount,
-                footerVisible: false
-            ).height
+            if showTasks {
+                return IslandMetrics.expandedSize(
+                    topInset: chipTopOffset, agentCount: 0, queueCount: 0,
+                    shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
+                    overflowCount: 0, groupCount: 0, footerVisible: false,
+                    taskCount: TaskStore.shared.tasks.count, sectionCount: 3,
+                    isTasksTab: true
+                ).height
+            } else {
+                return IslandMetrics.expandedSize(
+                    topInset: chipTopOffset, agentCount: mergedRoster.count,
+                    queueCount: 0,
+                    shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
+                    overflowCount: 0,
+                    groupCount: rosterGroupCount,
+                    footerVisible: false
+                ).height
+            }
         }
         return IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
     }
 
     private var contentHeight: CGFloat {
-        IslandMetrics.contentHeight(
-            isExpanded: isExpanded, topInset: chipTopOffset,
-            agentCount: mergedRoster.count, queueCount: 0,
-            shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
-            overflowCount: 0,
-            groupCount: rosterGroupCount,
-            footerVisible: false)
+        if showTasks {
+            return IslandMetrics.contentHeightForTasks(
+                isExpanded: isExpanded,
+                topInset: chipTopOffset,
+                taskCount: TaskStore.shared.tasks.count,
+                sectionCount: 3,
+                shelfTabVisible: NotchHUDConfig.shared.showShelfTab
+            )
+        } else {
+            return IslandMetrics.contentHeight(
+                isExpanded: isExpanded, topInset: chipTopOffset,
+                agentCount: mergedRoster.count, queueCount: 0,
+                shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
+                overflowCount: 0,
+                groupCount: rosterGroupCount,
+                footerVisible: false)
+        }
     }
 
-    /// Content frame width: the split centered strip spans the whole window
-    /// so details leak on both sides of the notch; everything else is the
-    /// island width.
     private var contentFrameWidth: CGFloat {
-        isCenteredIdle ? IslandMetrics.windowSize().width : islandWidth
+        islandWidth
     }
 
     /// Agents blocked on an approval — pinned at the top of the expanded
@@ -232,34 +250,25 @@ struct NotchStatusView: View {
     /// Centered idle is a pure fade: the split strip is full-window-width and
     /// scale would make it appear to sweep laterally while the pill morphs.
     private var contentTransition: AnyTransition {
-        if isCenteredIdle {
-            return .opacity
-        }
         guard IslandMetrics.contentTransition(reduceMotion: reduceMotion) == .synced else {
             return .opacity
         }
         return .asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)),
-            removal: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
+            insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)),
+            removal: .opacity.animation(.easeOut(duration: 0.05)))
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             islandBackground
             content
-                .animation(morphAnimation, value: isExpanded)
                 .frame(width: contentFrameWidth, height: contentHeight, alignment: .top)
                 .offset(y: chipTopOffset)
         }
         .overlay(edgeGlow)
         .scaleEffect(activeHoverScale, anchor: .top)
-        // Centered idle spans the full window width so the split strip can
-        // leak chips past the notch on both sides; everything else hugs the
-        // pill. Framing the ZStack to the pill width in centered idle would
-        // clip the leak AND collapse the clip boundary while content grows
-        // during the collapse morph — the right-to-left glitch.
         .frame(
-            width: isCenteredIdle ? IslandMetrics.windowSize().width : islandWidth + cornerRad * 2,
+            width: islandWidth + cornerRad * 2,
             height: islandHeight,
             alignment: .top
         )
@@ -275,6 +284,9 @@ struct NotchStatusView: View {
         )
         .offset(x: islandOffsetX)
         .animation(morphAnimation, value: isExpanded)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showTasks)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showShelf)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showAttention)
         .background(Color.clear.allowsHitTesting(false))
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
@@ -858,7 +870,7 @@ struct NotchStatusView: View {
             .frame(maxWidth: sideWidth, alignment: .trailing)
             .padding(.trailing, notchPad)
         }
-        .frame(width: windowW, height: islandHeight, alignment: .top)
+        .frame(width: islandWidth, height: islandHeight, alignment: .top)
         .contentShape(Rectangle())
     }
 
@@ -868,7 +880,15 @@ struct NotchStatusView: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Circle().fill(Color(hex: color)).frame(width: 7, height: 7)
+                if NotchHUDConfig.shared.showNotchMascot {
+                    MascotView(
+                        archetype: NotchHUDConfig.shared.selectedMascotArchetype,
+                        state: currentMascotState,
+                        size: 13
+                    )
+                } else {
+                    Circle().fill(Color(hex: color)).frame(width: 7, height: 7)
+                }
                 Text(label)
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
@@ -1190,7 +1210,9 @@ struct NotchStatusView: View {
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
 
-            if showAttention {
+            if showTasks {
+                TaskWidgetView()
+            } else if showAttention {
                 attentionContent
             } else if showShelf {
                 shelfContent
@@ -1283,9 +1305,17 @@ struct NotchStatusView: View {
     /// indicator, replacing the capsule pills. Feels more native on macOS.
     private var shelfTabBar: some View {
         HStack(spacing: 12) {
-            shelfTabButton(title: "Agents", selected: !showShelf && !showAttention) {
+            shelfTabButton(title: "Agents", selected: !showShelf && !showAttention && !showTasks) {
                 showShelf = false
                 showAttention = false
+                showTasks = false
+            }
+            if NotchHUDConfig.shared.showTasksTab {
+                shelfTabButton(title: "Tasks", selected: showTasks) {
+                    showShelf = false
+                    showAttention = false
+                    showTasks = true
+                }
             }
             if NotchHUDConfig.shared.attentionFilterEnabled {
                 shelfTabButton(
@@ -1293,11 +1323,13 @@ struct NotchStatusView: View {
                 ) {
                     showShelf = false
                     showAttention = true
+                    showTasks = false
                 }
             }
             shelfTabButton(title: "Shelf", selected: showShelf) {
                 showAttention = false
                 showShelf = true
+                showTasks = false
             }
             Spacer(minLength: 8)
         }
@@ -1525,8 +1557,50 @@ struct NotchStatusView: View {
         .accessibilityLabel("Token rate \(tpm) tokens per minute")
     }
 
+    private var quotaAxiBadge: some View {
+        let active = Array(Set(eventManager.agents.map(\.source)))
+        let quotas = QuotaAxiTracker.fallbackQuotas(
+            activeProviders: active,
+            costUSD: eventManager.usage.costUSD,
+            budgetUSD: NotchHUDConfig.shared.dailyBudgetUSD
+        )
+        let minQuota = quotas.min(by: { $0.remainingPercent < $1.remainingPercent })
+        let percentInt = Int(minQuota?.remainingPercent ?? 100)
+        let color: Color = percentInt <= 20 ? .red : (percentInt <= 50 ? .orange : .green)
+
+        return HStack(spacing: 3) {
+            Circle().fill(color).frame(width: 5, height: 5)
+            Text("Quota \(percentInt)%")
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundColor(color)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.12), in: Capsule())
+        .help("Live Provider Quota: \(minQuota?.provider ?? "AI") \(percentInt)% remaining")
+        .accessibilityLabel("Quota remaining \(percentInt) percent")
+    }
+
+    private var currentMascotState: MascotState {
+        MascotEvaluator.evaluate(
+            agents: mergedRoster,
+            quotaLow: false,
+            recentCompletion: eventManager.currentEvent?.kind == .completed
+        )
+    }
+
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
         HStack(spacing: 8) {
+            if NotchHUDConfig.shared.showNotchMascot {
+                MascotView(
+                    archetype: NotchHUDConfig.shared.selectedMascotArchetype,
+                    state: currentMascotState,
+                    size: 16
+                )
+                .help("Mascot status: \(currentMascotState.statusText)")
+                .accessibilityLabel("Mascot status: \(currentMascotState.statusText)")
+            }
             if counts.needsInput > 0 {
                 Text("\(counts.needsInput) need you")
                     .font(.system(size: 11, weight: .semibold))
@@ -1549,6 +1623,9 @@ struct NotchStatusView: View {
             }
             if NotchHUDConfig.shared.showTokenRate {
                 tokenRateBadge
+            }
+            if NotchHUDConfig.shared.enableQuotaAxiGauge {
+                quotaAxiBadge
             }
             Spacer(minLength: 8)
             if let title = eventManager.currentEvent?.title {
@@ -1579,6 +1656,19 @@ struct NotchStatusView: View {
             .help(panelPinned ? "Unpin panel" : "Pin panel open")
             .accessibilityLabel(panelPinned ? "Unpin panel" : "Pin panel open")
             .accessibilityValue(panelPinned ? "pinned" : "unpinned")
+
+            Button {
+                AppDelegate.showSettings()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(ScalePressButtonStyle())
+            .help("Open Settings")
+            .accessibilityLabel("Open Settings")
         }
         .padding(.horizontal, 16)
         .frame(height: IslandMetrics.headerHeight)
@@ -2332,18 +2422,6 @@ struct NotchStatusView: View {
             "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders",
         ]
         return terminals.contains(bundleID)
-    }
-}
-
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let r = Double((int >> 16) & 0xFF) / 255
-        let g = Double((int >> 8) & 0xFF) / 255
-        let b = Double(int & 0xFF) / 255
-        self.init(red: r, green: g, blue: b)
     }
 }
 

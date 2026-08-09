@@ -67,6 +67,22 @@ final class NotchHUDConfig {
     var showTokenRate: Bool = true {
         didSet { defaults.set(showTokenRate, forKey: "showTokenRate") }
     }
+    /// Mascot & Notch Pet Companion toggle. Enabled by default.
+    var showNotchMascot: Bool = true {
+        didSet { defaults.set(showNotchMascot, forKey: "showNotchMascot") }
+    }
+    /// Selected mascot archetype (bantayDog, aiCeo, cyberCat, roboBuddy).
+    var selectedMascotArchetype: MascotArchetype = .bantayDog {
+        didSet { defaults.set(selectedMascotArchetype.rawValue, forKey: "selectedMascotArchetype") }
+    }
+    /// Shows the Barrie-style Tasks tab in the expanded island.
+    var showTasksTab: Bool = true {
+        didSet { defaults.set(showTasksTab, forKey: "showTasksTab") }
+    }
+    /// Enables live quota-axi provider quota gauge in header bar.
+    var enableQuotaAxiGauge: Bool = true {
+        didSet { defaults.set(enableQuotaAxiGauge, forKey: "enableQuotaAxiGauge") }
+    }
     /// Alias for globalHotkeyEnabled for backwards compatibility.
     var enableGlobalHotkey: Bool {
         get { globalHotkeyEnabled }
@@ -410,6 +426,20 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "showTokenRate") as? Bool {
             showTokenRate = v
+        }
+        if let v = defaults.object(forKey: "showNotchMascot") as? Bool {
+            showNotchMascot = v
+        }
+        if let v = defaults.string(forKey: "selectedMascotArchetype"),
+            let archetype = MascotArchetype(rawValue: v)
+        {
+            selectedMascotArchetype = archetype
+        }
+        if let v = defaults.object(forKey: "showTasksTab") as? Bool {
+            showTasksTab = v
+        }
+        if let v = defaults.object(forKey: "enableQuotaAxiGauge") as? Bool {
+            enableQuotaAxiGauge = v
         }
         if let v = defaults.object(forKey: "globalHotkeyEnabled") as? Bool {
             globalHotkeyEnabled = v

@@ -54,6 +54,8 @@ struct SettingsView: View {
     @State private var showUsage = NotchHUDConfig.shared.usageTrackingEnabled
     @State private var dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
+    @State private var showNotchMascot = NotchHUDConfig.shared.showNotchMascot
+    @State private var selectedMascotArchetype = NotchHUDConfig.shared.selectedMascotArchetype
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
     @State private var showShelf = NotchHUDConfig.shared.showShelfTab
@@ -80,6 +82,8 @@ struct SettingsView: View {
     @State private var opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
     @State private var opencodePluginError = ""
     @State private var showTokenRate = NotchHUDConfig.shared.showTokenRate
+    @State private var showTasksTab = NotchHUDConfig.shared.showTasksTab
+    @State private var enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
     @State private var soundThemePreset = NotchHUDConfig.shared.soundThemePreset
     @State private var approvalSoundName = NotchHUDConfig.shared.approvalSoundName
     @State private var completionSoundName = NotchHUDConfig.shared.completionSoundName
@@ -201,7 +205,12 @@ struct SettingsView: View {
         .frame(width: 760, height: 620)
         .onAppear { refreshFromConfig() }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWillOpen)) { _ in
-            refreshFromConfig()
+            // Defer the state refresh: `.settingsWillOpen` is posted while the
+            // window is being ordered front (view update in progress), and
+            // mutating @State synchronously during that update throws an ObjC
+            // exception ("Modifying state during view update") that crashes
+            // the app. Hop to the next runloop turn instead.
+            DispatchQueue.main.async { refreshFromConfig() }
         }
     }
 
@@ -219,7 +228,7 @@ struct SettingsView: View {
         case .general:
             ["Startup", "Quick actions", "Displays"]
         case .appearance:
-            ["Pill behavior", "Expanded panel", "Displays"]
+            ["Pill behavior", "Expanded panel", "Displays", "Mascot & Pet Companion"]
         case .agents:
             ["Muted sources", "Shelf", "Expanded panel"]
         case .notifications:
@@ -595,6 +604,7 @@ struct SettingsView: View {
                         .onChange(of: notifyWhenHidden) { newValue in
                             NotchHUDConfig.shared.notifyWhenHidden = newValue
                             if newValue {
+                                guard ApprovalNotificationController.hasBundleProxy else { return }
                                 UNUserNotificationCenter.current()
                                     .requestAuthorization(options: [.alert, .sound]) {
                                         granted, _ in
@@ -728,6 +738,54 @@ struct SettingsView: View {
                 }
             }
 
+            if selectedCategory == .appearance && matchesSearch("Mascot & Pet Companion") {
+                Section("Mascot & Pet Companion") {
+                    Toggle("Show Mascot on Notch", isOn: $showNotchMascot)
+                        .help(
+                            "Displays a micro-animated desktop companion that reacts in real-time to agent states."
+                        )
+                        .onChange(of: showNotchMascot) { newValue in
+                            NotchHUDConfig.shared.showNotchMascot = newValue
+                        }
+
+                    Picker("Mascot Archetype", selection: $selectedMascotArchetype) {
+                        ForEach(MascotArchetype.allCases) { archetype in
+                            Text(archetype.displayName).tag(archetype)
+                        }
+                    }
+                    .disabled(!showNotchMascot)
+                    .onChange(of: selectedMascotArchetype) { newValue in
+                        NotchHUDConfig.shared.selectedMascotArchetype = newValue
+                    }
+
+                    if showNotchMascot {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(selectedMascotArchetype.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            HStack(spacing: 12) {
+                                ForEach(MascotState.allCases) { state in
+                                    VStack(spacing: 4) {
+                                        MascotView(
+                                            archetype: selectedMascotArchetype, state: state,
+                                            size: 20)
+                                        Text(state.statusText)
+                                            .font(.system(size: 9, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(6)
+                                    .background(
+                                        Color.white.opacity(0.06),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                                }
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+                }
+            }
+
             if selectedCategory == .general && matchesSearch("Startup") {
                 Section("Startup") {
                     Toggle("Launch at login", isOn: $launchAtLogin)
@@ -803,6 +861,18 @@ struct SettingsView: View {
                         )
                         .onChange(of: attentionFilter) { newValue in
                             NotchHUDConfig.shared.attentionFilterEnabled = newValue
+                        }
+                    Toggle("Barrie Tasks tab", isOn: $showTasksTab)
+                        .help(
+                            "Adds a Barrie-style Task Manager tab to the expanded Dynamic Island."
+                        )
+                        .onChange(of: showTasksTab) { newValue in
+                            NotchHUDConfig.shared.showTasksTab = newValue
+                        }
+                    Toggle("Quota-Axi provider gauge", isOn: $enableQuotaAxiGauge)
+                        .help("Displays live Quota-Axi provider percentage in header bar.")
+                        .onChange(of: enableQuotaAxiGauge) { newValue in
+                            NotchHUDConfig.shared.enableQuotaAxiGauge = newValue
                         }
                     Toggle("Group agents by state", isOn: $expandedGroupByState)
                         .help("Need-input first, then working, done, failed, idle.")

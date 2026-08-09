@@ -25,7 +25,7 @@ final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     @MainActor static weak var window: NSWindow?
     /// The live app-delegate instance, for non-main-actor callbacks.
     @MainActor static weak var shared: AppDelegate?
@@ -925,17 +925,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AgentEventManager.shared.startCapture()
     }
 
+    @MainActor private var settingsWindowInstance: NSWindow?
+
     @MainActor
-    @objc private func openSettings() {
+    static func showSettings() {
+        shared?.openSettings()
+    }
+
+    @MainActor
+    @objc func openSettings() {
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        let settingsWindow =
-            (NSApp.windows.first { $0.title == "Bantay-TUI Settings" })
-            ?? makeSettingsWindow()
-        // The window persists across close/reopen, so the view re-reads its
-        // state from config (menu-bar toggles may have changed it since).
+        let window = settingsWindowInstance ?? makeSettingsWindow()
+        settingsWindowInstance = window
         NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
-        settingsWindow.center()
-        settingsWindow.makeKeyAndOrderFront(nil)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     @MainActor
@@ -949,7 +955,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.contentViewController = NSHostingController(rootView: SettingsView())
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 640, height: 480)
+        window.delegate = self
+        window.level = .normal
         return window
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window == settingsWindowInstance {
+            Task { @MainActor in
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
     }
 
     @MainActor

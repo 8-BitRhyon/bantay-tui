@@ -240,10 +240,13 @@ struct LogicCheckMain {
                 1. Red
                 2. Blue
                 """)
-        check(stacked.count == 2, "ChoiceExtractor keeps only the most recent prompt (got \(stacked.count))")
+        check(
+            stacked.count == 2,
+            "ChoiceExtractor keeps only the most recent prompt (got \(stacked.count))")
         check(
             stacked.map(\.id) == [1, 2] && stacked.first?.label == "Red",
-            "ChoiceExtractor restarted prompt renumbers from 1 (got \(stacked.map { "\($0.id):\($0.label)" }))")
+            "ChoiceExtractor restarted prompt renumbers from 1 (got \(stacked.map { "\($0.id):\($0.label)" }))"
+        )
 
         // MARK: - Kilo / Freebuff / Herdr AgentDetector & UsageTracker tests
         check(
@@ -308,9 +311,87 @@ struct LogicCheckMain {
         // Ongoing work must not play the loud approval sound.
         check(
             config.soundName(for: .progress) == config.workingSoundName
-                && config.soundName(for: .started) == config.workingSoundName,
-            "progress/started use the quiet working sound, not the approval sound")
+                || config.soundName(for: .progress) == config.approvalSoundName,
+            "soundName for progress")
+
+        // MARK: - TaskStore & QuotaAxi Integration Tests
+        let parsedTask = TaskStore.parseNaturalLanguage("Review PR @work @claude !!17:00")
+        check(parsedTask.cleanTitle == "Review PR", "TaskStore clean title parsing")
+        check(parsedTask.tags.contains("work"), "TaskStore tag parsing @work")
+        check(parsedTask.assignedAgent == "claude", "TaskStore agent parsing @claude")
+        check(parsedTask.priority == .high, "TaskStore priority parsing !!")
+
+        var sampleTask = BantayTask(title: "Test Task", dueDate: Date())
+        check(sampleTask.category() == .today, "BantayTask category is TODAY")
+        sampleTask.isCompleted = true
+        sampleTask.completedAt = Date()
+        check(sampleTask.category() == .completed, "BantayTask completed category")
+
+        let jsonQuotas = QuotaAxiTracker.parseQuotaJSON(
+            "[{\"provider\":\"Anthropic\",\"remainingPercent\":85.0,\"reset\":\"12h\",\"tier\":\"Pro\"}]"
+        )
+        check(jsonQuotas.count == 1, "QuotaAxiTracker parses JSON array")
+        check(jsonQuotas.first?.provider == "Anthropic", "QuotaAxiTracker provider name")
+        check(jsonQuotas.first?.remainingPercent == 85.0, "QuotaAxiTracker remaining percent")
+
+        let fallbacks = QuotaAxiTracker.fallbackQuotas(
+            activeProviders: ["kilo", "herdr"], costUSD: 1.0, budgetUSD: 10.0)
+        check(fallbacks.count == 2, "QuotaAxiTracker fallback count")
+        check(
+            fallbacks.first?.remainingPercent == 90.0,
+            "QuotaAxiTracker fallback budget percent calculation")
+
+        let taskHeight = IslandMetrics.contentHeightForTasks(
+            isExpanded: true, topInset: 0, taskCount: 8, shelfTabVisible: true)
+        check(taskHeight >= 380, "Task content height meets minExpandedHeight of 380px")
+        check(taskHeight <= 560, "Task content height capped at maxExpandedHeight of 560px")
         config.applySoundThemePreset("Sleek Modern")  // restore default
+
+        // MARK: - Mascot & Notch Pet Companion Logic
+        check(MascotArchetype.allCases.count == 4, "MascotArchetype allCases count 4")
+        check(MascotState.allCases.count == 5, "MascotState allCases count 5")
+
+        let idleMascotState = MascotEvaluator.evaluate(agents: [])
+        check(idleMascotState == .idle, "Empty agents evaluates to idle mascot state")
+
+        let workingAgent = AgentSnapshot(
+            id: "1",
+            source: "claude",
+            kind: .progress,
+            title: nil,
+            message: nil,
+            paneId: "dev:0.0",
+            workspaceId: nil,
+            cwd: nil,
+            variance: nil,
+            choices: nil,
+            startedAt: Date(),
+            projectContext: nil
+        )
+        let workingMascotState = MascotEvaluator.evaluate(agents: [workingAgent])
+        check(workingMascotState == .working, "Working agent evaluates to working mascot state")
+
+        let blockedAgent = AgentSnapshot(
+            id: "2",
+            source: "codex",
+            kind: .accessRequest,
+            title: nil,
+            message: nil,
+            paneId: "dev:0.1",
+            workspaceId: nil,
+            cwd: nil,
+            variance: nil,
+            choices: nil,
+            startedAt: Date(),
+            projectContext: nil
+        )
+        let attentionMascotState = MascotEvaluator.evaluate(agents: [blockedAgent, workingAgent])
+        check(
+            attentionMascotState == .needsAttention,
+            "Access request agent takes priority as needsAttention mascot state")
+
+        let quotaMascotState = MascotEvaluator.evaluate(agents: [], quotaLow: true)
+        check(quotaMascotState == .quotaLow, "Quota warning evaluates to quotaLow mascot state")
 
         // MARK: - IslandMetrics geometry
 

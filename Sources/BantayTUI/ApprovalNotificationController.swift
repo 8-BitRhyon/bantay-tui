@@ -34,12 +34,17 @@ final class ApprovalNotificationController: NSObject,
     private var installed = false
 
     /// Whether this process can talk to UNUserNotificationCenter. A bare
-    /// binary launched from Application Support (the installed layout) or
-    /// from the packaged .app works — UNUserNotificationCenter accepts either
-    /// once a bundle identifier is set. The logic harness (a /tmp binary with
-    /// no data dir, no bundle id) crashes on any call, so it must no-op.
+    /// binary launched from Application Support (the installed layout) does not
+    /// have an .app bundle proxy registered with macOS LaunchServices. Any call
+    /// to UNUserNotificationCenter.current() in a bare binary crashes the process
+    /// with `NSInternalInconsistencyException: bundleProxyForCurrentProcess is nil`.
+    static var hasBundleProxy: Bool {
+        guard let id = Bundle.main.bundleIdentifier, !id.isEmpty else { return false }
+        return Bundle.main.bundleURL.pathExtension.lowercased() == "app"
+    }
+
     private var hasBundleProxy: Bool {
-        Bundle.main.bundleIdentifier != nil
+        Self.hasBundleProxy
     }
 
     /// Register the approval categories + install the delegate. Idempotent.
