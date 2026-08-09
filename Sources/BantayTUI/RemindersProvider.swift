@@ -17,7 +17,11 @@ public final class RemindersProvider: ObservableObject {
     @Published public private(set) var isLoading = false
     @Published public private(set) var defaultList: EKCalendar?
 
-    private let store = EKEventStore()
+    // EKEventStore is thread-safe for the calls below; marking it
+    // nonisolated(unsafe) avoids the Swift 6.1 "sending 'self.store' risks
+    // causing data races" error when awaiting its nonisolated async methods
+    // from a @MainActor class. All real accesses stay on the main actor.
+    nonisolated(unsafe) private let store = EKEventStore()
 
     private init() {}
 
