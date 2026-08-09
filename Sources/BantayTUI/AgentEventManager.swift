@@ -790,7 +790,13 @@ extension AgentEventManager {
         let liveStatuses: [String: String] = Dictionary(
             agents.compactMap {
                 (agent: HerdrAgentInfo) -> (String, String)? in
-                guard let key = agent.paneId ?? agent.agent as String? else { return nil }
+                // Disambiguate pane-less agents of the same source by cwd so
+                // duplicates are never silently dropped (the heartbeat would
+                // miss one agent's transitions).
+                let key: String =
+                    agent.paneId
+                    ?? (agent.cwd.map { "\(agent.agent):\($0)" }
+                        ?? agent.agent + ":standalone")
                 return (key, agent.agentStatus ?? "")
             },
             uniquingKeysWith: { first, _ in first })

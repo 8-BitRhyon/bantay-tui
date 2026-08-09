@@ -90,7 +90,8 @@ final class ApprovalNotificationController: NSObject,
         content.title = "\(source) needs approval"
         content.body = approvalBody(title: title, choices: choices)
         content.sound = .default
-        let hasChoices = choices.map { !$0.isEmpty } ?? false
+        // Non-empty choices → the choice-action category; otherwise yes/no.
+        let hasChoices = choices?.isEmpty == false
         content.categoryIdentifier = hasChoices ? Self.choiceCategoryID : Self.categoryID
         content.userInfo = ["paneId": paneId]
 
