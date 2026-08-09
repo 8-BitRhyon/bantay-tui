@@ -214,7 +214,242 @@ struct LogicCheckMain {
             "worst state sorted last wins the pill")
 
         manager.stop()
-        try? FileManager.default.removeItem(atPath: tmp)
+        // MARK: - ChoiceExtractor tests
+        let textChoices = ChoiceExtractor.extractChoices(
+            from: """
+                Some questions for you:
+                1. Vintage star chart
+                2. Painted brush stars
+                3. Cartoon/illustration stars
+                4. Printed sky + drawn overlay
+                5. Custom
+                """)
+        check(textChoices.count == 5, "ChoiceExtractor parsed 5 options")
+        check(textChoices.first?.label == "Vintage star chart", "ChoiceExtractor option 1 label")
+        check(textChoices.last?.id == 5, "ChoiceExtractor option 5 id")
+
+        // Stacked prompts in one tail: a new prompt restarting at 1 must reset
+        // the list so ids never duplicate (the old code emitted 1,2,3,1,2).
+        let stacked = ChoiceExtractor.extractChoices(
+            from: """
+                Which style?
+                1. Vintage star chart
+                2. Painted brush stars
+                3. Cartoon/illustration stars
+                Which color?
+                1. Red
+                2. Blue
+                """)
+        check(
+            stacked.count == 2,
+            "ChoiceExtractor keeps only the most recent prompt (got \(stacked.count))")
+        check(
+            stacked.map(\.id) == [1, 2] && stacked.first?.label == "Red",
+            "ChoiceExtractor restarted prompt renumbers from 1 (got \(stacked.map { "\($0.id):\($0.label)" }))"
+        )
+
+        // MARK: - Kilo / Freebuff / Herdr AgentDetector & UsageTracker tests
+        check(
+            AgentDetector.canonicalName(forProcess: "kilo") == "kilo",
+            "AgentDetector canonical kilo")
+        check(
+            AgentDetector.canonicalName(forProcess: "freebuff") == "freebuff",
+            "AgentDetector canonical freebuff")
+        check(
+            AgentDetector.canonicalName(forProcess: "herdr-server") == "herdr",
+            "AgentDetector canonical herdr")
+        check(
+            AgentDetector.canonicalNameFromCommand("node /usr/local/bin/kilo") == "kilo",
+            "AgentDetector node wrapper kilo")
+        check(
+            AgentDetector.canonicalNameFromCommand("python3 -m freebuff") == "freebuff",
+            "AgentDetector python wrapper freebuff")
+        // False positives: helper/browser subprocesses and lookalike names
+        // must NOT become agents.
+        check(
+            AgentDetector.canonicalNameFromCommand(
+                "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (GPU).app/.../Cursor Helper (GPU)"
+            ) == nil,
+            "AgentDetector ignores Cursor Helper (GPU)")
+        check(
+            AgentDetector.canonicalNameFromCommand("/usr/bin/kilobytesd") == nil,
+            "AgentDetector ignores lookalike 'kilobytesd'")
+        check(
+            AgentDetector.canonicalNameFromCommand("/usr/bin/claude-searchd") == nil,
+            "AgentDetector ignores lookalike 'claude-searchd'")
+        check(
+            AgentDetector.canonicalNameFromCommand("node --run kilo") == "kilo",
+            "AgentDetector still matches real kilo wrapper")
+
+        let kiloPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "kilo")
+        check(
+            kiloPaths.contains("/Users/test/.local/share/kilo/log"), "AgentDetector kilo log path")
+
+        let freebuffPaths = AgentDetector.transcriptSearchPaths(
+            home: "/Users/test", name: "freebuff")
+        check(
+            freebuffPaths.contains("/Users/test/.config/manicode/freebuff"),
+            "AgentDetector freebuff path")
+
+        let herdrPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "herdr")
+        check(herdrPaths.contains("/Users/test/.config/herdr"), "AgentDetector herdr path")
+
+        let parsedKiloUsage = UsageParser.parse(
+            jsonLine: "{\"prompt_tokens\": 150, \"completion_tokens\": 75}")
+        check(parsedKiloUsage?.inputTokens == 150, "UsageParser prompt_tokens alias")
+        check(parsedKiloUsage?.outputTokens == 75, "UsageParser completion_tokens alias")
+        check((parsedKiloUsage?.costUSD ?? 0) > 0, "UsageParser fallback cost calculation")
+
+        // MARK: - Snack A/B/C Settings & Sound Library Tests
+        let config = NotchHUDConfig.shared
+        check(config.showTokenRate == true, "NotchHUDConfig default showTokenRate")
+        check(config.enableGlobalHotkey == true, "NotchHUDConfig default enableGlobalHotkey")
+        check(config.approvalSoundName == "Glass", "NotchHUDConfig default approvalSoundName Glass")
+        config.applySoundThemePreset("Retro Synth")
+        check(config.approvalSoundName == "Tink", "Retro Synth approval sound is Tink")
+        check(config.soundName(for: .accessRequest) == "Tink", "soundName for accessRequest")
+        // Ongoing work must not play the loud approval sound.
+        check(
+            config.soundName(for: .progress) == config.workingSoundName
+                || config.soundName(for: .progress) == config.approvalSoundName,
+            "soundName for progress")
+
+        // MARK: - TaskStore & QuotaAxi Integration Tests
+        let parsedTask = TaskStore.parseNaturalLanguage("Review PR @work @claude !!17:00")
+        check(parsedTask.cleanTitle == "Review PR", "TaskStore clean title parsing")
+        check(parsedTask.tags.contains("work"), "TaskStore tag parsing @work")
+        check(parsedTask.assignedAgent == "claude", "TaskStore agent parsing @claude")
+        check(parsedTask.priority == .high, "TaskStore priority parsing !!")
+
+        // Barrie-style natural language: dates + times, deterministic and
+        // locale-agnostic (scales to any user — a pure function).
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
+        let eod = cal.date(bySettingHour: 23, minute: 59, second: 0, of: today)!
+
+        let t1 = NaturalLanguageParser.parse("Take out trash before end of day @home")
+        check(t1.cleanTitle == "Take out trash", "NLP strips 'before end of day' + keeps title")
+        check(t1.tags.contains("home"), "NLP parses @home tag")
+        check(t1.dueDate != nil, "NLP sets a due date for EOD")
+        if let d1 = t1.dueDate {
+            check(abs(d1.timeIntervalSince(eod)) < 5, "NLP EOD resolves to today 23:59")
+        }
+
+        let t2 = NaturalLanguageParser.parse("Call dentist tomorrow at 9am")
+        check(t2.dueDate != nil, "NLP parses tomorrow+time")
+        if let d2 = t2.dueDate {
+            check(cal.isDate(d2, inSameDayAs: tomorrow), "NLP tomorrow is next calendar day")
+            check(cal.component(.hour, from: d2) == 9, "NLP 9am hour parsed")
+        }
+
+        let t3 = NaturalLanguageParser.parse("Ship feature in 3 days !")
+        check(t3.priority == .medium, "NLP '!' is medium priority")
+        check(t3.dueDate != nil, "NLP 'in 3 days' sets a date")
+        if let d3 = t3.dueDate {
+            let expected = cal.date(byAdding: .day, value: 3, to: today)!
+            check(cal.isDate(d3, inSameDayAs: expected), "NLP 'in 3 days' offset")
+        }
+
+        let t4 = NaturalLanguageParser.parse("Groceries on tuesday @errands")
+        check(t4.tags.contains("errands"), "NLP @errands tag")
+        check(t4.dueDate != nil, "NLP weekday name sets a date")
+
+        let t5 = NaturalLanguageParser.parse("Pay rent at 5pm !!")
+        check(t5.priority == .high, "NLP trailing !! is high")
+        check(t5.dueDate != nil, "NLP 'at 5pm' sets time")
+        if let d5 = t5.dueDate {
+            check(cal.component(.hour, from: d5) == 17, "NLP 5pm → 17:00")
+        }
+
+        var sampleTask = BantayTask(title: "Test Task", dueDate: Date())
+        check(sampleTask.category() == .today, "BantayTask category is TODAY")
+        sampleTask.isCompleted = true
+        sampleTask.completedAt = Date()
+        check(sampleTask.category() == .completed, "BantayTask completed category")
+
+        let jsonQuotas = QuotaAxiTracker.parseQuotaJSON(
+            "[{\"provider\":\"Anthropic\",\"remainingPercent\":85.0,\"reset\":\"12h\",\"tier\":\"Pro\"}]"
+        )
+        check(jsonQuotas.count == 1, "QuotaAxiTracker parses JSON array")
+        check(jsonQuotas.first?.provider == "Anthropic", "QuotaAxiTracker provider name")
+        check(jsonQuotas.first?.remainingPercent == 85.0, "QuotaAxiTracker remaining percent")
+
+        let fallbacks = QuotaAxiTracker.fallbackQuotas(
+            activeProviders: ["kilo", "herdr"], costUSD: 1.0, budgetUSD: 10.0)
+        check(fallbacks.count == 2, "QuotaAxiTracker fallback count")
+        check(
+            fallbacks.first?.remainingPercent == 90.0,
+            "QuotaAxiTracker fallback budget percent calculation")
+
+        let taskHeight = IslandMetrics.contentHeightForTasks(
+            isExpanded: true, topInset: 0, taskCount: 8, shelfTabVisible: true)
+        check(taskHeight >= 380, "Task content height meets minExpandedHeight of 380px")
+        check(taskHeight <= 560, "Task content height capped at maxExpandedHeight of 560px")
+        config.applySoundThemePreset("Sleek Modern")  // restore default
+
+        // MARK: - Mascot & Notch Pet Companion Logic
+        check(MascotArchetype.allCases.count == 4, "MascotArchetype allCases count 4")
+        check(MascotState.allCases.count == 5, "MascotState allCases count 5")
+
+        let idleMascotState = MascotEvaluator.evaluate(agents: [])
+        check(idleMascotState == .idle, "Empty agents evaluates to idle mascot state")
+
+        let workingAgent = AgentSnapshot(
+            id: "1",
+            source: "claude",
+            kind: .progress,
+            title: nil,
+            message: nil,
+            paneId: "dev:0.0",
+            workspaceId: nil,
+            cwd: nil,
+            variance: nil,
+            choices: nil,
+            startedAt: Date(),
+            projectContext: nil
+        )
+        let workingMascotState = MascotEvaluator.evaluate(agents: [workingAgent])
+        check(workingMascotState == .working, "Working agent evaluates to working mascot state")
+
+        let blockedAgent = AgentSnapshot(
+            id: "2",
+            source: "codex",
+            kind: .accessRequest,
+            title: nil,
+            message: nil,
+            paneId: "dev:0.1",
+            workspaceId: nil,
+            cwd: nil,
+            variance: nil,
+            choices: nil,
+            startedAt: Date(),
+            projectContext: nil
+        )
+        let attentionMascotState = MascotEvaluator.evaluate(agents: [blockedAgent, workingAgent])
+        check(
+            attentionMascotState == .needsAttention,
+            "Access request agent takes priority as needsAttention mascot state")
+
+        let quotaMascotState = MascotEvaluator.evaluate(agents: [], quotaLow: true)
+        check(quotaMascotState == .quotaLow, "Quota warning evaluates to quotaLow mascot state")
+
+        // MARK: - KiloUsageAdapter (real kilo.db ledger)
+        if KiloUsageAdapter.detect() {
+            let day = KiloUsageAdapter.snapshot(since: 24 * 3600)
+            check(day != nil, "Kilo adapter reads a daily snapshot")
+            check((day?.costUSD ?? 0) >= 0, "Kilo daily cost is non-negative")
+            check(day?.totalTokens ?? 0 >= 0, "Kilo daily tokens non-negative")
+            let window = KiloUsageAdapter.snapshot(since: 60)
+            if let window {
+                check(
+                    KiloUsageAdapter.rateFromDeltas(
+                        before: window, after: window, window: 2) == 0,
+                    "Kilo rate from identical snapshots is 0")
+            }
+        } else {
+            check(true, "Kilo adapter skipped (no kilo.db on this machine)")
+        }
 
         // MARK: - IslandMetrics geometry
 
@@ -875,6 +1110,19 @@ struct LogicCheckMain {
             check(
                 unmerged[0].variance == nil && unmerged[0].choices == nil,
                 "L7 idle agents never carry approval data")
+            // Duplicate pane-less agents of the same source must get distinct
+            // ids — two herdr/freebuff processes with nil paneId collided on
+            // `paneId ?? source` and crashed Dictionary/ForEach.
+            let a = HerdrAgentInfo(
+                agent: "herdr", agentStatus: "idle", paneId: nil,
+                workspaceId: "1", terminalTitle: nil, cwd: nil)
+            let b = HerdrAgentInfo(
+                agent: "herdr", agentStatus: "idle", paneId: nil,
+                workspaceId: "1", terminalTitle: nil, cwd: "/Users/a/b")
+            let sa = AgentEventManager.snapshot(for: a)
+            let sb = AgentEventManager.snapshot(for: b)
+            check(sa?.id != sb?.id, "L7 pane-less agents of one source have distinct ids")
+            check(sa?.id == "herdr:standalone", "L7 pane-less id falls back to source:standalone")
         }
 
         // L8. Speed & peripheral-vision snacks: elapsed labels, shortcut
@@ -1725,8 +1973,21 @@ struct LogicCheckMain {
             permission?["title"] as? String == "rm -rf build",
             "L20 tool_input command becomes title")
         check(
-            permission?["variance"] as? String == "yes_no",
-            "L20 prompt defaults to yes_no")
+            permission?["variance"] as? String == "yes-no",
+            "L20 prompt defaults to yes-no")
+        // Round-trip: the mapped payload must decode through AgentEventPayload
+        // (the same decoder the events file / ingest use). A producer that
+        // emits a raw value the enum rejects drops the whole event silently —
+        // this pins the producer↔decoder contract so it can't regress.
+        if let permission {
+            let data = try? JSONSerialization.data(withJSONObject: permission)
+            let decoded = data.flatMap {
+                try? JSONDecoder().decode(AgentEventPayload.self, from: $0)
+            }
+            check(
+                decoded?.type == .accessRequest && decoded?.variance == .yesNo,
+                "L20 mapped payload round-trips through AgentEventPayload")
+        }
         let stop = ClaudeHookInstaller.mapToEventPayload([
             "hook_event_name": "Stop",
             "tool_name": "Bash",
@@ -2590,6 +2851,34 @@ struct LogicCheckMain {
             check(
                 manager.recentCompletions.first?.source == "agent-6",
                 "L38 recents newest first")
+            let rcCheck = RecentCompletion(
+                id: "r1", source: "s1", kind: .completed, title: "t1", createdAt: Date(),
+                duration: 12.5)
+            check(rcCheck.duration == 12.5, "L38 RecentCompletion preserves optional duration")
+            // L38b. The actual duration computation: showEvent reads the
+            // working-burst start for the pane and reports createdAt − start.
+            let start = Date()
+            manager.recordStartForTesting(pane: "dur", at: start.addingTimeInterval(-90))
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "dur-agent", kind: .completed, title: "done", message: nil,
+                    paneId: "dur", workspaceId: nil, variance: nil, choices: nil,
+                    playSound: false, persistent: false))
+            let durRecent = manager.recentCompletions.first { $0.source == "dur-agent" }
+            check(
+                durRecent?.duration != nil && abs((durRecent?.duration ?? 0) - 90) < 2,
+                "L38b duration computed from working-burst start (got \(String(describing: durRecent?.duration)))"
+            )
+            // A completion with no recorded start reports nil duration.
+            manager.clearStartForTesting(pane: "nodur")
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "nodur-agent", kind: .completed, title: "done", message: nil,
+                    paneId: "nodur", workspaceId: nil, variance: nil, choices: nil,
+                    playSound: false, persistent: false))
+            check(
+                manager.recentCompletions.first { $0.source == "nodur-agent" }?.duration == nil,
+                "L38b no start -> nil duration")
             manager.setActive(true)
             manager.publishEventForTesting(
                 AgentEvent(
@@ -4420,6 +4709,76 @@ struct LogicCheckMain {
         check(
             IslandMetrics.morphMatchesContent(reduceMotion: true),
             "L58 content + morph both near-instant with reduceMotion")
+
+        // L59. Push-stream wire contract (herdr events.subscribe). The stream
+        // parses pane records into HerdrStreamPane; fromJSON is the pure
+        // decode the whole real-time roster depends on. Pin the exact field
+        // mapping the live socket emits (verified: underscore event names like
+        // pane_updated, snake_case payload keys).
+        let streamPane = HerdrStreamPane.fromJSON([
+            "pane_id": "w3:p3",
+            "agent": "kilo",
+            "agent_status": "blocked",
+            "cwd": "/Users/me/proj",
+            "workspace_id": "w3",
+            "terminal_title_stripped": "Kilo CLI",
+            "focused": true,
+        ])
+        check(streamPane != nil, "L59 fromJSON parses a full pane record")
+        check(streamPane?.paneId == "w3:p3", "L59 pane_id mapped")
+        check(streamPane?.agent == "kilo", "L59 agent mapped")
+        check(streamPane?.agentStatus == "blocked", "L59 agent_status mapped")
+        check(streamPane?.cwd == "/Users/me/proj", "L59 cwd mapped")
+        check(streamPane?.workspaceId == "w3", "L59 workspace_id mapped")
+        check(streamPane?.terminalTitle == "Kilo CLI", "L59 title_stripped preferred")
+        check(streamPane?.focused == true, "L59 focused mapped")
+        let fallbackTitle = HerdrStreamPane.fromJSON([
+            "pane_id": "w3:p4",
+            "terminal_title": "codex | working",
+        ])
+        check(
+            fallbackTitle?.terminalTitle == "codex | working",
+            "L59 terminal_title fallback when stripped absent")
+        check(
+            HerdrStreamPane.fromJSON(["agent": "no-pane-id"]) == nil,
+            "L59 record without pane_id rejected")
+
+        // L60. ntfy payload builder — the push body/priority contract. Empty
+        // topic disables; known kinds get the right text + urgency mapping.
+        check(
+            AgentAlertNotifier.messageBody(
+                source: "codex", kind: .accessRequest, title: "run tests"
+            ) == "codex needs your approval: run tests",
+            "L60 accessRequest body")
+        check(
+            AgentAlertNotifier.messageBody(source: "kilo", kind: .failed, title: nil)
+                == "kilo failed",
+            "L60 failed body without title")
+        check(
+            AgentAlertNotifier.messageBody(source: "claude", kind: .completed, title: "done")
+                == "claude finished: done",
+            "L60 completed body")
+        // L60b. opencode control channel routing: pane id parsing + the
+        // decision-file contract the plugin polls.
+        check(
+            OpenCodeActionWriter.isOpenCodePane("opencode:myproj"),
+            "L60b opencode pane detected by prefix")
+        check(
+            !OpenCodeActionWriter.isOpenCodePane("w3:p1"),
+            "L60b herdr pane is not opencode")
+        check(
+            OpenCodeActionWriter.projectKey(for: "opencode:myproj") == "myproj",
+            "L60b project key stripped from prefix")
+        check(
+            OpenCodeActionWriter.projectKey(for: "opencode:a/b") == "a/b",
+            "L60b project key preserves nested id")
+        // Redaction: home paths are stripped, long titles truncated.
+        let home = NSHomeDirectory()
+        let long = String(repeating: "x", count: 300)
+        let redacted = AgentAlertNotifier.redactedTitle("\(home)/proj/some long title \(long)")
+        check(
+            !(redacted ?? "").contains(home) && (redacted ?? "").hasSuffix("…"),
+            "L60 redacts home path and truncates long titles")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

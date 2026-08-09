@@ -65,7 +65,20 @@ struct ProjectContext: Equatable, Sendable {
     let branch: String?
     let isGit: Bool
 
+    /// Short-lived per-cwd cache so `.git/HEAD` is read at most once per cwd
+    /// per interval instead of on every poll's roster rebuild (the read runs
+    /// on the main actor today; cwds are stable, so a memo is safe and cuts
+    /// the beachball risk at startup when many agents exist).
+    private static let cacheTTL: TimeInterval = 5.0
+    nonisolated(unsafe) private static var cache: [String: (context: ProjectContext, at: Date)] =
+        [:]
+    private static let cacheLock = NSLock()
+
     init(cwd: String) {
+        if let hit = Self.cached(cwd) {
+            self = hit
+            return
+        }
         self.project = (cwd as NSString).lastPathComponent
         let headURL = URL(fileURLWithPath: cwd).appendingPathComponent(".git/HEAD")
         if let content = try? String(contentsOf: headURL, encoding: .utf8) {
@@ -75,6 +88,26 @@ struct ProjectContext: Equatable, Sendable {
         } else {
             self.branch = nil
             self.isGit = false
+        }
+        Self.store(cwd, self)
+    }
+
+    private static func cached(_ cwd: String) -> ProjectContext? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let hit = cache[cwd],
+            Date().timeIntervalSince(hit.at) < cacheTTL
+        else { return nil }
+        return hit.context
+    }
+
+    private static func store(_ cwd: String, _ context: ProjectContext) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        cache[cwd] = (context, Date())
+        if cache.count > 64 {
+            let cutoff = Date().addingTimeInterval(-cacheTTL)
+            cache = cache.filter { $0.value.at > cutoff }
         }
     }
 
@@ -99,6 +132,23 @@ struct RecentCompletion: Identifiable, Equatable, Sendable {
     let kind: AgentEventKind
     let title: String?
     let createdAt: Date
+    let duration: TimeInterval?
+
+    init(
+        id: String,
+        source: String,
+        kind: AgentEventKind,
+        title: String?,
+        createdAt: Date,
+        duration: TimeInterval? = nil
+    ) {
+        self.id = id
+        self.source = source
+        self.kind = kind
+        self.title = title
+        self.createdAt = createdAt
+        self.duration = duration
+    }
 }
 
 @MainActor
@@ -115,13 +165,15 @@ final class AgentEventManager: ObservableObject {
         tokensPerMinute: nil, lastSeen: nil)
     private var watchTask: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
-    private var waitProcesses: [String: Process] = [:]
-    private var waitContinuation: CheckedContinuation<Void, Never>?
-    private var waitSignalCount = 0
+    private var streamRefreshTask: Task<Void, Never>?
+    /// Last push-stream status/title per pane, to filter redundant events.
+    private var lastStreamStatus: [String: String] = [:]
+    private var lastStreamTitle: [String: String] = [:]
     private var clearTask: Task<Void, Never>?
     private var fileSource: DispatchSourceFileSystemObject?
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
+    private let eventStream = HerdrEventStream()
     private(set) var isActive = false
     private var displayAsleep = false
     private var readOffset: UInt64
@@ -135,6 +187,9 @@ final class AgentEventManager: ObservableObject {
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
     /// expensive enumeration + read on each poll.
     private var transcriptMtimes: [String: Date] = [:]
+    /// Last kilo cumulative snapshot + poll interval, for tpm poll-and-diff.
+    private var lastKiloSnapshot: UsageSnapshot?
+    private var kiloPollInterval: TimeInterval = 2.0
     /// When each pane's current working burst started (for elapsed timers).
     /// Set when a pane transitions into progress/started; cleared when it
     /// leaves working state.
@@ -195,6 +250,10 @@ final class AgentEventManager: ObservableObject {
         watchTask?.cancel()
         watchTask = nil
         startFileWatcher()
+        eventStream.onEvent = { [weak self] event in
+            MainActor.assumeIsolated { self?.handleStreamEvent(event) }
+        }
+        eventStream.start()
     }
 
     func stop() {
@@ -202,15 +261,53 @@ final class AgentEventManager: ObservableObject {
         watchTask = nil
         captureTask?.cancel()
         captureTask = nil
+        streamRefreshTask?.cancel()
+        streamRefreshTask = nil
         clearTask?.cancel()
         clearTask = nil
         fileSource?.cancel()
         fileSource = nil
+        eventStream.stop()
         if let sleepObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
         }
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+    }
+
+    /// Push event from the herdr subscription: trigger a roster refresh so
+    /// status changes land on the island immediately instead of on the next
+    /// poll tick. `disconnected` does a full refresh to rebuild state.
+    private func handleStreamEvent(_ event: HerdrEventStream.StreamEvent) {
+        switch event {
+        case .paneUpdated(let pane):
+            if pane.agentStatus != lastStreamStatus[pane.paneId]
+                || pane.terminalTitle != lastStreamTitle[pane.paneId]
+            {
+                lastStreamStatus[pane.paneId] = pane.agentStatus
+                lastStreamTitle[pane.paneId] = pane.terminalTitle
+                scheduleStreamRefresh()
+            }
+        case .paneClosed(let paneId):
+            // Prune dedup state so closed panes can't accumulate forever.
+            lastStreamStatus.removeValue(forKey: paneId)
+            lastStreamTitle.removeValue(forKey: paneId)
+            scheduleStreamRefresh()
+        case .agentDetected, .disconnected:
+            scheduleStreamRefresh()
+        }
+    }
+
+    /// Throttle push-triggered refreshes: coalesce a burst of pane events
+    /// into one roster refresh shortly after the last one.
+    private func scheduleStreamRefresh() {
+        guard captureEnabled else { return }
+        streamRefreshTask?.cancel()
+        streamRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            await self?.refreshRosterAndArmWaits()
         }
     }
 
@@ -297,11 +394,31 @@ final class AgentEventManager: ObservableObject {
             return
         }
         let key = event.identityKey
+        // ntfy.sh push for events that need attention even away from the
+        // terminal: approvals/blocked always; failures and completions too.
+        if let source = event.source {
+            AgentAlertNotifier.notify(
+                source: source, kind: event.kind, title: event.title ?? event.message,
+                paneId: event.paneId)
+        }
         if event.kind == .accessRequest || event.kind == .waiting {
             pendingApprovals[key] = (variance: event.variance, choices: event.choices)
         } else if event.kind != .progress && event.kind != .started {
             pendingApprovals.removeValue(forKey: key)
+            // The pane stopped blocking: drop any pending notification so a
+            // stale Approve/Deny can't inject a keypress into the pane now.
+            if event.paneId != nil || event.source != nil {
+                let paneKey = event.paneId ?? event.source ?? key
+                ApprovalNotificationController.shared.removeForPane(paneKey)
+            }
         }
+        var completionDuration: TimeInterval?
+        if event.kind == .completed || event.kind == .failed {
+            if let start = startedAtByPane[key] {
+                completionDuration = event.createdAt.timeIntervalSince(start)
+            }
+        }
+
         if event.kind == .progress || event.kind == .started {
             if startedAtByPane[key] == nil {
                 startedAtByPane[key] = event.createdAt
@@ -318,7 +435,8 @@ final class AgentEventManager: ObservableObject {
                 source: event.sourceKey,
                 kind: event.kind,
                 title: event.title ?? event.message,
-                createdAt: event.createdAt)
+                createdAt: event.createdAt,
+                duration: completionDuration)
             recentCompletions = Array(([recent] + recentCompletions).prefix(5))
         }
 
@@ -415,8 +533,16 @@ extension AgentEventManager {
             guard let cwd = agent.cwd, !cwd.isEmpty else { return nil }
             return ProjectContext(cwd: cwd)
         }()
+        // Unique id: paneId when present, else source + cwd. Multiple
+        // pane-less agents of the same source (e.g. two herdr/freebuff
+        // processes) must not share an id — ForEach(id:) and Dictionary
+        // keyed on id would crash/duplicate.
+        let id: String =
+            agent.paneId
+            ?? (agent.cwd.map { "\(agent.agent):\($0)" }
+                ?? agent.agent + ":standalone")
         return AgentSnapshot(
-            id: agent.paneId ?? agent.agent,
+            id: id,
             source: agent.agent,
             kind: kind,
             title: agent.terminalTitle,
@@ -541,11 +667,6 @@ extension AgentEventManager {
 extension AgentEventManager {
     func startCapture() {
         captureTask?.cancel()
-        signalWaitExit()
-        for process in waitProcesses.values {
-            process.terminate()
-        }
-        waitProcesses.removeAll()
         guard captureEnabled, NotchHUDConfig.shared.captureEnabled else { return }
         captureTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -553,13 +674,12 @@ extension AgentEventManager {
                     try? await Task.sleep(for: .milliseconds(500))
                     continue
                 }
+                // The push event stream keeps status live; the poll loop now
+                // acts as a slow safety net (roster consistency, standalone
+                // ps scan, transcript usage) instead of the source of truth.
                 await self.refreshRosterAndArmWaits()
-                if self.waitProcesses.isEmpty {
-                    try? await Task.sleep(
-                        for: .milliseconds(Int64(NotchHUDConfig.shared.idlePollInterval * 1000)))
-                } else {
-                    await self.awaitWaitExit()
-                }
+                try? await Task.sleep(
+                    for: .seconds(Int64(NotchHUDConfig.shared.captureInterval)))
             }
         }
     }
@@ -567,11 +687,6 @@ extension AgentEventManager {
     func stopCapture() {
         captureTask?.cancel()
         captureTask = nil
-        for process in waitProcesses.values {
-            process.terminate()
-        }
-        waitProcesses.removeAll()
-        signalWaitExit()
     }
 
     private func refreshRosterAndArmWaits() async {
@@ -606,39 +721,85 @@ extension AgentEventManager {
                     )
                 }
         }.value
-        // PERF-2: skip the transcript enumeration+read when no transcript root
-        // changed since the last poll (mtime memo). The roster + usage gauge
-        // keep their last-known values; the next change refreshes them.
-        let usageRoots: [String] = agents.compactMap {
-            AgentDetector.transcriptSearchPaths(home: NSHomeDirectory(), name: $0.agent).first
-        }
-        let changedRoots = usageRoots.filter { root in
-            guard let mtime = UsageTracker.transcriptMtime(root: root) else { return true }
-            return transcriptMtimes[root] != mtime
-        }
-        for root in changedRoots {
-            transcriptMtimes[root] = UsageTracker.transcriptMtime(root: root)
-        }
-        let currentUsage = self.usage
-        let currentRate = self.usageRate
-        let usageAndRate = await Task.detached(priority: .utility) {
-            if changedRoots.isEmpty && currentUsage.totalTokens > 0 {
-                return (currentUsage, currentRate)
+        // PERF: the transcript token/cost enumeration + disk read is gated
+        // behind `usageTrackingEnabled`. Nothing in the UI renders usage (the
+        // footer gauge was removed), so this was running every poll for data
+        // nobody consumed. Phase C (spend history) re-enables it when there's
+        // a consumer.
+        if NotchHUDConfig.shared.usageTrackingEnabled {
+            let hasKilo = agents.contains { $0.agent == "kilo" }
+            let now = Date()
+            if hasKilo, KiloUsageAdapter.detect() {
+                // Kilo's ledger is SQLite — the authoritative source. Quota =
+                // cost over the daily budget; tpm = poll-and-diff cumulative
+                // totals over the poll interval (off-main, WAL-safe read).
+                let pollInterval = NotchHUDConfig.shared.captureInterval
+                let currentUsage = self.usage
+                let currentRate = self.usageRate
+                let lastKilo = self.lastKiloSnapshot
+                let result = await Task.detached(priority: .utility) {
+                    let day = KiloUsageAdapter.snapshot(since: 24 * 3600, now: now)
+                    let window = KiloUsageAdapter.snapshot(since: 60, now: now)
+                    let usage = day ?? UsageSnapshot.zero
+                    let rate: UsageRate =
+                        if let before = lastKilo, let after = window {
+                            UsageRate(
+                                tokensPerMinute: KiloUsageAdapter.rateFromDeltas(
+                                    before: before, after: after, window: pollInterval))
+                        } else if let window {
+                            UsageRate(tokensPerMinute: Double(window.totalTokens))
+                        } else {
+                            currentRate
+                        }
+                    return (usage, rate)
+                }.value
+                self.usage = result.0
+                self.usageRate = result.1
+                self.lastKiloSnapshot = KiloUsageAdapter.snapshot(since: 60, now: now)
+                _ = currentUsage
+            } else {
+                // Non-kilo agents: fall back to transcript parsing (codex/
+                // claude/opencode) with the mtime memo.
+                let usageRoots: Set<String> = Set(
+                    agents.flatMap {
+                        AgentDetector.transcriptSearchPaths(home: NSHomeDirectory(), name: $0.agent)
+                    })
+                let changedRoots = usageRoots.filter { root in
+                    guard let mtime = UsageTracker.transcriptMtime(root: root) else { return true }
+                    return transcriptMtimes[root] != mtime
+                }
+                for root in changedRoots {
+                    transcriptMtimes[root] = UsageTracker.transcriptMtime(root: root)
+                }
+                let currentUsage = self.usage
+                let currentRate = self.usageRate
+                let usageAndRate = await Task.detached(priority: .utility) {
+                    if changedRoots.isEmpty && currentUsage.totalTokens > 0 {
+                        return (currentUsage, currentRate)
+                    }
+                    return UsageTracker.latestUsageAndRate(
+                        home: NSHomeDirectory(),
+                        names: agents.map { $0.agent },
+                        now: Date(),
+                        window: 60)
+                }.value
+                self.usage = usageAndRate.0
+                self.usageRate = usageAndRate.1
             }
-            return UsageTracker.latestUsageAndRate(
-                home: NSHomeDirectory(),
-                names: agents.map { $0.agent },
-                now: Date(),
-                window: 60)
-        }.value
-        self.usage = usageAndRate.0
-        self.usageRate = usageAndRate.1
+        }
         let liveStatuses: [String: String] = Dictionary(
-            uniqueKeysWithValues: agents.compactMap {
+            agents.compactMap {
                 (agent: HerdrAgentInfo) -> (String, String)? in
                 guard let key = agent.paneId ?? agent.agent as String? else { return nil }
                 return (key, agent.agentStatus ?? "")
-            })
+            },
+            uniquingKeysWith: { first, _ in first })
+        // Prune push-stream dedup caches against the live roster so a missed
+        // pane_closed event (herdr restart, dropped event) can't grow them
+        // unboundedly.
+        let liveKeys = Set(liveStatuses.keys)
+        lastStreamStatus = lastStreamStatus.filter { liveKeys.contains($0.key) }
+        lastStreamTitle = lastStreamTitle.filter { liveKeys.contains($0.key) }
         heartbeatVerify(liveStatuses: liveStatuses)
         let result = Self.update(
             from: agents,
@@ -650,48 +811,10 @@ extension AgentEventManager {
         }
 
         let livePanes = Set(agents.compactMap { $0.paneId })
-        let stale = waitProcesses.keys.filter { !livePanes.contains($0) }
-        for pane in stale {
-            waitProcesses[pane]?.terminate()
-            waitProcesses.removeValue(forKey: pane)
-        }
-
-        for agent in agents {
-            guard let pane = agent.paneId, waitProcesses[pane] == nil else { continue }
-            var statuses = Set(["idle", "working", "blocked", "done", "unknown"])
-            if let status = agent.agentStatus {
-                statuses.remove(status)
-            }
-            guard let process = herdrAdapter.spawnAgentWait(paneId: pane, statuses: Array(statuses))
-            else { continue }
-            waitProcesses[pane] = process
-            process.terminationHandler = { [weak self] (_: Process) in
-                DispatchQueue.main.async {
-                    guard let self, self.waitProcesses[pane] === process else { return }
-                    self.waitProcesses.removeValue(forKey: pane)
-                    self.signalWaitExit()
-                }
-            }
-        }
-    }
-
-    private func awaitWaitExit() async {
-        let base = waitSignalCount
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if waitSignalCount != base {
-                continuation.resume()
-            } else {
-                waitContinuation = continuation
-            }
-        }
-    }
-
-    private func signalWaitExit() {
-        waitSignalCount += 1
-        if let continuation = waitContinuation {
-            waitContinuation = nil
-            continuation.resume()
-        }
+        // No per-pane `herdr agent wait` subprocesses: the push event stream
+        // (HerdrEventStream) already wakes the roster on status changes, so
+        // spawning a wait process per pane is redundant process spam.
+        _ = livePanes
     }
 
     private func startFileWatcher() {

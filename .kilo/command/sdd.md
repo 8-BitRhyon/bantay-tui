@@ -17,7 +17,11 @@ You are executing a Bantay-TUI plan the **spec-driven way** (see
    excerpts, STOP and report — do not improvise.
 2. Read the plan's "Acceptance/done criteria" and the "Why".
 3. Load the Logic harness once so you know today's baseline:
-   `swiftc -o /tmp/logic-check Sources/BantayTUI/AgentEventKind.swift Sources/BantayTUI/NotchHUDConfig.swift Sources/BantayTUI/EventIngestServer.swift Sources/BantayTUI/PlexerAdapter.swift Sources/BantayTUI/HerdrSocketClient.swift Sources/BantayTUI/HerdrSocketAdapter.swift Sources/BantayTUI/UsageTracker.swift Sources/BantayTUI/AgentDetector.swift Sources/BantayTUI/ClaudeHookInstaller.swift Sources/BantayTUI/LaunchAgent.swift Sources/BantayTUI/ShelfModel.swift Sources/BantayTUI/HerdrPluginInstaller.swift Sources/BantayTUI/TerminalFocusser.swift Sources/BantayTUI/IslandMetrics.swift Sources/BantayTUI/AgentEventManager.swift .kilo/LogicCheck.swift` then run `/tmp/logic-check`. Record the PASS/FAIL counts.
+   `bash scripts/build-logic-harness.sh` — this is the SAME script CI runs
+   (Layer 3.5). It globs all of Sources/BantayTUI except the four UI-only
+   files (DynamicIslandApp, NotchStatusView, PeekPanel, SettingsView), so
+   new pure-logic sources are picked up automatically and the harness list
+   can never drift out of sync with ci.yml. Record the PASS/FAIL counts.
 4. Gates: CI is 5 layers — `swift format lint --recursive --strict Sources Tests`
    (1), `swift build` zero-warnings (2), `swift test` (Xcode-only, CI may run it),
    `swift build -c release` (4). Test locally, gate on 1/2/4 + the harness.

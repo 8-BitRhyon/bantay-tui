@@ -1,17 +1,27 @@
 import Foundation
 
-/// Token/cost usage parsed from agent transcripts (Claude Code, Codex).
+/// Token/cost usage parsed from agent transcripts (Claude Code, Codex) or
+/// aggregated from kilo's SQLite ledger. The token buckets follow the
+/// Anthropic-style split (input/output/reasoning/cache read/cache write).
 struct UsageSnapshot: Equatable, Sendable {
     var inputTokens: Int = 0
     var outputTokens: Int = 0
+    var reasoningTokens: Int = 0
     var cacheReadTokens: Int = 0
-    var cacheCreationTokens: Int = 0
+    var cacheWriteTokens: Int = 0
     var costUSD: Double = 0
+
+    /// Legacy alias for the cache-write bucket (transcript parsers use
+    /// "cache creation" terminology).
+    var cacheCreationTokens: Int {
+        get { cacheWriteTokens }
+        set { cacheWriteTokens = newValue }
+    }
 
     static let zero = UsageSnapshot()
 
     var totalTokens: Int {
-        inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
+        inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens
     }
 }
 
@@ -38,21 +48,51 @@ enum UsageParser {
             return nil
         }
         let message = obj["message"] as? [String: Any]
-        guard
-            let usage = (obj["usage"] as? [String: Any])
-                ?? (message?["usage"] as? [String: Any])
-        else {
-            return nil
-        }
+        let usage =
+            (obj["usage"] as? [String: Any])
+            ?? (message?["usage"] as? [String: Any])
+            ?? obj
         var snapshot = UsageSnapshot()
-        snapshot.inputTokens = int(usage["input_tokens"])
-        snapshot.outputTokens = int(usage["output_tokens"])
-        snapshot.cacheReadTokens = int(usage["cache_read_input_tokens"])
-        snapshot.cacheCreationTokens = int(usage["cache_creation_input_tokens"])
-        if let cost = double(obj["costUSD"]) ?? double(message?["costUSD"]) {
+        snapshot.inputTokens =
+            intVal(usage["input_tokens"])
+            ?? intVal(usage["prompt_tokens"])
+            ?? intVal(usage["inputTokens"])
+            ?? intVal(obj["input_tokens"])
+            ?? intVal(obj["prompt_tokens"])
+            ?? 0
+        snapshot.outputTokens =
+            intVal(usage["output_tokens"])
+            ?? intVal(usage["completion_tokens"])
+            ?? intVal(usage["outputTokens"])
+            ?? intVal(obj["output_tokens"])
+            ?? intVal(obj["completion_tokens"])
+            ?? 0
+        snapshot.cacheReadTokens =
+            intVal(usage["cache_read_input_tokens"]) ?? intVal(usage["cache_read_tokens"]) ?? 0
+        snapshot.cacheCreationTokens =
+            intVal(usage["cache_creation_input_tokens"]) ?? intVal(usage["cache_creation_tokens"])
+            ?? 0
+        if let cost = double(obj["costUSD"]) ?? double(message?["costUSD"])
+            ?? double(obj["cost_usd"])
+        {
             snapshot.costUSD = cost
+        } else if snapshot.totalTokens > 0 {
+            let inputCost =
+                (Double(
+                    snapshot.inputTokens + snapshot.cacheReadTokens + snapshot.cacheCreationTokens)
+                    / 1_000_000.0) * 3.0
+            let outputCost = (Double(snapshot.outputTokens) / 1_000_000.0) * 15.0
+            snapshot.costUSD = inputCost + outputCost
         }
+        guard snapshot.totalTokens > 0 || snapshot.costUSD > 0 else { return nil }
         return snapshot
+    }
+
+    private static func intVal(_ val: Any?) -> Int? {
+        if let i = val as? Int { return i }
+        if let d = val as? Double { return Int(d) }
+        if let s = val as? String, let i = Int(s) { return i }
+        return nil
     }
 
     static func parseAll(lines: [String]) -> UsageSnapshot {
@@ -184,11 +224,16 @@ enum UsageTracker {
 
     /// Usage plus the tokens/min rate over the newest transcripts, read in a
     /// single pass per transcript root.
+    /// NOTE (M9): the fallback cost estimate ($3/M in + $15/M out) is a
+    /// display aid, not accounting — and a session present under two roots of
+    /// one family (e.g. .claude/projects + .claude/transcripts) is counted
+    /// twice. Acceptable for a spend gauge; a precise figure needs per-session
+    /// dedupe keyed by session id.
     static func latestUsageAndRate(
         home: String, names: [String], now: Date, window: TimeInterval
     ) -> (usage: UsageSnapshot, rate: UsageRate) {
         let roots: Set<String> = Set(
-            names.compactMap { AgentDetector.transcriptSearchPaths(home: home, name: $0).first })
+            names.flatMap { AgentDetector.transcriptSearchPaths(home: home, name: $0) })
         var combined = UsageSnapshot.zero
         var rateLines: [String] = []
         for root in roots {
@@ -217,11 +262,14 @@ enum UsageTracker {
         }
         var best: (url: URL, date: Date)?
         for case let url as URL in enumerator {
+            let ext = url.pathExtension.lowercased()
+            let name = url.lastPathComponent.lowercased()
             guard
                 let values = try? url.resourceValues(
                     forKeys: [.contentModificationDateKey, .isRegularFileKey]),
                 values.isRegularFile == true,
-                url.pathExtension == "jsonl" || url.lastPathComponent == "rollout.jsonl"
+                ext == "jsonl" || ext == "log" || ext == "json" || ext == "txt"
+                    || name.contains("log")
             else {
                 continue
             }

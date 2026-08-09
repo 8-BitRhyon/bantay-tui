@@ -86,25 +86,46 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         }
     }
 
-    /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter).
+    /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter). opencode
+    /// panes are answered via the control-file channel (the opencode plugin
+    /// talks to the opencode server directly), not herdr keystrokes.
     func approve(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+            return
+        }
         sendKeys(paneId: paneId, keys: ["y", "enter"])
     }
 
-    /// Denies a yes-no "Need approval" prompt (e.g. "n" + Enter).
+    /// Denies a yes-no "Need approval" prompt (e.g. "n" + Enter). opencode
+    /// panes are answered via the control-file channel.
     func deny(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
+            return
+        }
         sendKeys(paneId: paneId, keys: ["n", "enter"])
     }
 
     /// Responds to a single-choice (choices) prompt by sending the 1-based
-    /// option index followed by Enter.
+    /// option index followed by Enter. opencode panes are binary yes/no via
+    /// the control-file channel, so a stray choice is treated as approve.
     func approveChoice(paneId: String, choice: Int) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+            return
+        }
         sendKeys(paneId: paneId, keys: [String(choice), "enter"])
     }
 
     /// Responds to a multi-select prompt by sending the comma-joined,
     /// 1-based option indices followed by Enter (e.g. "1,3" + Enter).
+    /// opencode panes are binary yes/no via the control-file channel.
     func approveMulti(paneId: String, selections: [Int]) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+            return
+        }
         let joined = selections.map(String.init).joined(separator: ",")
         sendKeys(paneId: paneId, keys: [joined, "enter"])
     }

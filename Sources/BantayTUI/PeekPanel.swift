@@ -6,6 +6,7 @@ import SwiftUI
 /// after it has been shown.
 final class PeekPanelModel: ObservableObject {
     @Published var source: String = ""
+    @Published var paneId: String? = nil
     @Published var tailLines: [String] = []
     @Published var diffPreview: String?
     @Published var isLoading = false
@@ -86,6 +87,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     private func reload(agent: AgentSnapshot, adapter: HerdrSocketAdapter) {
         fetchTask?.cancel()
         model.source = agent.source
+        model.paneId = agent.paneId
         model.tailLines = []
         model.diffPreview = nil
         model.isLoading = true
@@ -161,6 +163,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
 /// --stat` preview below. Text is selectable so users can copy log lines.
 private struct PeekPanelView: View {
     @ObservedObject var model: PeekPanelModel
+    @State private var appeared = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -171,16 +174,17 @@ private struct PeekPanelView: View {
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text("Esc to close")
                     .font(.system(size: 8.5, weight: .medium))
                     .foregroundColor(.white.opacity(0.35))
             }
-            .padding(.horizontal, 12)
-            .frame(height: 30)
+            .padding(.horizontal, 14)
+            .frame(height: 32)
             Divider().overlay(Color.white.opacity(0.15))
             tailSection
+            choiceSection
             if let diff = model.diffPreview {
                 Divider().overlay(Color.white.opacity(0.15))
                 VStack(alignment: .leading, spacing: 4) {
@@ -190,20 +194,38 @@ private struct PeekPanelView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         Text(diff)
                             .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                            .monospacedDigit()
                             .foregroundColor(.white.opacity(0.7))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .padding(10)
+                .padding(8)
+                .background(
+                    Color.white.opacity(0.04),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .padding(6)
             }
         }
         .background(Color(red: 0.06, green: 0.06, blue: 0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
+        .scaleEffect(appeared ? 1.0 : 0.95, anchor: .topLeading)
+        .opacity(appeared ? 1.0 : 0.0)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.16)) {
+                appeared = true
+            }
+        }
+        .frame(width: 480, height: 420)
     }
 
     @ViewBuilder
@@ -232,5 +254,56 @@ private struct PeekPanelView: View {
                 .padding(10)
             }
         }
+    }
+
+    private var choiceSection: some View {
+        let choices = ChoiceExtractor.extractChoices(fromLines: model.tailLines)
+        guard !choices.isEmpty, let paneId = model.paneId else { return AnyView(EmptyView()) }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Image(systemName: "questionmark.circle.fill")
+                        .foregroundColor(.cyan)
+                    Text("Select Answer:")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(choices) { option in
+                            Button {
+                                AgentEventManager.shared.performAction(paneId: paneId) {
+                                    $0.approveChoice(paneId: paneId, choice: option.id)
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text("\(option.id).")
+                                        .font(
+                                            .system(size: 9.5, weight: .bold, design: .monospaced)
+                                        )
+                                        .foregroundColor(.black)
+                                    Text(option.label)
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .foregroundColor(.black)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.cyan, in: Capsule())
+                            }
+                            .buttonStyle(ScalePressButtonStyle())
+                        }
+                    }
+                }
+            }
+            .padding(8)
+            .background(
+                Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.cyan.opacity(0.3), lineWidth: 1)
+            )
+            .padding(6)
+        )
     }
 }
