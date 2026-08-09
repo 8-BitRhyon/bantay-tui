@@ -278,6 +278,9 @@ struct LogicCheckMain {
             AgentDetector.canonicalNameFromCommand("/usr/bin/claude-searchd") == nil,
             "AgentDetector ignores lookalike 'claude-searchd'")
         check(
+            AgentDetector.canonicalNameFromCommand("/usr/bin/herdr-fs-watch") == nil,
+            "AgentDetector ignores lookalike 'herdr-fs-watch' (separator before suffix)")
+        check(
             AgentDetector.canonicalNameFromCommand("node --run kilo") == "kilo",
             "AgentDetector still matches real kilo wrapper")
 

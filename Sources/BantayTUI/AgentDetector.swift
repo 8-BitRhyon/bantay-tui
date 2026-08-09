@@ -143,8 +143,13 @@ enum AgentDetector {
                     let range = Range(match.range, in: lower),
                     range.upperBound < lower.endIndex
                 {
+                    // Strip leading non-alphanumerics so a lookalike like
+                    // "herdr-fs-watch" leaves remainder "fs-watch" (not
+                    // "-fs-watch") and still matches the skip suffix.
                     let remainder = String(lower[range.upperBound...]).lowercased()
-                    if skipSuffixes.contains(where: { remainder.hasPrefix($0) }) {
+                    let stripped = remainder.trimmingCharacters(
+                        in: CharacterSet.alphanumerics.inverted)
+                    if skipSuffixes.contains(where: { stripped.hasPrefix($0) }) {
                         continue
                     }
                 }

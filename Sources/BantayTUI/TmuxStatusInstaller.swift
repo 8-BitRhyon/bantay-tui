@@ -22,7 +22,9 @@ enum TmuxStatusInstaller {
     }
 
     static func statusCommand(scriptPath: String) -> String {
-        "#(\(scriptPath))"
+        // Quote the path so Application Support paths with spaces survive
+        // tmux's `#()` shell interpolation.
+        "#(\"\(scriptPath)\")"
     }
 
     /// Wire bantay-status into tmux `status-right`. Returns nil on success,
