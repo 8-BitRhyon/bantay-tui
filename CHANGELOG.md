@@ -8,6 +8,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Live usage, cost & quota** (`KiloUsageAdapter`): reads kilo's SQLite
+  ledger (`~/.local/share/kilo/kilo.db` — the source behind `kilo stats`)
+  for real daily spend vs. your budget (quota badge + edge-glow) and a
+  tokens-per-minute rate via poll-and-diff of cumulative totals. A scalable
+  `UsageSample` provider protocol is the base for Codex/Claude/opencode/
+  aider adapters. Replaces the dead transcript parser for kilo.
+- **Apple Reminders sync** (`RemindersProvider`, EventKit): the task tab
+  can sync live Reminders — quick-add, complete, remove, overdue highlight.
+- **Barrie-style natural language parser** (`NaturalLanguageParser`): pure
+  + deterministic — relative dates (today/tomorrow/in N days/next week/
+  EOD/EOM), weekday names, times (at 5pm, 17:00, 9am), priority (!!/!),
+  @tags, @agents — with a live parse-preview chip as you type in the task
+  bar.
 - **herdr push event stream** (`HerdrEventStream`): a persistent
   `events.subscribe` socket subscription replaces the 2-second `agent.list`
   poll as the source of truth for status transitions. `pane.updated` /

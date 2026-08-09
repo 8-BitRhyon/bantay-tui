@@ -16,8 +16,11 @@ Agents run inside herdr, tmux, zellij, or a plain terminal — Bantay detects th
 - **Push notifications (ntfy.sh)** — approvals, failures, and completions pushed to your phone/other devices via a configurable topic.
 - **tmux status-bar integration** — optional one-line agent summary (`◐ working · ⚠ blocked`) inside tmux `status-right`.
 - **Universal agent detection** — herdr panes *plus* standalone Claude Code, Codex, Gemini, Cursor, and opencode processes (with latest-activity tailing from transcripts). No multiplexer required.
-- **Drop files onto the notch** — drag a file/photo over the notch to expand it, open the Shelf, and land the file there.
+- **Live usage, cost & quota** — a real ledger adapter reads kilo's SQLite database (`kilo.db` — the source behind `kilo stats`): daily spend vs. your budget drives the quota badge + edge-glow, and a tokens-per-minute badge polls cumulative totals for a live rate. A scalable `UsageSample` provider protocol extends to Codex, Claude, opencode, and aider.
+- **Drop files onto the notch** — drag a file/photo over the notch to expand it, open the Shelf, and land the file there. The shelf is a real NotchDrop-style surface: copies files into its own storage, persists across restarts, renders QuickLook thumbnails, has a retention policy, and glows on drop.
+- **Apple Reminders in the task tab** — one-tap sync with the Reminders app (EventKit): quick-add, complete, remove, overdue highlight — plus a Barrie-style **natural-language quick-add** ("take out trash before end of day @home" → date, priority, tags, agent parsed live with a preview chip).
 - **Workflow from anywhere** — global `⌥Space` to show/hide the island, `Y`/`N`/`1-9` roster shortcuts, edge-glow when agents need you, menu-bar badge with pending count, clipboard + file shelf, per-agent prompt composition.
+- **Approvals answerable from everywhere** — the island, macOS Notification Center actions (Approve/Deny/choice), the menu-bar roster submenu, and global `⌥Y`/`⌥N` — and opencode panes are answered through a decision-file channel the opencode plugin polls.
 - **Engineered for the hard cases** — approval heartbeat (no phantom prompts), full-screen & space transitions, menu-bar icon collision avoidance, display hot-swap re-anchoring, terminal-agnostic focus (Ghostty/Warp/WezTerm/Alacritty/iTerm2/VSCode).
 
 ## The island
@@ -44,6 +47,8 @@ Hover (or `⌥Space`) to expand the island into a control plane:
 - **Roster** — grouped by state (need-input → working → done → failed → idle, toggleable to flat); each row shows status dot, agent, the current `title`/`message` (what it's doing right now), elapsed time, and hover actions: Focus, Stop (Ctrl-C), and an eye to open the live log + diff overlay.
 - **Recent** — the last few completions/failures (source, what it was doing, when) so you can see what happened at a glance.
 - **Shelf tab** — drop files (or onto the notch itself) or copy text; both land on the shelf with open/copy-back actions.
+- **Tasks tab** — a Barrie-style task manager: natural-language quick-add with a live parse preview ("deploy by friday 5pm !! @work @claude" → date, priority, tags, agent), categorized Overdue/Today/Later/Completed sections, and optional **Apple Reminders sync** (EventKit) so your tasks are real Reminders you can edit from the notch.
+- **Usage in the header** — a live spend badge (`$X / $budget`) that turns amber ≥70% / red ≥100% (driving the island edge-glow) and a tokens-per-minute badge, both fed by the kilo ledger.
 
 ## Reliability engineering
 
@@ -95,11 +100,13 @@ swift build -c release
 bash scripts/setup.sh        # copies binary + installs launch agent (auto-start, keep-alive)
 ```
 
-`setup.sh` installs to `~/Library/Application Support/Bantay-TUI/bantay` with a `com.bantay-tui.agent` launch agent, and copies `scripts/bantay-status.sh` (tmux status-bar helper) beside it. Restart after a rebuild:
+`setup.sh` installs to `~/Library/Application Support/Bantay-TUI/` **as a proper `.app` bundle** (so notifications + EventKit Reminders work), with a `com.bantay-tui.agent` launch agent that runs the bundled binary, and copies `scripts/bantay-status.sh` (tmux status-bar helper) + `scripts/bantay-opencode.js` (opencode plugin) beside it. Restart after a rebuild:
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.bantay-tui.agent
 ```
+
+First-run prompts: **Notifications** (approval actions), and **Reminders** if you enable task sync. Both are optional and can be granted later in System Settings.
 
 Uninstall:
 
@@ -179,7 +186,7 @@ Stored in `UserDefaults` (domain `BantayTUI`). Most settings live in **Settings�
 
 | Key | Default | Meaning |
 |---|---|---|
-| `islandDockSide` | `right` | Idle strip placement: right / left / center |
+| `islandDockSide` | `center` | Idle strip placement: right / left / center |
 | `idleStyle` | `names` | Idle strip style: `names` / `dots` / `summary` |
 | `idleMaxChips` | `3` | Max agent chips before `+N` (1–6) |
 | `expandedGroupByState` | `true` | Group roster by state (else flat) |
@@ -189,10 +196,16 @@ Stored in `UserDefaults` (domain `BantayTUI`). Most settings live in **Settings�
 | `showElapsedTime` | `true` | Elapsed timer on working agents |
 | `menuBarBadge` | `true` | Amber dot + pending count in the tray |
 | `showShelfTab` / `shelfLimit` | `true` / `20` | Shelf tab + history cap (1–50) |
+| `shelfKeepDuration` | `1 Day` | Shelf retention: 1 Hour / 1 Day / 3 Days / 1 Week / Forever |
+| `showTasksTab` | `true` | Task manager tab (Barrie-style) |
 | `followMouseScreen` / `floatingPillOnNoNotch` | `true` / `true` | Multi-monitor placement + floating pill on external displays |
 | `showInFullScreen` | `true` | Keep island visible over full-screen apps |
 | `avoidMenuBarIcons` | `true` | Clamp idle strip to menu-bar clear space |
 | `standaloneScanEnabled` | `true` | Detect agents outside any multiplexer |
+| `usageTrackingEnabled` | `true` | Read agent ledgers (kilo SQLite) for spend/tpm |
+| `dailyBudgetUSD` / `enableSpendGlow` | `10.0` / `true` | Daily spend budget + edge-glow on ratio |
+| `showTokenRate` | `true` | Tokens-per-minute badge in the header |
+| `soundThemePreset` | `Sleek Modern` | Sound theme (approval/completion/error/working) |
 | `ntfyTopic` / `ntfyServer` | `""` / `https://ntfy.sh` | Push notifications for approvals/failures/completions (empty = off) |
 | `tmuxStatusEnabled` | `false` | Add `#(bantay-status)` to tmux `status-right` |
 | `ingestEnabled` / `ingestPort` | `false` / `41817` | Remote event ingest over SSH (off by default) |
