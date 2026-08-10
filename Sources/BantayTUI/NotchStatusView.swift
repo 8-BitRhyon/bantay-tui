@@ -2170,22 +2170,7 @@ struct NotchStatusView: View {
         .frame(height: rowHeight(for: agent))
         .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
-        // `.contain` (not `.combine`) keeps the inline Approve/Deny/choice
-        // buttons individually reachable by VoiceOver — a screen-reader user
-        // must be able to act on approvals from the roster.
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(agent.source), \(agent.kind.label)")
-        .accessibilityValue(agent.title ?? agent.message ?? "")
-        .accessibilityAction(named: "Approve") {
-            if let paneId = agent.paneId, agent.kind == .accessRequest || agent.kind == .waiting {
-                eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
-            }
-        }
-        .accessibilityAction(named: "Deny") {
-            if let paneId = agent.paneId, agent.kind == .accessRequest || agent.kind == .waiting {
-                eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
-            }
-        }
+        .modifier(AgentRowAccessibility(agent: agent))
         .onHover { hovering in hoveredRow = hovering ? agent.id : nil }
         .contextMenu {
             if let paneId = agent.paneId {
@@ -2524,5 +2509,39 @@ private struct PulsingDotModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// Row accessibility in its own modifier so the (already heavy) agentRow
+/// expression stays under the compiler's type-check budget.
+private struct AgentRowAccessibility: ViewModifier {
+    let agent: AgentSnapshot
+
+    func body(content: Content) -> some View {
+        content
+            // `.contain` (not `.combine`) keeps the inline Approve/Deny/choice
+            // buttons individually reachable by VoiceOver — a screen-reader
+            // user must be able to act on approvals from the roster.
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("\(agent.source), \(agent.kind.label)")
+            .accessibilityValue(agent.title ?? agent.message ?? "")
+            .accessibilityAction(named: "Approve") {
+                if let paneId = agent.paneId,
+                    agent.kind == .accessRequest || agent.kind == .waiting
+                {
+                    AgentEventManager.shared.performAction(paneId: paneId) {
+                        $0.approve(paneId: paneId)
+                    }
+                }
+            }
+            .accessibilityAction(named: "Deny") {
+                if let paneId = agent.paneId,
+                    agent.kind == .accessRequest || agent.kind == .waiting
+                {
+                    AgentEventManager.shared.performAction(paneId: paneId) {
+                        $0.deny(paneId: paneId)
+                    }
+                }
+            }
     }
 }
