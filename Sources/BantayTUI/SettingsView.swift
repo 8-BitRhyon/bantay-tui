@@ -56,6 +56,9 @@ struct SettingsView: View {
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
     @State private var showNotchMascot = NotchHUDConfig.shared.showNotchMascot
     @State private var selectedMascotArchetype = NotchHUDConfig.shared.selectedMascotArchetype
+    @State private var equippedAccessory = NotchHUDConfig.shared.equippedAccessory
+    @State private var mascotXP = NotchHUDConfig.shared.mascotXP
+    @State private var mascotLevel = NotchHUDConfig.shared.mascotLevel
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
     @State private var showShelf = NotchHUDConfig.shared.showShelfTab
@@ -408,11 +411,11 @@ struct SettingsView: View {
                             } else {
                                 let error = OpenCodePluginInstaller.remove() ?? ""
                                 opencodePluginError = error
-                                // Only show off if the removal actually happened.
-                                opencodePluginInstalled =
-                                    error.isEmpty
-                                    ? false
-                                    : OpenCodePluginInstaller.isInstalled()
+                                if error.isEmpty {
+                                    opencodePluginInstalled = false
+                                } else {
+                                    opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
+                                }
                             }
                         }
                     if !opencodePluginError.isEmpty {
@@ -512,6 +515,8 @@ struct SettingsView: View {
                     }
                     Picker("Sound Theme Preset", selection: $soundThemePreset) {
                         Text("Sleek Modern (Default)").tag("Sleek Modern")
+                        Text("8-Bit Arcade 🕹️").tag("8-Bit Arcade")
+                        Text("Sci-Fi Synth 🚀").tag("Sci-Fi Synth")
                         Text("Retro Synth").tag("Retro Synth")
                         Text("Minimalist").tag("Minimalist")
                         Text("Industrial Alert").tag("Industrial")
@@ -638,7 +643,9 @@ struct SettingsView: View {
                     #endif
                 }
             }
+        }
 
+        Group {
             if selectedCategory == .notifications && matchesSearch("Push notifications (ntfy.sh)") {
                 Section("Push notifications (ntfy.sh)") {
                     TextField("Topic", text: $ntfyTopic)
@@ -758,8 +765,40 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.selectedMascotArchetype = newValue
                     }
 
+                    Picker("Equipped Accessory", selection: $equippedAccessory) {
+                        ForEach(MascotAccessory.allCases) { acc in
+                            let locked = mascotLevel < acc.requiredLevel
+                            Text(
+                                locked
+                                    ? "\(acc.displayName) (Requires Lv. \(acc.requiredLevel))"
+                                    : acc.displayName
+                            )
+                            .tag(acc)
+                        }
+                    }
+                    .disabled(!showNotchMascot)
+                    .onChange(of: equippedAccessory) { newValue in
+                        if mascotLevel >= newValue.requiredLevel {
+                            NotchHUDConfig.shared.equippedAccessory = newValue
+                        } else {
+                            equippedAccessory = NotchHUDConfig.shared.equippedAccessory
+                        }
+                    }
+
                     if showNotchMascot {
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Pet Level \(mascotLevel)")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.yellow)
+                                Spacer()
+                                Text("\(mascotXP % 100) / 100 XP (Total: \(mascotXP) XP)")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                            ProgressView(value: Double(mascotXP % 100), total: 100)
+                                .tint(.yellow)
+
                             Text(selectedMascotArchetype.description)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -772,7 +811,15 @@ struct SettingsView: View {
                                             size: 20)
                                         Text(state.statusText)
                                             .font(.system(size: 9, weight: .semibold))
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(.primary)
+                                        Text(
+                                            "“\(selectedMascotArchetype.personalityQuote(for: state))”"
+                                        )
+                                        .font(.system(size: 8))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.center)
+                                        .frame(width: 80, height: 24)
                                     }
                                     .padding(6)
                                     .background(

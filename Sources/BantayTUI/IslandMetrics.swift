@@ -64,7 +64,7 @@ public enum IslandMetrics: Sendable {
     /// Max agents shown as chips in the idle strip before `+N`.
     public static let idleDefaultMaxChips: Int = 3
     /// Horizontal padding inside a chip.
-    public static let idleChipHPad: CGFloat = 10
+    public static let idleChipHPad: CGFloat = 6
     /// Gap between the severiy dot and the chip label.
     public static let idleChipDotGap: CGFloat = 5
     /// Gap between adjacent chips in a strip.
@@ -606,13 +606,15 @@ public enum IslandMetrics: Sendable {
     }
 
     /// Whether an approval event needs a Notification Center fallback:
-    /// the feature is on, the island is NOT showing the event, and the kind
-    /// is one a user must act on. Progress/completion noise never notifies.
+    /// the feature is on, and either the island is NOT showing the event or
+    /// the display is locked (the user can't see the notch). Progress/
+    /// completion noise never notifies.
     static func shouldPostNotification(
-        islandVisible: Bool, notifyWhenHidden: Bool, kind: AgentEventKind
+        islandVisible: Bool, notifyWhenHidden: Bool, displayLocked: Bool,
+        kind: AgentEventKind
     ) -> Bool {
-        guard notifyWhenHidden, !islandVisible else { return false }
-        return kind == .accessRequest || kind == .waiting
+        guard notifyWhenHidden, kind == .accessRequest || kind == .waiting else { return false }
+        return !islandVisible || displayLocked
     }
 
     /// F8 "attention only" triage filter: keeps needs-input (blocked) and

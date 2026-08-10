@@ -173,6 +173,11 @@ final class AgentEventManager: ObservableObject {
     private var fileSource: DispatchSourceFileSystemObject?
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
+    private var lockObserver: NSObjectProtocol?
+    private var unlockObserver: NSObjectProtocol?
+    /// True while the display is locked (an approval arriving now must reach
+    /// the user via Notification Center — the island can't be seen).
+    private(set) var displayLocked = false
     private let eventStream = HerdrEventStream()
     private(set) var isActive = false
     private var displayAsleep = false
@@ -242,6 +247,26 @@ final class AgentEventManager: ObservableObject {
                 self?.displayAsleep = false
             }
         }
+        // Lock state: the distributed notifications are the macOS 13-safe
+        // signal (NSWorkspace.didLockNotification is newer-SDK only). A
+        // locked display means approvals must go to Notification Center.
+        let distCenter = DistributedNotificationCenter.default()
+        lockObserver = distCenter.addObserver(
+            forName: NSNotification.Name("com.apple.screenIsLocked"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.displayLocked = true
+            }
+        }
+        unlockObserver = distCenter.addObserver(
+            forName: NSNotification.Name("com.apple.screenIsUnlocked"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.displayLocked = false
+            }
+        }
         start()
         startCapture()
     }
@@ -273,6 +298,12 @@ final class AgentEventManager: ObservableObject {
         }
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        if let lockObserver {
+            DistributedNotificationCenter.default().removeObserver(lockObserver)
+        }
+        if let unlockObserver {
+            DistributedNotificationCenter.default().removeObserver(unlockObserver)
         }
     }
 
@@ -416,6 +447,9 @@ final class AgentEventManager: ObservableObject {
         if event.kind == .completed || event.kind == .failed {
             if let start = startedAtByPane[key] {
                 completionDuration = event.createdAt.timeIntervalSince(start)
+            }
+            if event.kind == .completed {
+                NotchHUDConfig.shared.addMascotXP(25)
             }
         }
 

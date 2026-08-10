@@ -23,16 +23,25 @@ public final class RemindersProvider: ObservableObject {
     // from a @MainActor class. All real accesses stay on the main actor.
     nonisolated(unsafe) private let store = EKEventStore()
 
-    private init() {}
+    private init() {
+        checkAuthorizationStatus()
+    }
+
+    /// Check system authorization status and cache default calendar list.
+    public func checkAuthorizationStatus() {
+        let auth = isAuthorized
+        authorized = auth
+        if auth {
+            defaultList = store.defaultCalendarForNewReminders()
+        }
+    }
 
     /// Whether Reminders access is already granted (macOS 13-safe; the 14+
     /// `.fullAccess` enum case is mapped to authorized here).
-    private var isAuthorized: Bool {
+    public var isAuthorized: Bool {
         let status = EKEventStore.authorizationStatus(for: .reminder)
         switch status {
-        case .authorized:
-            return true
-        case .fullAccess:
+        case .authorized, .fullAccess:
             return true
         default:
             return false
@@ -53,8 +62,14 @@ public final class RemindersProvider: ObservableObject {
     }
 
     /// Ensure we have access, requesting if needed.
-    private func ensureAccess() async -> Bool {
-        if authorized || isAuthorized { return true }
+    public func ensureAccess() async -> Bool {
+        if isAuthorized {
+            authorized = true
+            if defaultList == nil {
+                defaultList = store.defaultCalendarForNewReminders()
+            }
+            return true
+        }
         return await requestAccess()
     }
 

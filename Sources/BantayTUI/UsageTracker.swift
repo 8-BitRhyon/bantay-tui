@@ -10,6 +10,7 @@ struct UsageSnapshot: Equatable, Sendable {
     var cacheReadTokens: Int = 0
     var cacheWriteTokens: Int = 0
     var costUSD: Double = 0
+    var costBySource: [String: Double] = [:]
 
     /// Legacy alias for the cache-write bucket (transcript parsers use
     /// "cache creation" terminology).
@@ -155,6 +156,9 @@ enum UsageTracker {
             total.cacheReadTokens += part.cacheReadTokens
             total.cacheCreationTokens += part.cacheCreationTokens
             total.costUSD += part.costUSD
+            for (source, cost) in part.costBySource {
+                total.costBySource[source, default: 0] += cost
+            }
         }
     }
 
