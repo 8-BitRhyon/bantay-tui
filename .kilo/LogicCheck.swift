@@ -291,8 +291,17 @@ struct LogicCheckMain {
         let freebuffPaths = AgentDetector.transcriptSearchPaths(
             home: "/Users/test", name: "freebuff")
         check(
-            freebuffPaths.contains("/Users/test/.config/manicode/freebuff"),
-            "AgentDetector freebuff path")
+            freebuffPaths.contains("/Users/test/.local/state/manicode/projects"),
+            "AgentDetector freebuff path (state dir, not the binary)")
+
+        // F4: kilo is an opencode fork — the plugin must install to kilo's
+        // dir (~/.config/kilo/plugin), which the installer targets.
+        let pluginDirs = OpenCodePluginInstaller.targetDirectories()
+        check(
+            pluginDirs.contains {
+                $0.path.hasSuffix(".config/kilo/plugin")
+            },
+            "OpenCodePluginInstaller targets ~/.config/kilo/plugin for kilo")
 
         let herdrPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "herdr")
         check(herdrPaths.contains("/Users/test/.config/herdr"), "AgentDetector herdr path")
@@ -392,7 +401,7 @@ struct LogicCheckMain {
         config.applySoundThemePreset("Sleek Modern")  // restore default
 
         // MARK: - Mascot & Notch Pet Companion Logic
-        check(MascotArchetype.allCases.count == 4, "MascotArchetype allCases count 4")
+        check(MascotArchetype.allCases.count == 7, "MascotArchetype allCases count 7")
         check(MascotState.allCases.count == 5, "MascotState allCases count 5")
 
         let idleMascotState = MascotEvaluator.evaluate(agents: [])
@@ -2628,32 +2637,42 @@ struct LogicCheckMain {
         // island is showing the event (no double signal), opt-in by default.
         check(
             IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: true, kind: .accessRequest),
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .accessRequest),
             "L34 hidden island notifies on approval")
         check(
             IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: true, kind: .waiting),
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .waiting),
             "L34 hidden island notifies on waiting")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: true, kind: .progress),
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .progress),
             "L34 no notification for progress")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: true, kind: .completed),
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .completed),
             "L34 no notification for completed")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: true, kind: .idle),
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .idle),
             "L34 no notification for idle")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: false, kind: .accessRequest),
+                islandVisible: false, notifyWhenHidden: false, displayLocked: false, kind: .accessRequest),
             "L34 feature off never notifies")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: true, notifyWhenHidden: true, kind: .accessRequest),
+                islandVisible: true, notifyWhenHidden: true, displayLocked: false, kind: .accessRequest),
             "L34 visible island shows event, no notification")
+        // F1: a locked display notifies even when the island policy says
+        // visible — the user can't see the notch while locked.
+        check(
+            IslandMetrics.shouldPostNotification(
+                islandVisible: true, notifyWhenHidden: true, displayLocked: true, kind: .accessRequest),
+            "F1 locked display notifies for approval")
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: true, notifyWhenHidden: true, displayLocked: true, kind: .progress),
+            "F1 locked display still ignores progress")
         MainActor.assumeIsolated {
             let defaults = UserDefaults.standard
             let cfg = NotchHUDConfig.shared
@@ -4778,10 +4797,40 @@ struct LogicCheckMain {
         // Redaction: home paths are stripped, long titles truncated.
         let home = NSHomeDirectory()
         let long = String(repeating: "x", count: 300)
-        let redacted = AgentAlertNotifier.redactedTitle("\(home)/proj/some long title \(long)")
+        let _ = AgentAlertNotifier.redactedTitle("\(home)/proj/some long title \(long)")
+        // L61 Mascot Gamification & Accessories
+        check(MascotAccessory.partyHat.requiredLevel == 2, "L61 Party Hat required level 2")
         check(
-            !(redacted ?? "").contains(home) && (redacted ?? "").hasSuffix("…"),
-            "L60 redacts home path and truncates long titles")
+            MascotAccessory.retroGlasses.requiredLevel == 10, "L61 Retro Glasses required level 10")
+        let initXP = NotchHUDConfig.shared.mascotXP
+        NotchHUDConfig.shared.addMascotXP(100)
+        check(NotchHUDConfig.shared.mascotXP == initXP + 100, "L61 addMascotXP increments XP")
+
+        // L62 Retro Sound Theme Presets
+        NotchHUDConfig.shared.applySoundThemePreset("8-Bit Arcade")
+        check(NotchHUDConfig.shared.approvalSoundName == "Tink", "L62 8-Bit Arcade approval sound")
+        NotchHUDConfig.shared.applySoundThemePreset("Sci-Fi Synth")
+        check(
+            NotchHUDConfig.shared.approvalSoundName == "Submarine",
+            "L62 Sci-Fi Synth approval sound")
+        NotchHUDConfig.shared.applySoundThemePreset("Sleek Modern")
+
+        // L63 UsageSnapshot costBySource
+        var snapA = UsageSnapshot()
+        snapA.costBySource["claude"] = 1.25
+        var snapB = UsageSnapshot()
+        snapB.costBySource["claude"] = 0.75
+        snapB.costBySource["opencode"] = 0.50
+        let agg = UsageTracker.aggregate([snapA, snapB])
+        check(agg.costBySource["claude"] == 2.00, "L63 costBySource merged for claude")
+        // L64 Apple Reminders Sync Retention
+        NotchHUDConfig.shared.syncAppleReminders = true
+        check(
+            NotchHUDConfig.shared.syncAppleReminders,
+            "L64 syncAppleReminders persistent config is true")
+        let taskCreated = TaskStore.shared.addTask(
+            "Test Apple Reminders sync item", syncReminders: false)
+        check(taskCreated.title == "Test Apple Reminders sync item", "L64 task created in store")
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

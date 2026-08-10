@@ -1,5 +1,12 @@
 import Foundation
 
+extension Notification.Name {
+    static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
+    static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
+    static let settingsWillOpen = Notification.Name("settingsWillOpen")
+    static let mascotLeveledUp = Notification.Name("mascotLeveledUp")
+}
+
 @MainActor
 final class NotchHUDConfig {
     static let shared = NotchHUDConfig()
@@ -30,8 +37,9 @@ final class NotchHUDConfig {
         didSet { defaults.set(muteInTerminal, forKey: "muteInTerminal") }
     }
     /// Post a Notification Center alert when an approval arrives while the
-    /// island is hidden (snoozed / hide-at-startup). Opt-in; default off.
-    var notifyWhenHidden = false {
+    /// island is hidden (snoozed / hide-at-startup) OR the display is locked.
+    /// Default ON — the core promise is "never miss an approval."
+    var notifyWhenHidden = true {
         didSet { defaults.set(notifyWhenHidden, forKey: "notifyWhenHidden") }
     }
     /// ntfy.sh push notification topic (e.g. "bantay-agent-alerts"). When set
@@ -75,9 +83,34 @@ final class NotchHUDConfig {
     var selectedMascotArchetype: MascotArchetype = .bantayDog {
         didSet { defaults.set(selectedMascotArchetype.rawValue, forKey: "selectedMascotArchetype") }
     }
+    /// Persistent mascot XP accumulated by completing agent tasks (+25 per completion).
+    var mascotXP: Int = 0 {
+        didSet { defaults.set(mascotXP, forKey: "mascotXP") }
+    }
+    /// Persistent mascot pet level (calculated from XP).
+    var mascotLevel: Int = 1 {
+        didSet { defaults.set(mascotLevel, forKey: "mascotLevel") }
+    }
+    /// Wearable accessory equipped on the mascot pet.
+    var equippedAccessory: MascotAccessory = .none {
+        didSet { defaults.set(equippedAccessory.rawValue, forKey: "equippedAccessory") }
+    }
+    /// Award XP to mascot pet and trigger level up if threshold is passed.
+    public func addMascotXP(_ amount: Int) {
+        mascotXP += amount
+        let newLevel = (mascotXP / 100) + 1
+        if newLevel > mascotLevel {
+            mascotLevel = newLevel
+            NotificationCenter.default.post(name: .mascotLeveledUp, object: nil)
+        }
+    }
     /// Shows the Barrie-style Tasks tab in the expanded island.
     var showTasksTab: Bool = true {
         didSet { defaults.set(showTasksTab, forKey: "showTasksTab") }
+    }
+    /// Persistent two-way sync toggle for Apple Reminders.
+    var syncAppleReminders: Bool = true {
+        didSet { defaults.set(syncAppleReminders, forKey: "syncAppleReminders") }
     }
     /// Enables live quota-axi provider quota gauge in header bar.
     var enableQuotaAxiGauge: Bool = true {
@@ -154,6 +187,16 @@ final class NotchHUDConfig {
             approvalSoundName = "Blow"
             completionSoundName = "Funk"
             errorSoundName = "Sosumi"
+            workingSoundName = "Bottle"
+        case "8-Bit Arcade":
+            approvalSoundName = "Tink"
+            completionSoundName = "Pop"
+            errorSoundName = "Sosumi"
+            workingSoundName = "Frog"
+        case "Sci-Fi Synth":
+            approvalSoundName = "Submarine"
+            completionSoundName = "Hero"
+            errorSoundName = "Morse"
             workingSoundName = "Bottle"
         default:
             break
@@ -435,8 +478,22 @@ final class NotchHUDConfig {
         {
             selectedMascotArchetype = archetype
         }
+        if let v = defaults.object(forKey: "mascotXP") as? Int {
+            mascotXP = v
+        }
+        if let v = defaults.object(forKey: "mascotLevel") as? Int {
+            mascotLevel = v
+        }
+        if let v = defaults.string(forKey: "equippedAccessory"),
+            let acc = MascotAccessory(rawValue: v)
+        {
+            equippedAccessory = acc
+        }
         if let v = defaults.object(forKey: "showTasksTab") as? Bool {
             showTasksTab = v
+        }
+        if let v = defaults.object(forKey: "syncAppleReminders") as? Bool {
+            syncAppleReminders = v
         }
         if let v = defaults.object(forKey: "enableQuotaAxiGauge") as? Bool {
             enableQuotaAxiGauge = v

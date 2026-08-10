@@ -1,12 +1,6 @@
 import AppKit
 import SwiftUI
 
-extension Notification.Name {
-    static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
-    static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
-    static let settingsWillOpen = Notification.Name("settingsWillOpen")
-}
-
 @main
 struct DynamicIslandApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate

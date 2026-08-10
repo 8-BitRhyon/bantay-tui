@@ -11,6 +11,7 @@ struct NotchStatusView: View {
     @State private var opacity: Double = 0
     @State private var showDetail = false
     @State private var hoveredRow: String?
+    @State private var showThoughtBubble = false
     @State private var composingPaneId: String?
     @State private var promptText = ""
     @State private var pulse = false
@@ -1517,18 +1518,23 @@ struct NotchStatusView: View {
         let budget = max(NotchHUDConfig.shared.dailyBudgetUSD, 0.5)
         let ratio = cost / budget
         let formattedCost = String(format: "$%.2f", cost)
-        let formattedBudget = String(format: "$%.2f", budget)
+        let formattedBudget =
+            budget >= 10 && budget.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "$%.0f", budget)
+            : String(format: "$%.2f", budget)
         let color: Color = ratio >= 1.0 ? .red : (ratio >= 0.7 ? .orange : .cyan)
-        return HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 5, height: 5)
-            Text("\(formattedCost) / \(formattedBudget)")
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+        return HStack(spacing: 3) {
+            Circle().fill(color).frame(width: 4, height: 4)
+            Text("\(formattedCost)/\(formattedBudget)")
+                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
                 .monospacedDigit()
                 .foregroundColor(color)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
         .background(color.opacity(0.12), in: Capsule())
+        .fixedSize(horizontal: true, vertical: true)
         .help("Daily AI Spend: \(formattedCost) of \(formattedBudget) limit")
     }
 
@@ -1539,22 +1545,32 @@ struct NotchStatusView: View {
         let tpm = Int(eventManager.usageRate.tokensPerMinute ?? 0)
         let rateText: String = {
             if tpm >= 1000 {
-                return String(format: "⚡ %.1fk t/m", Double(tpm) / 1000.0)
+                return String(format: "⚡%.1fk/m", Double(tpm) / 1000.0)
             } else {
-                return "⚡ \(tpm) t/m"
+                return "⚡\(tpm)/m"
             }
         }()
-        return HStack(spacing: 3) {
+        return HStack(spacing: 2) {
             Text(rateText)
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
                 .monospacedDigit()
                 .foregroundColor(.cyan)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
         .background(Color.cyan.opacity(0.12), in: Capsule())
+        .fixedSize(horizontal: true, vertical: true)
         .help("Live token processing rate over the last minute")
         .accessibilityLabel("Token rate \(tpm) tokens per minute")
+    }
+
+    /// True when a real usage/cost source is live (kilo's SQLite ledger is
+    /// the only one the app reads for real numbers today). Gates badges that
+    /// would otherwise show fabricated zeros/percentages.
+    private var hasUsageData: Bool {
+        KiloUsageAdapter.detect() || eventManager.usage.totalTokens > 0
+            || (eventManager.usageRate.tokensPerMinute ?? 0) > 0
     }
 
     private var quotaAxiBadge: some View {
@@ -1569,15 +1585,17 @@ struct NotchStatusView: View {
         let color: Color = percentInt <= 20 ? .red : (percentInt <= 50 ? .orange : .green)
 
         return HStack(spacing: 3) {
-            Circle().fill(color).frame(width: 5, height: 5)
-            Text("Quota \(percentInt)%")
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+            Circle().fill(color).frame(width: 4, height: 4)
+            Text("Q:\(percentInt)%")
+                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
                 .monospacedDigit()
                 .foregroundColor(color)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
         .background(color.opacity(0.12), in: Capsule())
+        .fixedSize(horizontal: true, vertical: true)
         .help("Live Provider Quota: \(minQuota?.provider ?? "AI") \(percentInt)% remaining")
         .accessibilityLabel("Quota remaining \(percentInt) percent")
     }
@@ -1591,31 +1609,67 @@ struct NotchStatusView: View {
     }
 
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             if NotchHUDConfig.shared.showNotchMascot {
-                MascotView(
-                    archetype: NotchHUDConfig.shared.selectedMascotArchetype,
-                    state: currentMascotState,
-                    size: 16
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                        showThoughtBubble.toggle()
+                    }
+                } label: {
+                    MascotView(
+                        archetype: NotchHUDConfig.shared.selectedMascotArchetype,
+                        state: currentMascotState,
+                        size: 15
+                    )
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showThoughtBubble, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 4) {
+                            Text(NotchHUDConfig.shared.selectedMascotArchetype.displayName)
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.yellow)
+                            Spacer(minLength: 0)
+                            Text("Lv.\(NotchHUDConfig.shared.mascotLevel)")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        Text(
+                            "“\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: currentMascotState))”"
+                        )
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundColor(.white)
+                        .lineLimit(3)
+                    }
+                    .padding(8)
+                    .frame(width: 190)
+                    .background(Color.black.opacity(0.9))
+                }
+                .help(
+                    "\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): “\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: currentMascotState))”"
                 )
-                .help("Mascot status: \(currentMascotState.statusText)")
-                .accessibilityLabel("Mascot status: \(currentMascotState.statusText)")
+                .accessibilityLabel(
+                    "\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): \(currentMascotState.statusText)"
+                )
             }
             if counts.needsInput > 0 {
                 Text("\(counts.needsInput) need you")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .lineLimit(1)
                     .monospacedDigit()
                     .foregroundColor(.yellow)
             }
             if counts.working > 0 {
                 Text("\(counts.working) working")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .lineLimit(1)
                     .monospacedDigit()
                     .foregroundColor(.white)
             }
             if counts.needsInput == 0 && counts.working == 0 {
                 Text("Agents")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .lineLimit(1)
                     .foregroundColor(.white)
             }
             if NotchHUDConfig.shared.enableSpendGlow {
@@ -1624,17 +1678,19 @@ struct NotchStatusView: View {
             if NotchHUDConfig.shared.showTokenRate {
                 tokenRateBadge
             }
-            if NotchHUDConfig.shared.enableQuotaAxiGauge {
+            // Quota badge only when a real usage source exists — a synthetic
+            // "Q:100%" from fallbackQuotas with no ledger is a lie.
+            if NotchHUDConfig.shared.enableQuotaAxiGauge, hasUsageData {
                 quotaAxiBadge
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
             if let title = eventManager.currentEvent?.title {
                 Text(title)
-                    .font(.system(size: 9, weight: .regular))
+                    .font(.system(size: 8.5, weight: .regular))
                     .foregroundColor(.white.opacity(0.6))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: 200, alignment: .trailing)
+                    .frame(maxWidth: 140, alignment: .trailing)
             }
             Button {
                 if NotchHUDConfig.shared.panelPinned {
@@ -1649,7 +1705,7 @@ struct NotchStatusView: View {
                 Image(systemName: panelPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(panelPinned ? .white : .white.opacity(0.5))
-                    .frame(width: 24, height: 24)
+                    .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }
             .buttonStyle(ScalePressButtonStyle())
@@ -1663,14 +1719,14 @@ struct NotchStatusView: View {
                 Image(systemName: "gearshape")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.5))
-                    .frame(width: 24, height: 24)
+                    .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }
             .buttonStyle(ScalePressButtonStyle())
             .help("Open Settings")
             .accessibilityLabel("Open Settings")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .frame(height: IslandMetrics.headerHeight)
     }
 
@@ -2114,9 +2170,22 @@ struct NotchStatusView: View {
         .frame(height: rowHeight(for: agent))
         .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        // `.contain` (not `.combine`) keeps the inline Approve/Deny/choice
+        // buttons individually reachable by VoiceOver — a screen-reader user
+        // must be able to act on approvals from the roster.
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(agent.source), \(agent.kind.label)")
         .accessibilityValue(agent.title ?? agent.message ?? "")
+        .accessibilityAction(named: "Approve") {
+            if let paneId = agent.paneId, agent.kind == .accessRequest || agent.kind == .waiting {
+                eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+            }
+        }
+        .accessibilityAction(named: "Deny") {
+            if let paneId = agent.paneId, agent.kind == .accessRequest || agent.kind == .waiting {
+                eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+            }
+        }
         .onHover { hovering in hoveredRow = hovering ? agent.id : nil }
         .contextMenu {
             if let paneId = agent.paneId {
@@ -2309,6 +2378,7 @@ struct NotchStatusView: View {
             if IslandMetrics.shouldPostNotification(
                 islandVisible: islandVisible,
                 notifyWhenHidden: config.notifyWhenHidden,
+                displayLocked: eventManager.displayLocked,
                 kind: event.kind)
             {
                 ApprovalNotificationController.shared.postApproval(

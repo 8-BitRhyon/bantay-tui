@@ -45,8 +45,11 @@ enum AgentDetector {
             ]
         case "freebuff":
             return [
-                homePath + "/.config/manicode/freebuff",
-                homePath + "/.config/manicode",
+                // Real freebuff activity lives in per-project JSONL logs under
+                // the state dir — NOT ~/.config/manicode/freebuff (that path
+                // is the binary itself).
+                homePath + "/.local/state/manicode/projects",
+                homePath + "/.local/state/manicode",
             ]
         case "herdr":
             return [

@@ -8,7 +8,7 @@ public struct TaskWidgetView: View {
     @State private var searchText = ""
     @State private var newTaskTitle = ""
     @State private var hoveredTaskID: UUID?
-    @State private var remindersEnabled = false
+    @State private var remindersEnabled = NotchHUDConfig.shared.syncAppleReminders
     @State private var reminderAddText = ""
 
     public init() {}
@@ -87,6 +87,14 @@ public struct TaskWidgetView: View {
             }
             .scrollIndicators(.hidden)
         }
+        .onAppear {
+            reminders.checkAuthorizationStatus()
+            if remindersEnabled || NotchHUDConfig.shared.syncAppleReminders {
+                Task {
+                    await reminders.refresh()
+                }
+            }
+        }
     }
 
     private var emptyStateView: some View {
@@ -124,6 +132,7 @@ public struct TaskWidgetView: View {
                 }
                 Button {
                     remindersEnabled.toggle()
+                    NotchHUDConfig.shared.syncAppleReminders = remindersEnabled
                     if remindersEnabled {
                         Task { await reminders.refresh() }
                     }
@@ -138,7 +147,7 @@ public struct TaskWidgetView: View {
             }
 
             if remindersEnabled {
-                if !reminders.authorized {
+                if !reminders.authorized && !reminders.isAuthorized {
                     HStack(spacing: 8) {
                         Text("Allow Reminders access in System Settings to sync.")
                             .font(.system(size: 9.5))

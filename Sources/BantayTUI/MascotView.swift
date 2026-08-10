@@ -26,6 +26,9 @@ public struct MascotView: View {
                 )
                 .offset(y: (state == .working || state == .needsAttention) && animate ? -1.5 : 0)
 
+            // Wearable accessory overlay
+            accessoryOverlay
+
             // State specific badges / overlays
             overlayBadge
         }
@@ -62,6 +65,24 @@ public struct MascotView: View {
             Image(systemName: state == .idle ? "cat" : "cat.fill")
         case .roboBuddy:
             Image(systemName: state == .working ? "cpu.fill" : "gearshape.fill")
+        case .codeWizard:
+            Image(systemName: state == .working ? "wand.and.stars" : "sparkles")
+        case .coffeeDev:
+            Image(systemName: state == .working ? "cup.and.saucer.fill" : "mug.fill")
+        case .gitDragon:
+            Image(systemName: state == .working ? "flame.fill" : "lizard.fill")
+        }
+    }
+
+    @ViewBuilder
+    private var accessoryOverlay: some View {
+        let acc = NotchHUDConfig.shared.equippedAccessory
+        if acc != .none {
+            Image(systemName: acc.iconName)
+                .font(.system(size: max(6, size * 0.45), weight: .bold))
+                .foregroundColor(.yellow)
+                .offset(x: -size * 0.35, y: -size * 0.45)
+                .shadow(color: .black.opacity(0.5), radius: 1)
         }
     }
 

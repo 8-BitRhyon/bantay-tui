@@ -79,7 +79,9 @@ public final class TaskStore: ObservableObject {
 
     /// Adds a new task, using natural language tag/agent/priority parsing if needed.
     @discardableResult
-    public func addTask(_ rawTitle: String, dueDate: Date? = nil) -> BantayTask {
+    public func addTask(_ rawTitle: String, dueDate: Date? = nil, syncReminders: Bool = true)
+        -> BantayTask
+    {
         let parsed = TaskStore.parseNaturalLanguage(rawTitle)
         let finalDueDate = dueDate ?? parsed.dueDate
         let task = BantayTask(
@@ -91,6 +93,16 @@ public final class TaskStore: ObservableObject {
         )
         tasks.insert(task, at: 0)
         save()
+
+        if syncReminders && NotchHUDConfig.shared.syncAppleReminders
+            && RemindersProvider.shared.isAuthorized
+        {
+            let taskTitle = task.title
+            let taskDue = task.dueDate
+            Task {
+                await RemindersProvider.shared.add(title: taskTitle, due: taskDue)
+            }
+        }
         return task
     }
 
@@ -102,10 +114,36 @@ public final class TaskStore: ObservableObject {
         task.completedAt = task.isCompleted ? Date() : nil
         tasks[index] = task
         save()
+
+        if NotchHUDConfig.shared.syncAppleReminders && RemindersProvider.shared.isAuthorized {
+            let targetTitle = task.title
+            let isDone = task.isCompleted
+            Task {
+                if let matching = RemindersProvider.shared.reminders.first(where: {
+                    $0.title == targetTitle
+                }) {
+                    if isDone {
+                        await RemindersProvider.shared.complete(matching)
+                    }
+                }
+            }
+        }
     }
 
     /// Removes a task.
     public func removeTask(_ taskID: UUID) {
+        if let target = tasks.first(where: { $0.id == taskID }) {
+            let targetTitle = target.title
+            if NotchHUDConfig.shared.syncAppleReminders && RemindersProvider.shared.isAuthorized {
+                Task {
+                    if let matching = RemindersProvider.shared.reminders.first(where: {
+                        $0.title == targetTitle
+                    }) {
+                        await RemindersProvider.shared.remove(matching)
+                    }
+                }
+            }
+        }
         tasks.removeAll(where: { $0.id == taskID })
         save()
     }
