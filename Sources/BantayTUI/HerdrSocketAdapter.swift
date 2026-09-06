@@ -324,6 +324,9 @@ struct HerdrAgentInfo: Decodable, Sendable {
     let workspaceId: String?
     let terminalTitle: String?
     let cwd: String?
+    /// herdr's session reference for the agent. Pi carries a `kind: "path"`
+    /// ref pointing at its live JSONL session file; other agents use an id.
+    let agentSession: HerdrAgentSession?
 
     enum CodingKeys: String, CodingKey {
         case agent
@@ -332,7 +335,15 @@ struct HerdrAgentInfo: Decodable, Sendable {
         case workspaceId = "workspace_id"
         case terminalTitle = "terminal_title_stripped"
         case cwd
+        case agentSession = "agent_session"
     }
+}
+
+/// herdr `agent_session` report: `{"agent": "pi", "kind": "path"|"id", "value": ...}`.
+struct HerdrAgentSession: Decodable, Sendable {
+    let agent: String
+    let kind: String
+    let value: String
 }
 
 private struct HerdrAgentListResponse: Decodable {

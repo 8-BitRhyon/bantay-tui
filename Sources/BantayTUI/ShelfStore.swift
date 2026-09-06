@@ -102,15 +102,41 @@ final class ShelfStore: ObservableObject {
     func remove(_ file: ShelfFile) {
         files = ShelfFiles.removing(file.url, from: files)
         try? FileManager.default.removeItem(at: file.url)
+        let parentDir = file.url.deletingLastPathComponent()
+        if parentDir.path.contains("Bantay-TUI/shelf") {
+            try? FileManager.default.removeItem(at: parentDir)
+        }
         save()
     }
 
     func removeAll() {
         for file in files {
             try? FileManager.default.removeItem(at: file.url)
+            let parentDir = file.url.deletingLastPathComponent()
+            if parentDir.path.contains("Bantay-TUI/shelf") {
+                try? FileManager.default.removeItem(at: parentDir)
+            }
         }
         files = []
         save()
+    }
+
+    func copyPath(_ file: ShelfFile) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(file.url.path, forType: .string)
+    }
+
+    func copyContent(_ file: ShelfFile) {
+        guard let text = try? String(contentsOf: file.url, encoding: .utf8) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func airDrop(_ file: ShelfFile) {
+        guard let service = NSSharingService(named: .sendViaAirDrop) else { return }
+        if service.canPerform(withItems: [file.url]) {
+            service.perform(withItems: [file.url])
+        }
     }
 
     /// Expire items past the configured retention. Call on launch and after

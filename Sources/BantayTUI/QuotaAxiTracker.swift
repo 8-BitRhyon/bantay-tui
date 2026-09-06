@@ -75,4 +75,20 @@ public final class QuotaAxiTracker: Sendable {
             )
         }
     }
+
+    /// Estimates hours remaining until quota limit based on current burn rate.
+    public static func forecastHoursRemaining(tokensPerMin: Double, remainingPercent: Double)
+        -> Double?
+    {
+        guard tokensPerMin > 50.0, remainingPercent > 0.0 else { return nil }
+        // Assume nominal 500k token quota window
+        let estimatedRemainingTokens = (remainingPercent / 100.0) * 500_000.0
+        let minutesLeft = estimatedRemainingTokens / tokensPerMin
+        return min(max(minutesLeft / 60.0, 0.1), 99.0)
+    }
+
+    /// Whether current burn rate triggers a high velocity quota alert.
+    public static func isHighBurnRate(tokensPerMin: Double) -> Bool {
+        tokensPerMin >= 2500.0
+    }
 }

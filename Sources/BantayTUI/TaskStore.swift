@@ -94,6 +94,10 @@ public final class TaskStore: ObservableObject {
         tasks.insert(task, at: 0)
         save()
 
+        if task.assignedAgent != nil && NotchHUDConfig.shared.autoDispatchTasks {
+            dispatchTask(task.id)
+        }
+
         if syncReminders && NotchHUDConfig.shared.syncAppleReminders
             && RemindersProvider.shared.isAuthorized
         {
@@ -104,6 +108,66 @@ public final class TaskStore: ObservableObject {
             }
         }
         return task
+    }
+
+    /// Dispatches an agent task to its target process or multiplexer pane.
+    public func dispatchTask(_ taskID: UUID) {
+        guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
+        var task = tasks[index]
+        guard !task.isCompleted else { return }
+
+        let isAllowed = TaskDispatcher.isDispatchAllowed(
+            cost: AgentEventManager.shared.usage.costUSD,
+            budget: NotchHUDConfig.shared.dailyBudgetUSD,
+            enforceLimit: NotchHUDConfig.shared.enforceBudgetLimit
+        )
+        guard isAllowed else {
+            task.executionState = .blocked
+            tasks[index] = task
+            save()
+            return
+        }
+
+        let linkedPane = TaskDispatcher.shared.dispatch(task: task)
+        task.executionState = .dispatched
+        task.linkedPaneID = linkedPane
+        task.dispatchedAt = Date()
+        tasks[index] = task
+        save()
+    }
+
+    /// Updates task states matching an incoming agent event.
+    func updateTaskState(paneId: String?, source: String, kind: AgentEventKind) {
+        var changed = false
+        for index in 0..<tasks.count {
+            var task = tasks[index]
+            guard !task.isCompleted else { continue }
+            let matchesPane = paneId != nil && task.linkedPaneID == paneId
+            let matchesSource = task.assignedAgent?.lowercased() == source.lowercased()
+            guard matchesPane || matchesSource else { continue }
+
+            switch kind {
+            case .completed:
+                task.executionState = .completed
+                task.isCompleted = true
+                task.completedAt = Date()
+                NotchHUDConfig.shared.addMascotXP(25)
+                changed = true
+            case .failed, .cancelled:
+                task.executionState = .failed
+                changed = true
+            case .accessRequest, .waiting:
+                task.executionState = .blocked
+                changed = true
+            case .progress, .started:
+                task.executionState = .working
+                changed = true
+            default:
+                break
+            }
+            tasks[index] = task
+        }
+        if changed { save() }
     }
 
     /// Toggles completion state of a task.

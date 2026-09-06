@@ -38,7 +38,7 @@ final class ApprovalNotificationController: NSObject,
     /// have an .app bundle proxy registered with macOS LaunchServices. Any call
     /// to UNUserNotificationCenter.current() in a bare binary crashes the process
     /// with `NSInternalInconsistencyException: bundleProxyForCurrentProcess is nil`.
-    static var hasBundleProxy: Bool {
+    nonisolated static var hasBundleProxy: Bool {
         guard let id = Bundle.main.bundleIdentifier, !id.isEmpty else { return false }
         return Bundle.main.bundleURL.pathExtension.lowercased() == "app"
     }
@@ -100,6 +100,27 @@ final class ApprovalNotificationController: NSObject,
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
                 NSLog("approval-notify: %@ failed: %@", paneId, String(describing: error))
+            }
+        }
+    }
+
+    /// Post a system notification alert (e.g. budget exceeded or high burn rate).
+    func postAlert(title: String, subtitle: String, soundName: String?) {
+        guard hasBundleProxy else { return }
+        install()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = subtitle
+        if let soundName, !soundName.isEmpty {
+            content.sound = UNNotificationSound(named: UNNotificationSoundName(soundName))
+        } else {
+            content.sound = .default
+        }
+        let identifier = "bantay-alert-" + UUID().uuidString
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("approval-notify: alert failed: %@", String(describing: error))
             }
         }
     }

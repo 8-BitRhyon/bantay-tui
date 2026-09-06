@@ -45,6 +45,16 @@ public enum TaskCategory: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Execution lifecycle state for agent-dispatched tasks.
+public enum TaskExecutionState: String, Codable, CaseIterable, Sendable {
+    case pending = "pending"
+    case dispatched = "dispatched"
+    case working = "working"
+    case blocked = "blocked"
+    case completed = "completed"
+    case failed = "failed"
+}
+
 /// A human or agent task item managed by Bantay-TUI.
 public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
@@ -53,6 +63,9 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
     public var priority: TaskPriority
     public var tags: [String]
     public var assignedAgent: String?
+    public var executionState: TaskExecutionState
+    public var linkedPaneID: String?
+    public var dispatchedAt: Date?
     public var isCompleted: Bool
     public var createdAt: Date
     public var completedAt: Date?
@@ -64,6 +77,9 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         priority: TaskPriority = .medium,
         tags: [String] = [],
         assignedAgent: String? = nil,
+        executionState: TaskExecutionState = .pending,
+        linkedPaneID: String? = nil,
+        dispatchedAt: Date? = nil,
         isCompleted: Bool = false,
         createdAt: Date = Date(),
         completedAt: Date? = nil
@@ -74,6 +90,9 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         self.priority = priority
         self.tags = tags
         self.assignedAgent = assignedAgent
+        self.executionState = isCompleted ? .completed : executionState
+        self.linkedPaneID = linkedPaneID
+        self.dispatchedAt = dispatchedAt
         self.isCompleted = isCompleted
         self.createdAt = createdAt
         self.completedAt = completedAt

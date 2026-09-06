@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 /// ntfy.sh push notifications for agent-state events that need your
 /// attention even when you're away from the terminal: blocked / approval
@@ -60,6 +61,10 @@ enum AgentAlertNotifier {
         else {
             return
         }
+        if kind == .accessRequest || kind == .waiting {
+            ApprovalNotificationController.shared.postApproval(
+                source: source, paneId: paneId, title: title, choices: nil)
+        }
         guard let (topic, server) = target() else { return }
         let body = messageBody(source: source, kind: kind, title: title)
         let serverURL = server.hasSuffix("/") ? String(server.dropLast()) : server
@@ -90,5 +95,17 @@ enum AgentAlertNotifier {
                 // Best-effort: a failed push is never fatal.
             }
         }
+    }
+
+    @MainActor
+    static func notify(title: String, message: String) {
+        guard ApprovalNotificationController.hasBundleProxy else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = message
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 }

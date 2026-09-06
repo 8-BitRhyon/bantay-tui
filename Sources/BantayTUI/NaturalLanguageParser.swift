@@ -35,7 +35,7 @@ public enum NaturalLanguageParser {
 
     public static let knownAgents: Set<String> = [
         "claude", "codex", "herdr", "kilo", "freebuff", "opencode", "cursor", "aider",
-        "windsurf", "gemini",
+        "windsurf", "gemini", "pi", "antigravity",
     ]
 
     /// Weekday names → Calendar weekday (1 = Sunday, 2 = Monday…).

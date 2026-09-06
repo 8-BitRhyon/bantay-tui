@@ -22,6 +22,10 @@ struct NotchStatusView: View {
     @State private var showShelf = false
     @State private var showAttention = false
     @State private var showTasks = false
+    @State private var showHistory = false
+    @State private var showMedia = false
+    @State private var showNotes = false
+    @State private var groupByWorkspace = false
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
     /// icon stays reactive; the config is the single behavioral source of
     /// truth (all logic reads it, and it is the only writer of the defaults).
@@ -168,9 +172,20 @@ struct NotchStatusView: View {
                     taskCount: TaskStore.shared.tasks.count, sectionCount: 3,
                     isTasksTab: true
                 ).height
+            } else if showShelf || showHistory || showMedia || showNotes {
+                let itemCount =
+                    showShelf
+                    ? max(shelfStore.files.count + clipboardItems.count, 2)
+                    : (showHistory ? max(historyStore.sessions.count, 2) : 3)
+                return IslandMetrics.expandedSize(
+                    topInset: chipTopOffset, agentCount: itemCount,
+                    queueCount: 0,
+                    shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
+                    overflowCount: 0, groupCount: 0, footerVisible: false
+                ).height
             } else {
                 return IslandMetrics.expandedSize(
-                    topInset: chipTopOffset, agentCount: mergedRoster.count,
+                    topInset: chipTopOffset, agentCount: max(mergedRoster.count, 2),
                     queueCount: 0,
                     shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
                     overflowCount: 0,
@@ -191,10 +206,22 @@ struct NotchStatusView: View {
                 sectionCount: 3,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab
             )
+        } else if showShelf || showHistory || showMedia || showNotes {
+            let itemCount =
+                showShelf
+                ? max(shelfStore.files.count + clipboardItems.count, 2)
+                : (showHistory ? max(historyStore.sessions.count, 2) : 3)
+            return IslandMetrics.contentHeight(
+                isExpanded: isExpanded, topInset: chipTopOffset,
+                agentCount: itemCount, queueCount: 0,
+                shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
+                overflowCount: 0,
+                groupCount: 0,
+                footerVisible: false)
         } else {
             return IslandMetrics.contentHeight(
                 isExpanded: isExpanded, topInset: chipTopOffset,
-                agentCount: mergedRoster.count, queueCount: 0,
+                agentCount: max(mergedRoster.count, 2), queueCount: 0,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
                 overflowCount: 0,
                 groupCount: rosterGroupCount,
@@ -267,6 +294,7 @@ struct NotchStatusView: View {
                 .offset(y: chipTopOffset)
         }
         .overlay(edgeGlow)
+        .overlay(systemHUDOverlay, alignment: .bottom)
         .scaleEffect(activeHoverScale, anchor: .top)
         .frame(
             width: islandWidth + cornerRad * 2,
@@ -326,6 +354,13 @@ struct NotchStatusView: View {
         ) { note in
             if let urls = note.userInfo?["urls"] as? [URL] {
                 handleFilesDropped(urls)
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchGlobalHotkeyTriggered)
+        ) { _ in
+            withAnimation(morphAnimation) {
+                expandTo(!isExpanded)
             }
         }
         .onReceive(
@@ -1215,8 +1250,14 @@ struct NotchStatusView: View {
                 TaskWidgetView()
             } else if showAttention {
                 attentionContent
+            } else if showHistory {
+                historyContent
             } else if showShelf {
                 shelfContent
+            } else if showMedia {
+                mediaContent
+            } else if showNotes {
+                notesContent
             } else {
                 rosterContent
             }
@@ -1302,20 +1343,31 @@ struct NotchStatusView: View {
             groupCount: rosterGroupCount)
     }
 
+    private func cleanHUDText(_ text: String) -> String {
+        IslandMetrics.cleanHUDText(text)
+    }
+
     /// Item 11: underline tab bar with matchedGeometryEffect for a sliding
     /// indicator, replacing the capsule pills. Feels more native on macOS.
     private var shelfTabBar: some View {
-        HStack(spacing: 12) {
-            shelfTabButton(title: "Agents", selected: !showShelf && !showAttention && !showTasks) {
-                showShelf = false
-                showAttention = false
-                showTasks = false
+        HStack(spacing: 4) {
+            if NotchHUDConfig.shared.showAgentsTab {
+                shelfTabButton(
+                    title: "Agents",
+                    selected: !showShelf && !showAttention && !showTasks && !showHistory
+                ) {
+                    showShelf = false
+                    showAttention = false
+                    showTasks = false
+                    showHistory = false
+                }
             }
             if NotchHUDConfig.shared.showTasksTab {
                 shelfTabButton(title: "Tasks", selected: showTasks) {
                     showShelf = false
                     showAttention = false
                     showTasks = true
+                    showHistory = false
                 }
             }
             if NotchHUDConfig.shared.attentionFilterEnabled {
@@ -1325,16 +1377,74 @@ struct NotchStatusView: View {
                     showShelf = false
                     showAttention = true
                     showTasks = false
+                    showHistory = false
                 }
             }
-            shelfTabButton(title: "Shelf", selected: showShelf) {
-                showAttention = false
-                showShelf = true
-                showTasks = false
+            if NotchHUDConfig.shared.showHistoryTab {
+                shelfTabButton(title: "History", selected: showHistory) {
+                    showShelf = false
+                    showAttention = false
+                    showTasks = false
+                    showHistory = true
+                }
             }
-            Spacer(minLength: 8)
+            if NotchHUDConfig.shared.showShelfTab {
+                shelfTabButton(title: "Shelf", selected: showShelf) {
+                    showAttention = false
+                    showShelf = true
+                    showTasks = false
+                    showHistory = false
+                    showMedia = false
+                    showNotes = false
+                }
+            }
+            if NotchHUDConfig.shared.showMediaTab {
+                shelfTabButton(title: "Media", selected: showMedia) {
+                    showAttention = false
+                    showShelf = false
+                    showTasks = false
+                    showHistory = false
+                    showMedia = true
+                    showNotes = false
+                }
+            }
+            if NotchHUDConfig.shared.showNotesTab {
+                shelfTabButton(title: "Notes", selected: showNotes) {
+                    showAttention = false
+                    showShelf = false
+                    showTasks = false
+                    showHistory = false
+                    showMedia = false
+                    showNotes = true
+                }
+            }
+            Spacer(minLength: 2)
+
+            // Workspace grouping toggle button
+            Button(action: {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                    groupByWorkspace.toggle()
+                }
+            }) {
+                HStack(spacing: 3) {
+                    Image(systemName: groupByWorkspace ? "folder.fill.badge.gearshape" : "folder")
+                        .font(.system(size: 10))
+                    Text("Workspace")
+                        .font(.system(size: 9, weight: groupByWorkspace ? .bold : .regular))
+                }
+                .foregroundColor(groupByWorkspace ? .cyan : .white.opacity(0.6))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule()
+                        .fill(
+                            groupByWorkspace ? Color.cyan.opacity(0.2) : Color.white.opacity(0.08))
+                )
+            }
+            .buttonStyle(ScalePressButtonStyle())
+            .help("Group agents by project workspace folder")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 10)
         .frame(height: 22)
     }
 
@@ -1346,7 +1456,7 @@ struct NotchStatusView: View {
                 Text(title)
                     .font(.system(size: 10, weight: selected ? .semibold : .medium))
                     .foregroundColor(selected ? .white : .white.opacity(0.9))
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, 4)
                 // Item 11: sliding underline indicator.
                 if selected {
                     Rectangle()
@@ -1454,6 +1564,202 @@ struct NotchStatusView: View {
         }
     }
 
+    @ObservedObject private var historyStore = SessionHistoryStore.shared
+
+    private var historyContent: some View {
+        VStack(spacing: 0) {
+            if historyStore.sessions.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 18))
+                        .foregroundColor(.white.opacity(0.35))
+                    Text("No agent sessions recorded yet")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.55))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 92)
+            } else {
+                ScrollView {
+                    VStack(spacing: 6) {
+                        ForEach(historyStore.sessions) { session in
+                            HStack(spacing: 8) {
+                                Image(systemName: "terminal.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.cyan)
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(session.title)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .lineLimit(1)
+
+                                    HStack(spacing: 6) {
+                                        Text(session.agentName.capitalized)
+                                            .font(.system(size: 8, weight: .semibold))
+                                            .foregroundColor(.cyan)
+                                        Text("•")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(.white.opacity(0.3))
+                                        Text("\(session.totalTokens) tok")
+                                            .font(.system(size: 8, design: .monospaced))
+                                            .foregroundColor(.white.opacity(0.6))
+                                        Text("•")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(.white.opacity(0.3))
+                                        Text(String(format: "$%.2f", session.costUSD))
+                                            .font(
+                                                .system(
+                                                    size: 8, weight: .bold, design: .monospaced)
+                                            )
+                                            .foregroundColor(.green.opacity(0.8))
+                                    }
+                                }
+                                Spacer()
+
+                                Text(session.status)
+                                    .font(.system(size: 8, weight: .bold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.green.opacity(0.2)))
+                                    .foregroundColor(.green)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                }
+            }
+        }
+    }
+
+    @ObservedObject private var mediaController = MediaController.shared
+
+    private var mediaContent: some View {
+        VStack(spacing: 8) {
+            if let track = mediaController.currentTrack {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.white.opacity(0.1))
+                            .frame(width: 48, height: 48)
+                        Image(
+                            systemName: track.playerSource == "Spotify"
+                                ? "music.note.house.fill" : "music.note"
+                        )
+                        .font(.system(size: 20))
+                        .foregroundColor(.green)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+
+                        Text(track.artist)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white.opacity(0.6))
+                            .lineLimit(1)
+
+                        Text(track.playerSource)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(track.playerSource == "Spotify" ? .green : .pink)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+
+                HStack(spacing: 20) {
+                    Button(action: { mediaController.previousTrack() }) {
+                        Image(systemName: "backward.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: { mediaController.togglePlayPause() }) {
+                        Image(
+                            systemName: mediaController.isPlaying
+                                ? "pause.circle.fill" : "play.circle.fill"
+                        )
+                        .font(.system(size: 28))
+                        .foregroundColor(.cyan)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: { mediaController.nextTrack() }) {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 4)
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 20))
+                        .foregroundColor(.white.opacity(0.35))
+                    Text("No media playing")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.55))
+                    Text("Start Apple Music or Spotify")
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.35))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 92)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ObservedObject private var systemHUDMonitor = SystemHUDMonitor.shared
+
+    private var systemHUDOverlay: some View {
+        Group {
+            if let hud = systemHUDMonitor.activeHUD {
+                HStack(spacing: 8) {
+                    Image(systemName: hud.type.iconName)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.cyan)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.2))
+                            Capsule()
+                                .fill(Color.cyan)
+                                .frame(width: geo.size.width * CGFloat(hud.type.percentage))
+                        }
+                    }
+                    .frame(height: 4)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.black.opacity(0.85)))
+                .padding(.bottom, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+
+    @ObservedObject private var notesStore = NotesStore.shared
+
+    private var notesContent: some View {
+        VStack(spacing: 4) {
+            TextEditor(text: $notesStore.noteText)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.white)
+                .scrollContentBackground(.hidden)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
+                .padding(.horizontal, 10)
+                .frame(height: 96)
+        }
+    }
+
     /// One thumbnail card: icon, name, hover actions (QuickLook / open /
     /// remove), draggable back out. Mirrors NotchDrop's DropItemView.
     private func shelfCard(_ file: ShelfFile) -> some View {
@@ -1504,12 +1810,17 @@ struct NotchStatusView: View {
         .help("Click: preview · Double-click: open")
         // Item 9: right-click context menu for shelf cards.
         .contextMenu {
+            Button("Quick Look Preview") { ShelfQuickLook.show(file.url) }
             Button("Open") { NSWorkspace.shared.open(file.url) }
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([file.url])
             }
             Divider()
+            Button("Copy Path") { shelfStore.copyPath(file) }
+            Button("Copy Content") { shelfStore.copyContent(file) }
+            Divider()
             Button("Remove") { shelfStore.remove(file) }
+            Button("Clear All Shelf") { shelfStore.removeAll() }
         }
     }
 
@@ -1600,10 +1911,20 @@ struct NotchStatusView: View {
         .accessibilityLabel("Quota remaining \(percentInt) percent")
     }
 
+    private var isQuotaLow: Bool {
+        let config = NotchHUDConfig.shared
+        let cost = eventManager.usage.costUSD
+        let budget = max(config.dailyBudgetUSD, 0.5)
+        let isBudgetExceeded = (cost / budget) >= 1.0
+        let tpm = eventManager.usageRate.tokensPerMinute ?? 0
+        let isHighBurn = tpm >= config.highBurnThresholdTPM
+        return isBudgetExceeded || isHighBurn
+    }
+
     private var currentMascotState: MascotState {
         MascotEvaluator.evaluate(
             agents: mergedRoster,
-            quotaLow: false,
+            quotaLow: isQuotaLow,
             recentCompletion: eventManager.currentEvent?.kind == .completed
         )
     }
@@ -1675,7 +1996,8 @@ struct NotchStatusView: View {
             if NotchHUDConfig.shared.enableSpendGlow {
                 spendGaugeBadge
             }
-            if NotchHUDConfig.shared.showTokenRate {
+            let liveRate = eventManager.usageRate.tokensPerMinute ?? 0
+            if NotchHUDConfig.shared.showTokenRate, liveRate > 0 {
                 tokenRateBadge
             }
             // Quota badge only when a real usage source exists — a synthetic
@@ -1684,13 +2006,16 @@ struct NotchStatusView: View {
                 quotaAxiBadge
             }
             Spacer(minLength: 4)
-            if let title = eventManager.currentEvent?.title {
-                Text(title)
-                    .font(.system(size: 8.5, weight: .regular))
-                    .foregroundColor(.white.opacity(0.6))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 140, alignment: .trailing)
+            if let rawTitle = eventManager.currentEvent?.title, !rawTitle.hasPrefix("Created At:") {
+                let cleanedTitle = cleanHUDText(rawTitle)
+                if !cleanedTitle.isEmpty {
+                    Text(cleanedTitle)
+                        .font(.system(size: 8.5, weight: .regular))
+                        .foregroundColor(.white.opacity(0.6))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: 120, alignment: .trailing)
+                }
             }
             Button {
                 if NotchHUDConfig.shared.panelPinned {
@@ -2060,7 +2385,7 @@ struct NotchStatusView: View {
                                 } else if let live = agent.title ?? agent.message,
                                     agent.kind.isOngoing
                                 {
-                                    Text(live)
+                                    Text(cleanHUDText(live))
                                         .font(.system(size: 8.5, weight: .medium))
                                         .foregroundColor(.white.opacity(0.75))
                                         .lineLimit(1)
@@ -2084,7 +2409,7 @@ struct NotchStatusView: View {
                         }
                         Spacer(minLength: 4)
                         if let title = agent.title, !agent.kind.isOngoing {
-                            Text(title)
+                            Text(cleanHUDText(title))
                                 .font(.system(size: 9, weight: .regular))
                                 .foregroundColor(.white.opacity(0.6))
                                 .lineLimit(1)
@@ -2093,7 +2418,7 @@ struct NotchStatusView: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ScalePressButtonStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(0)
                 if let paneId = agent.paneId {
@@ -2311,10 +2636,13 @@ struct NotchStatusView: View {
     private func handleHover(_ hovering: Bool) {
         hoverTask?.cancel()
         isHovered = hovering
-        if IslandMetrics.shouldExpand(hovering: hovering, hasAgents: !eventManager.agents.isEmpty) {
+        if hovering {
             hoverTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(Int(IslandMetrics.hoverCooldown * 1000)))
-                guard !Task.isCancelled else { return }
+                let delay = NotchHUDConfig.shared.hoverDelaySeconds
+                if delay > 0.01 {
+                    try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
+                }
+                guard !Task.isCancelled, isHovered else { return }
                 expandTo(true)
             }
         } else if IslandMetrics.shouldCollapseOnHoverExit(
@@ -2440,8 +2768,13 @@ struct NotchStatusView: View {
     private func submitPrompt() {
         let text = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let paneId = composingPaneId, !text.isEmpty {
-            Task.detached { [adapter] in
-                await adapter.agentPrompt(paneId: paneId, text: text)
+            if paneId.hasPrefix("standalone:") {
+                let agentName = String(paneId.dropFirst(11))
+                StandaloneAgentDispatcher.dispatchPrompt(agentName: agentName, text: text)
+            } else {
+                Task.detached { [adapter] in
+                    await adapter.agentPrompt(paneId: paneId, text: text)
+                }
             }
         }
         cancelComposing()

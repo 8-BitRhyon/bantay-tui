@@ -18,6 +18,7 @@ UI_ONLY=(
   NotchStatusView.swift
   PeekPanel.swift
   SettingsView.swift
+  TaskWidgetView.swift
 )
 
 SRC=()

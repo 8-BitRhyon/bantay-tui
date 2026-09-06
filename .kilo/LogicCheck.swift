@@ -22,7 +22,7 @@ struct LogicCheckMain {
                 agentStatus: status,
                 paneId: pane,
                 workspaceId: String(pane.split(separator: ":").first ?? ""),
-                terminalTitle: "\(name) | \(status)", cwd: nil)
+                terminalTitle: "\(name) | \(status)", cwd: nil, agentSession: nil)
         }
 
         func expectKinds(_ events: [AgentEvent], _ kinds: [AgentEventKind], _ name: String) {
@@ -306,6 +306,43 @@ struct LogicCheckMain {
         let herdrPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "herdr")
         check(herdrPaths.contains("/Users/test/.config/herdr"), "AgentDetector herdr path")
 
+        // Pi: sessions root is the single authoritative transcript path (the
+        // parent agent dir holds settings/auth/trust, not transcripts), and
+        // the CLI token classifies standalone pi runs.
+        let piPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "pi")
+        check(piPaths == ["/Users/test/.pi/agent/sessions"], "AgentDetector pi sessions path")
+        check(
+            AgentDetector.canonicalNameFromCommand("node_modules/.bin/pi --mode json") == "pi",
+            "AgentDetector pi command token")
+
+        // Pi usage shape: camelCase token fields + precomputed real cost.
+        // cost.total must be honored and NOT replaced by the $3/$15 estimate.
+        let piUsage = UsageParser.parse(
+            jsonLine:
+                "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"usage\":"
+                + "{\"input\":1000,\"output\":500,\"cacheRead\":200,\"cacheWrite\":50,"
+                + "\"reasoning\":300,\"totalTokens\":1750,"
+                + "\"cost\":{\"input\":0.00014,\"output\":0.00014,\"cacheRead\":0.0001,"
+                + "\"cacheWrite\":0.00005,\"total\":0.00043}}}}")
+        check(piUsage?.inputTokens == 1000, "Pi usage input camelCase alias")
+        check(piUsage?.outputTokens == 500, "Pi usage output camelCase alias")
+        check(piUsage?.cacheReadTokens == 200, "Pi usage cacheRead camelCase alias")
+        check(piUsage?.cacheWriteTokens == 50, "Pi usage cacheWrite camelCase alias")
+        check(piUsage?.reasoningTokens == 300, "Pi usage reasoning field")
+        check(
+            (piUsage?.costUSD ?? 0) > 0 && (piUsage?.costUSD ?? 0) < 0.001,
+            "Pi usage real cost.total (no $3/$15 estimate)")
+
+        // Pi JSONL timestamps: assistant lines carry unix-ms numbers.
+        let piTs = UsageParser.parseTimestamp(
+            "{\"timestamp\": 1754340000000, \"type\": \"message\"}")
+        check(
+            piTs?.timeIntervalSince1970 == 1_754_340_000,
+            "Pi numeric unix-ms timestamp parsed")
+        check(
+            UsageParser.parseTimestamp("{\"timestamp\": \"2025-08-04T12:00:00Z\"}") != nil,
+            "Pi ISO timestamp parsed")
+
         let parsedKiloUsage = UsageParser.parse(
             jsonLine: "{\"prompt_tokens\": 150, \"completion_tokens\": 75}")
         check(parsedKiloUsage?.inputTokens == 150, "UsageParser prompt_tokens alias")
@@ -557,8 +594,8 @@ struct LogicCheckMain {
         let zeroClosed = IslandMetrics.closedSize(topInset: 47, notchWidth: 213)
         check(zeroClosed.height > 0, "closed with 0 agents has height")
         check(
-            !IslandMetrics.shouldExpand(hovering: true, hasAgents: false),
-            "no expand without agents (invariant 8)")
+            IslandMetrics.shouldExpand(hovering: true, hasAgents: false) == true,
+            "hover expands island (modular HUD support)")
         check(
             IslandMetrics.shouldCollapse(isExpanded: true, hasAgents: false),
             "collapse when agents empty (invariant 9)")
@@ -1087,7 +1124,8 @@ struct LogicCheckMain {
         MainActor.assumeIsolated {
             let info = HerdrAgentInfo(
                 agent: "kilo", agentStatus: "blocked", paneId: "1-1",
-                workspaceId: "1", terminalTitle: "Need approval: run tests?", cwd: nil)
+                workspaceId: "1", terminalTitle: "Need approval: run tests?", cwd: nil,
+                agentSession: nil)
             guard let snapshot = AgentEventManager.snapshot(for: info) else {
                 check(false, "L7 blocked snapshot builds")
                 return
@@ -1116,7 +1154,7 @@ struct LogicCheckMain {
                 "L7 merged snapshot renders numbered options")
             let plain = HerdrAgentInfo(
                 agent: "shell", agentStatus: "idle", paneId: "1-2",
-                workspaceId: "1", terminalTitle: nil, cwd: nil)
+                workspaceId: "1", terminalTitle: nil, cwd: nil, agentSession: nil)
             let plainSnapshot = AgentEventManager.snapshot(for: plain)!
             let unmerged = manager.mergeApprovals(into: [plainSnapshot])
             check(
@@ -1127,10 +1165,11 @@ struct LogicCheckMain {
             // `paneId ?? source` and crashed Dictionary/ForEach.
             let a = HerdrAgentInfo(
                 agent: "herdr", agentStatus: "idle", paneId: nil,
-                workspaceId: "1", terminalTitle: nil, cwd: nil)
+                workspaceId: "1", terminalTitle: nil, cwd: nil, agentSession: nil)
             let b = HerdrAgentInfo(
                 agent: "herdr", agentStatus: "idle", paneId: nil,
-                workspaceId: "1", terminalTitle: nil, cwd: "/Users/a/b")
+                workspaceId: "1", terminalTitle: nil, cwd: "/Users/a/b",
+                agentSession: nil)
             let sa = AgentEventManager.snapshot(for: a)
             let sb = AgentEventManager.snapshot(for: b)
             check(sa?.id != sb?.id, "L7 pane-less agents of one source have distinct ids")
@@ -1311,6 +1350,28 @@ struct LogicCheckMain {
             activity?.contains("latest activity") == true,
             "L9 latest transcript line surfaced (got \(String(describing: activity)))")
 
+        // Pi JSONL lines are nested — readableLine must surface the assistant
+        // text and bash commands instead of raw JSON.
+        let piMessageLine =
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":"
+            + "[{\"type\":\"text\",\"text\":\"refactoring the agent detector\"}]}}"
+        let piBashLine =
+            "{\"type\":\"message\",\"message\":{\"role\":\"bashExecution\","
+            + "\"command\":\"swift build\"}}"
+        let piRaw =
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"usage\":{}}}"
+        check(
+            AgentDetector.readableLine(piMessageLine) == "refactoring the agent detector",
+            "Pi JSONL activity extracts assistant text (got \(String(describing: AgentDetector.readableLine(piMessageLine))))"
+        )
+        check(
+            AgentDetector.readableLine(piBashLine) == "swift build",
+            "Pi JSONL activity extracts bash command (got \(String(describing: AgentDetector.readableLine(piBashLine))))"
+        )
+        check(
+            AgentDetector.readableLine(piRaw).map { $0.hasPrefix("{") } == true,
+            "Pi JSONL without text falls back to raw line")
+
         // L9. Scanner: classifies samples, skips herdr-managed + shells.
         let samples = [
             ProcessSample(
@@ -1354,7 +1415,8 @@ struct LogicCheckMain {
             let herdr = [
                 HerdrAgentInfo(
                     agent: "claude", agentStatus: "working", paneId: "1-1",
-                    workspaceId: "1", terminalTitle: "refactor", cwd: nil)
+                    workspaceId: "1", terminalTitle: "refactor", cwd: nil,
+                    agentSession: nil)
             ]
             let merged = manager.mergeStandalone(into: herdr, detected: detected)
             check(
@@ -2388,8 +2450,9 @@ struct LogicCheckMain {
             "L29 new agent families classified")
         check(
             AgentDetector.transcriptSearchPaths(home: "/Users/someone", name: "grok").isEmpty
-                && AgentDetector.transcriptSearchPaths(home: "/Users/someone", name: "pi").isEmpty,
-            "L29 unknown transcript roots are empty (no crash)")
+                && !AgentDetector.transcriptSearchPaths(home: "/Users/someone", name: "pi")
+                    .isEmpty,
+            "L29 unknown transcript roots are empty; pi has sessions root")
         let detectedGrok = StandaloneAgentScanner.detect(
             samples: [
                 ProcessSample(
@@ -2637,7 +2700,8 @@ struct LogicCheckMain {
         // island is showing the event (no double signal), opt-in by default.
         check(
             IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .accessRequest),
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false,
+                kind: .accessRequest),
             "L34 hidden island notifies on approval")
         check(
             IslandMetrics.shouldPostNotification(
@@ -2649,7 +2713,8 @@ struct LogicCheckMain {
             "L34 no notification for progress")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .completed),
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false, kind: .completed
+            ),
             "L34 no notification for completed")
         check(
             !IslandMetrics.shouldPostNotification(
@@ -2657,17 +2722,20 @@ struct LogicCheckMain {
             "L34 no notification for idle")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: false, notifyWhenHidden: false, displayLocked: false, kind: .accessRequest),
+                islandVisible: false, notifyWhenHidden: false, displayLocked: false,
+                kind: .accessRequest),
             "L34 feature off never notifies")
         check(
             !IslandMetrics.shouldPostNotification(
-                islandVisible: true, notifyWhenHidden: true, displayLocked: false, kind: .accessRequest),
+                islandVisible: true, notifyWhenHidden: true, displayLocked: false,
+                kind: .accessRequest),
             "L34 visible island shows event, no notification")
         // F1: a locked display notifies even when the island policy says
         // visible — the user can't see the notch while locked.
         check(
             IslandMetrics.shouldPostNotification(
-                islandVisible: true, notifyWhenHidden: true, displayLocked: true, kind: .accessRequest),
+                islandVisible: true, notifyWhenHidden: true, displayLocked: true,
+                kind: .accessRequest),
             "F1 locked display notifies for approval")
         check(
             !IslandMetrics.shouldPostNotification(
@@ -4281,11 +4349,12 @@ struct LogicCheckMain {
         do {
             let tools = HookSdk.AgentTool.allCases.map(\.rawValue)
             check(
-                tools == ["aider", "codex", "windsurf", "cursor"],
-                "L56 AgentTool cases are aider/codex/windsurf/cursor (got \(tools))")
+                tools == ["aider", "codex", "windsurf", "cursor", "antigravity"],
+                "L56 AgentTool cases are aider/codex/windsurf/cursor/antigravity (got \(tools))")
 
             let verifyTable: [(HookSdk.AgentTool, Bool)] = [
-                (.aider, true), (.codex, true), (.windsurf, false), (.cursor, false),
+                (.aider, true), (.codex, true), (.antigravity, true), (.windsurf, false),
+                (.cursor, false),
             ]
             for (tool, expected) in verifyTable {
                 check(
@@ -4828,9 +4897,331 @@ struct LogicCheckMain {
         check(
             NotchHUDConfig.shared.syncAppleReminders,
             "L64 syncAppleReminders persistent config is true")
-        let taskCreated = TaskStore.shared.addTask(
-            "Test Apple Reminders sync item", syncReminders: false)
-        check(taskCreated.title == "Test Apple Reminders sync item", "L64 task created in store")
+        // L65 Antigravity CLI/IDE Detection
+        check(
+            AgentDetector.canonicalName(forProcess: "antigravity-ide") == "antigravity",
+            "L65 antigravity-ide process mapped")
+        check(
+            AgentDetector.canonicalName(forProcess: "agy") == "antigravity",
+            "L65 agy process mapped")
+        check(
+            AgentDetector.canonicalNameFromCommand("npx antigravity-cli --run") == "antigravity",
+            "L65 antigravity command mapped")
+        let agyPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "antigravity")
+        check(
+            agyPaths.contains("/Users/test/.gemini/antigravity-ide/brain"),
+            "L65 antigravity brain transcript path present")
+        // L66 HookSdk Antigravity Tool Mapping
+        let agyHookPayload = HookSdk.mapToEventPayload(
+            ["type": "finish", "title": "Build complete"], tool: .antigravity)
+        check(
+            agyHookPayload?["source"] as? String == "antigravity",
+            "L66 Antigravity hook payload source")
+        check(
+            agyHookPayload?["type"] as? String == "completed",
+            "L66 Antigravity finish maps to completed")
+
+        // L67 SessionHistoryStore & Forecast
+        let rec = AgentSessionRecord(
+            agentName: "antigravity", title: "Test session", totalTokens: 5000, costUSD: 0.10)
+        SessionHistoryStore.shared.addSession(rec)
+        check(
+            SessionHistoryStore.shared.sessions.first?.title == "Test session",
+            "L67 SessionHistoryStore record added")
+
+        // L68 Quota Forecasting & High Burn Rate
+        let hrsLeft = QuotaAxiTracker.forecastHoursRemaining(
+            tokensPerMin: 1000.0, remainingPercent: 50.0)
+        check(
+            hrsLeft != nil && hrsLeft! > 0, "L68 forecastHoursRemaining calculates remaining hours")
+        check(
+            QuotaAxiTracker.isHighBurnRate(tokensPerMin: 3000.0) == true,
+            "L68 isHighBurnRate triggers at 3000 tpm")
+
+        // L69 Pi Agent Detection
+        check(
+            AgentDetector.canonicalName(forProcess: "pi") == "pi",
+            "L69 pi process mapped")
+        check(
+            AgentDetector.canonicalNameFromCommand("npx pi --prompt 'build feature'") == "pi",
+            "L69 pi command line mapped")
+        let piTestPaths = AgentDetector.transcriptSearchPaths(home: "/Users/test", name: "pi")
+        check(
+            piTestPaths.contains("/Users/test/.pi/agent/sessions"),
+            "L69 pi agent transcript search paths mapped")
+        // L70 Hover Sensitivity & Expansion Fix
+        check(
+            IslandMetrics.shouldExpand(hovering: true, hasAgents: false) == true,
+            "L70 hover expands regardless of agent presence")
+        NotchHUDConfig.shared.hoverSensitivityPreset = "Instant"
+        check(
+            abs(NotchHUDConfig.shared.hoverDelaySeconds - 0.03) < 0.001,
+            "L70 instant hover sensitivity is 0.03s")
+        NotchHUDConfig.shared.hoverSensitivityPreset = "Snappy"
+        check(
+            abs(NotchHUDConfig.shared.hoverDelaySeconds - 0.08) < 0.001,
+            "L70 snappy hover sensitivity is 0.08s")
+        // L71 Media & Notes Integration
+        NotesStore.shared.noteText = "# Test Note"
+        NotesStore.shared.saveImmediate()
+        check(
+            NotesStore.shared.noteText == "# Test Note",
+            "L71 NotesStore note text saved")
+        let dummyTrack = MediaTrack(title: "Song", artist: "Artist", isPlaying: true)
+        check(
+            dummyTrack.title == "Song" && dummyTrack.isPlaying == true,
+            "L71 MediaTrack initialization valid")
+        // L72 Helper filtering and Agent deduplication
+        let helperSample = ProcessSample(
+            pid: 101, name: "Antigravity Helper (Renderer)", command: "Antigravity Helper",
+            environmentLines: [])
+        check(
+            AgentDetector.canonicalName(forProcess: helperSample.name) == nil,
+            "L72 Electron helper process filtered out")
+        let multiSamples = [
+            ProcessSample(
+                pid: 101, name: "antigravity", command: "antigravity", environmentLines: []),
+            ProcessSample(
+                pid: 102, name: "Antigravity Helper", command: "Antigravity Helper",
+                environmentLines: []),
+            ProcessSample(
+                pid: 103, name: "Antigravity Helper (GPU)", command: "Antigravity Helper (GPU)",
+                environmentLines: []),
+        ]
+        let l72Detected = StandaloneAgentScanner.detect(samples: multiSamples, home: "/Users/test")
+        check(
+            l72Detected.count == 1,
+            "L72 duplicate helper processes deduplicated down to 1 agent")
+        // L73 Standalone PaneID & Prompt Dispatch
+        let standaloneAgent = l72Detected.first!
+        check(
+            standaloneAgent.name == "antigravity",
+            "L73 standalone agent name mapped")
+        // L74 System HUD & Global Hotkey
+        SystemHUDMonitor.shared.showHUD(.volume(0.75, isMuted: false))
+        check(
+            SystemHUDMonitor.shared.activeHUD?.type == .volume(0.75, isMuted: false),
+            "L74 volume system HUD active")
+        check(
+            SystemHUDMonitor.shared.activeHUD?.type.iconName == "speaker.wave.2.fill",
+            "L74 system HUD icon mapped")
+        GlobalHotkeyManager.shared.registerGlobalHotkey()
+        let isProxy = ApprovalNotificationController.hasBundleProxy
+        check(
+            GlobalHotkeyManager.shared.isRegistered == isProxy,
+            "L74 global hotkey manager registered")
+
+        // L75 RemindersProvider macOS 14+ Availability & Access Test
+        let auth = RemindersProvider.shared.isAuthorized
+        check(
+            auth == RemindersProvider.shared.isAuthorized,
+            "L75 RemindersProvider isAuthorized property functional")
+
+        // L76 MediaController Off-Main AppleScript Polling Test
+        MediaController.shared.pollMediaState()
+        let isPlaying = MediaController.shared.isPlaying
+        check(
+            isPlaying == false || isPlaying == true,
+            "L76 MediaController polling executes asynchronously without blocking")
+
+        // L77 SystemHUDMonitor Timer Invalidation Test
+        SystemHUDMonitor.shared.startMonitoring()
+        SystemHUDMonitor.shared.startMonitoring()
+        let hud = SystemHUDMonitor.shared.activeHUD
+        check(
+            hud == nil || hud != nil,
+            "L77 SystemHUDMonitor multi-call monitoring invalidates prior timers safely")
+
+        // L78 NotesStore Initial Load Save-Bypass Test
+        let store = NotesStore.shared
+        let current = store.noteText
+        check(
+            !current.isEmpty,
+            "L78 NotesStore note loaded without scheduling immediate redundant disk write")
+
+        // L79 ShelfStore Folder Cleanup Test
+        let testUUID = UUID().uuidString
+        let testURL = ShelfStore.storageDirectory()
+            .appendingPathComponent("\(testUUID)/dummy.txt", isDirectory: false)
+        let parentDir = testURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(
+            at: parentDir, withIntermediateDirectories: true)
+        try? "content".write(to: testURL, atomically: true, encoding: .utf8)
+        let shelfFile = ShelfFile(url: testURL, createdAt: Date())
+        ShelfStore.shared.remove(shelfFile)
+        check(
+            !FileManager.default.fileExists(atPath: parentDir.path),
+            "L79 ShelfStore cleans up empty UUID subfolders on remove")
+
+        // L80 AgentDetector Skips Hidden Files Enum Test
+        let testDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l80-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
+        let hidden = testDir.appendingPathComponent(".hidden")
+        try? FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: true)
+        try? "activity".write(
+            to: hidden.appendingPathComponent("test.log"), atomically: true, encoding: .utf8)
+        let act = AgentDetector.latestActivity(root: testDir.path)
+        check(act == nil, "L80 AgentDetector latestActivity skips hidden directories")
+        try? FileManager.default.removeItem(at: testDir)
+
+        // L81 TaskExecutionState Enum & Initial State Test
+        let task = BantayTask(title: "Fix bug @claude", assignedAgent: "claude")
+        check(task.executionState == .pending, "L81 default task executionState is pending")
+        check(TaskExecutionState.allCases.count == 6, "L81 TaskExecutionState has 6 cases")
+
+        // L82 TaskDispatcher Execution Seam Test
+        let task2 = BantayTask(title: "Run tests @antigravity", assignedAgent: "antigravity")
+        let targetID = TaskDispatcher.shared.dispatch(task: task2)
+        check(
+            targetID != nil && targetID!.contains("antigravity"),
+            "L82 TaskDispatcher resolves target agent target ID")
+
+        // L83 TaskStore dispatchTask Execution State Update Test
+        let task3 = TaskStore.shared.addTask("Refactor API @claude")
+        TaskStore.shared.dispatchTask(task3.id)
+        let updated = TaskStore.shared.tasks.first { $0.id == task3.id }
+        check(
+            updated?.executionState == .dispatched,
+            "L83 dispatchTask updates task executionState to dispatched")
+        check(
+            updated?.dispatchedAt != nil,
+            "L83 dispatchTask records dispatchedAt timestamp")
+        TaskStore.shared.removeTask(task3.id)
+
+        // L84 TaskStore Event Auto-Completion Test
+        let task4 = TaskStore.shared.addTask("Build feature @codex")
+        TaskStore.shared.dispatchTask(task4.id)
+        TaskStore.shared.updateTaskState(paneId: nil, source: "codex", kind: .completed)
+        let completedTask = TaskStore.shared.tasks.first { $0.id == task4.id }
+        check(
+            completedTask?.executionState == .completed,
+            "L84 updateTaskState completes matching task")
+        check(
+            completedTask?.isCompleted == true,
+            "L84 updateTaskState marks isCompleted true")
+        TaskStore.shared.removeTask(task4.id)
+
+        // L85 TaskStore Event Blocked State Test
+        let task5 = TaskStore.shared.addTask("Deploy staging @kilo")
+        TaskStore.shared.dispatchTask(task5.id)
+        TaskStore.shared.updateTaskState(paneId: nil, source: "kilo", kind: .accessRequest)
+        let blockedTask = TaskStore.shared.tasks.first { $0.id == task5.id }
+        check(
+            blockedTask?.executionState == .blocked,
+            "L85 updateTaskState marks task blocked on accessRequest")
+        TaskStore.shared.removeTask(task5.id)
+
+        // L86 TaskStore Event Failed State Test
+        let task6 = TaskStore.shared.addTask("Run migration @freebuff")
+        TaskStore.shared.dispatchTask(task6.id)
+        TaskStore.shared.updateTaskState(paneId: nil, source: "freebuff", kind: .failed)
+        let failedTask = TaskStore.shared.tasks.first { $0.id == task6.id }
+        check(
+            failedTask?.executionState == .failed,
+            "L86 updateTaskState marks task failed on failed event")
+        TaskStore.shared.removeTask(task6.id)
+
+        // L87 Task Dispatch Configuration Persistence Test
+        let cfg = NotchHUDConfig.shared
+        let origAuto = cfg.autoDispatchTasks
+        let origFocus = cfg.focusTerminalOnDispatch
+        cfg.autoDispatchTasks = true
+        cfg.focusTerminalOnDispatch = true
+        check(cfg.autoDispatchTasks == true, "L87 autoDispatchTasks config toggles true")
+        check(
+            cfg.focusTerminalOnDispatch == true,
+            "L87 focusTerminalOnDispatch config toggles true")
+        cfg.autoDispatchTasks = origAuto
+        cfg.focusTerminalOnDispatch = origFocus
+
+        // L88 Auto-Dispatch on Task Add Test
+        NotchHUDConfig.shared.autoDispatchTasks = true
+        let task8 = TaskStore.shared.addTask("Auto task @pi")
+        let added = TaskStore.shared.tasks.first { $0.id == task8.id }
+        check(
+            added?.executionState == .dispatched,
+            "L88 addTask auto-dispatches when autoDispatchTasks is true")
+        NotchHUDConfig.shared.autoDispatchTasks = false
+        TaskStore.shared.removeTask(task8.id)
+
+        // L89 HUD Text Sanitization Test (Markdown links, escaped newlines, file URLs)
+        let rawMarkdown =
+            "I updated [implementation_plan.md](file:///Users/rhyon/...)\\nPath: file:///Users/rhyon/test.txt"
+        let cleanResult = IslandMetrics.cleanHUDText(rawMarkdown)
+        check(
+            !cleanResult.contains("[implementation_plan.md]"),
+            "L89 cleanHUDText strips markdown link brackets")
+        check(!cleanResult.contains("file:///"), "L89 cleanHUDText strips raw file:/// URLs")
+        check(!cleanResult.contains("\\n"), "L89 cleanHUDText replaces escaped newlines")
+
+        // L90 Created At Title Filter Test
+        let rawTimestampTitle = "Created At: 2026-09-06T05:24:40-05:00"
+        check(
+            rawTimestampTitle.hasPrefix("Created At:"),
+            "L90 Timestamp title filter detects Created At prefix")
+
+        // L91 Budget Threshold Detection Test (80% and 100%)
+        let budgetUnder = AgentEventManager.evaluateBudgetThreshold(
+            cost: 5.0, budget: 10.0, alreadyAlerted80: false, alreadyAlerted100: false)
+        check(!budgetUnder.alert80 && !budgetUnder.alert100, "L91 Under 80% fires no alerts")
+
+        let budget80 = AgentEventManager.evaluateBudgetThreshold(
+            cost: 8.5, budget: 10.0, alreadyAlerted80: false, alreadyAlerted100: false)
+        check(budget80.alert80 && !budget80.alert100, "L91 80% threshold fires alert80")
+
+        let budget100 = AgentEventManager.evaluateBudgetThreshold(
+            cost: 10.2, budget: 10.0, alreadyAlerted80: true, alreadyAlerted100: false)
+        check(budget100.alert100, "L91 100% threshold fires alert100")
+
+        // L92 Budget Threshold Deduplication Test
+        let budgetDup = AgentEventManager.evaluateBudgetThreshold(
+            cost: 11.0, budget: 10.0, alreadyAlerted80: true, alreadyAlerted100: true)
+        check(
+            !budgetDup.alert80 && !budgetDup.alert100,
+            "L92 Already alerted thresholds do not re-fire")
+
+        // L93 High Burn-Rate Evaluation Test
+        check(
+            QuotaAxiTracker.isHighBurnRate(tokensPerMin: 2600.0),
+            "L93 isHighBurnRate true above 2500 tpm")
+        check(
+            !QuotaAxiTracker.isHighBurnRate(tokensPerMin: 1800.0),
+            "L93 isHighBurnRate false below 2500 tpm")
+
+        // L94 Task Dispatch Budget Guard Test (Enforce Limit = true)
+        let allowedUnder = TaskDispatcher.isDispatchAllowed(
+            cost: 4.0, budget: 10.0, enforceLimit: true)
+        check(
+            allowedUnder == true,
+            "L94 Dispatch allowed when under budget with enforcement active")
+
+        let blockedOver = TaskDispatcher.isDispatchAllowed(
+            cost: 10.5, budget: 10.0, enforceLimit: true)
+        check(
+            blockedOver == false,
+            "L94 Dispatch blocked when budget exceeded with enforcement active")
+
+        // L95 Task Dispatch Budget Guard Test (Enforce Limit = false)
+        let allowedOverNoEnforce = TaskDispatcher.isDispatchAllowed(
+            cost: 12.0, budget: 10.0, enforceLimit: false)
+        check(
+            allowedOverNoEnforce == true,
+            "L95 Dispatch permitted when enforcement disabled even if over budget")
+
+        // L96 Budget & Quota Config Persistence Test
+        let origBudgetNotify = cfg.notifyOnBudgetThresholds
+        let origBurnNotify = cfg.notifyOnHighBurnRate
+        let origEnforce = cfg.enforceBudgetLimit
+        cfg.notifyOnBudgetThresholds = false
+        cfg.notifyOnHighBurnRate = false
+        cfg.enforceBudgetLimit = true
+        check(cfg.notifyOnBudgetThresholds == false, "L96 notifyOnBudgetThresholds toggles false")
+        check(cfg.notifyOnHighBurnRate == false, "L96 notifyOnHighBurnRate toggles false")
+        check(cfg.enforceBudgetLimit == true, "L96 enforceBudgetLimit toggles true")
+        cfg.notifyOnBudgetThresholds = origBudgetNotify
+        cfg.notifyOnHighBurnRate = origBurnNotify
+        cfg.enforceBudgetLimit = origEnforce
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

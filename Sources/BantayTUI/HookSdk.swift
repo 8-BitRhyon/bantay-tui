@@ -16,7 +16,7 @@ enum HookSdk {
     /// transcript tailing and the W2 emit recipe — a hook is never
     /// fabricated for them.
     enum AgentTool: String, CaseIterable {
-        case aider, codex, windsurf, cursor
+        case aider, codex, windsurf, cursor, antigravity
     }
 
     /// Repo-relative path to the generic emitter script.
@@ -33,7 +33,7 @@ enum HookSdk {
     /// hook surface documented (they rely on the standalone scan instead).
     static func isHookVerified(_ tool: AgentTool) -> Bool {
         switch tool {
-        case .aider, .codex: return true
+        case .aider, .codex, .antigravity: return true
         case .windsurf, .cursor: return false
         }
     }
@@ -64,6 +64,9 @@ enum HookSdk {
             // `mapToEventPayload`.
             return
                 "\(envPrefix)\(emitterPath) --source codex --type \"$([ \"$CODEX_HOOK_EVENT\" = \"PromptStart\" ] && echo progress || echo completed)\" --title \"codex\""
+        case .antigravity:
+            return
+                "\(envPrefix)\(emitterPath) --source antigravity --type progress --title \"antigravity\""
         case .windsurf, .cursor:
             return nil
         }
@@ -76,8 +79,36 @@ enum HookSdk {
         switch tool {
         case .aider: return mapAider(input)
         case .codex: return mapCodex(input)
+        case .antigravity: return mapAntigravity(input)
         case .windsurf, .cursor: return nil
         }
+    }
+
+    private static func mapAntigravity(_ input: [String: Any]) -> [String: Any]? {
+        let type = (input["type"] as? String) ?? (input["event"] as? String) ?? "progress"
+        let title = (input["title"] as? String) ?? (input["tool"] as? String) ?? "antigravity"
+        let kind: String
+        switch type.lowercased() {
+        case "start", "promptstart", "progress":
+            kind = "progress"
+        case "finish", "promptfinish", "completed", "done":
+            kind = "completed"
+        case "error", "failed":
+            kind = "failed"
+        case "approval", "waiting", "accessrequest":
+            kind = "accessRequest"
+        default:
+            kind = "progress"
+        }
+        var payload: [String: Any] = [
+            "source": "antigravity",
+            "type": kind,
+            "title": title,
+        ]
+        if let paneId = input["pane_id"] as? String ?? input["paneId"] as? String {
+            payload["pane_id"] = paneId
+        }
+        return payload
     }
 
     /// Merge Bantay's hooks into an existing tool config dictionary,
@@ -92,9 +123,8 @@ enum HookSdk {
         switch tool {
         case .codex:
             return mergeCodexHooks(existing: existing, port: port)
-        case .aider:
-            // Aider's config-file install is P2 (hook section unverified);
-            // the merge is deliberately a non-destructive identity.
+        case .aider, .antigravity:
+            // Aider / Antigravity direct hook merges
             return existing
         case .windsurf, .cursor:
             return existing
@@ -108,6 +138,8 @@ enum HookSdk {
     static func removingHooks(from settings: [String: Any], tool: AgentTool) -> [String: Any] {
         guard isHookVerified(tool) else { return settings }
         switch tool {
+        case .aider, .antigravity, .windsurf, .cursor:
+            return settings
         case .codex:
             guard var hooks = settings["hooks"] as? [String: Any] else { return settings }
             var changed = false
@@ -128,8 +160,6 @@ enum HookSdk {
                 merged["hooks"] = hooks
             }
             return merged
-        case .aider, .windsurf, .cursor:
-            return settings
         }
     }
 

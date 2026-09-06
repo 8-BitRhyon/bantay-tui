@@ -67,6 +67,25 @@ final class NotchHUDConfig {
             defaults.set(dailyBudgetUSD, forKey: "dailyBudgetUSD")
         }
     }
+    /// Active notification alerts at 80% and 100% of daily budget.
+    var notifyOnBudgetThresholds: Bool = true {
+        didSet { defaults.set(notifyOnBudgetThresholds, forKey: "notifyOnBudgetThresholds") }
+    }
+    /// Alert on high token burn rate (runaway agent loops).
+    var notifyOnHighBurnRate: Bool = true {
+        didSet { defaults.set(notifyOnHighBurnRate, forKey: "notifyOnHighBurnRate") }
+    }
+    /// Enforce budget limit by blocking task dispatch once the daily budget is exceeded.
+    var enforceBudgetLimit: Bool = false {
+        didSet { defaults.set(enforceBudgetLimit, forKey: "enforceBudgetLimit") }
+    }
+    /// High burn velocity threshold in tokens per minute (default 2500.0).
+    var highBurnThresholdTPM: Double = 2500.0 {
+        didSet {
+            highBurnThresholdTPM = max(highBurnThresholdTPM, 500.0)
+            defaults.set(highBurnThresholdTPM, forKey: "highBurnThresholdTPM")
+        }
+    }
     /// Ambient notch edge-glow indicating live spend level (cyan/amber/red).
     var enableSpendGlow: Bool = true {
         didSet { defaults.set(enableSpendGlow, forKey: "enableSpendGlow") }
@@ -104,13 +123,52 @@ final class NotchHUDConfig {
             NotificationCenter.default.post(name: .mascotLeveledUp, object: nil)
         }
     }
-    /// Shows the Barrie-style Tasks tab in the expanded island.
+    /// Modular Notch Tab Visibility Settings
+    var showAgentsTab: Bool = true {
+        didSet { defaults.set(showAgentsTab, forKey: "showAgentsTab") }
+    }
     var showTasksTab: Bool = true {
         didSet { defaults.set(showTasksTab, forKey: "showTasksTab") }
     }
+    var showHistoryTab: Bool = true {
+        didSet { defaults.set(showHistoryTab, forKey: "showHistoryTab") }
+    }
+    var showShelfTab: Bool = true {
+        didSet { defaults.set(showShelfTab, forKey: "showShelfTab") }
+    }
+    var showMediaTab: Bool = true {
+        didSet { defaults.set(showMediaTab, forKey: "showMediaTab") }
+    }
+    var showNotesTab: Bool = true {
+        didSet { defaults.set(showNotesTab, forKey: "showNotesTab") }
+    }
+    /// Hover Sensitivity Presets ("Instant", "Snappy", "Balanced", "Relaxed").
+    var hoverSensitivityPreset: String = "Snappy" {
+        didSet { defaults.set(hoverSensitivityPreset, forKey: "hoverSensitivityPreset") }
+    }
+
+    /// Hover delay threshold in seconds based on sensitivity setting.
+    var hoverDelaySeconds: TimeInterval {
+        switch hoverSensitivityPreset {
+        case "Instant": return 0.03
+        case "Snappy": return 0.08
+        case "Balanced": return 0.18
+        case "Relaxed": return 0.35
+        default: return 0.08
+        }
+    }
+
     /// Persistent two-way sync toggle for Apple Reminders.
     var syncAppleReminders: Bool = true {
         didSet { defaults.set(syncAppleReminders, forKey: "syncAppleReminders") }
+    }
+    /// Automatic dispatch of agent tasks on creation when @agent is specified (default: false / manual).
+    var autoDispatchTasks: Bool = false {
+        didSet { defaults.set(autoDispatchTasks, forKey: "autoDispatchTasks") }
+    }
+    /// Bring target terminal or app window into focus when dispatching tasks (default: false / silent).
+    var focusTerminalOnDispatch: Bool = false {
+        didSet { defaults.set(focusTerminalOnDispatch, forKey: "focusTerminalOnDispatch") }
     }
     /// Enables live quota-axi provider quota gauge in header bar.
     var enableQuotaAxiGauge: Bool = true {
@@ -367,9 +425,6 @@ final class NotchHUDConfig {
         }
         return diff == 0
     }
-    var showShelfTab = true {
-        didSet { defaults.set(showShelfTab, forKey: "showShelfTab") }
-    }
     /// "Keep expanded" intent (F11). Survives user-driven collapse and
     /// relaunch; clears on explicit unpin and on zero agents.
     var panelPinned = false {
@@ -463,6 +518,24 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "dailyBudgetUSD") as? NSNumber {
             dailyBudgetUSD = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "notifyOnBudgetThresholds") as? Bool {
+            notifyOnBudgetThresholds = v
+        }
+        if let v = defaults.object(forKey: "notifyOnHighBurnRate") as? Bool {
+            notifyOnHighBurnRate = v
+        }
+        if let v = defaults.object(forKey: "enforceBudgetLimit") as? Bool {
+            enforceBudgetLimit = v
+        }
+        if let v = defaults.object(forKey: "highBurnThresholdTPM") as? NSNumber {
+            highBurnThresholdTPM = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "autoDispatchTasks") as? Bool {
+            autoDispatchTasks = v
+        }
+        if let v = defaults.object(forKey: "focusTerminalOnDispatch") as? Bool {
+            focusTerminalOnDispatch = v
         }
         if let v = defaults.object(forKey: "enableSpendGlow") as? Bool {
             enableSpendGlow = v

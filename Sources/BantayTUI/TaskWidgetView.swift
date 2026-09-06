@@ -285,7 +285,7 @@ public struct TaskWidgetView: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(task.isCompleted ? .green : .white.opacity(0.5))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ScalePressButtonStyle())
             .help(task.isCompleted ? "Mark incomplete" : "Mark completed")
             .accessibilityLabel(task.isCompleted ? "Completed" : "Incomplete")
 
@@ -317,6 +317,8 @@ public struct TaskWidgetView: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(Color.cyan.opacity(0.15), in: Capsule())
+
+                        executionStateBadge(task)
                     }
 
                     ForEach(task.tags, id: \.self) { tag in
@@ -330,15 +332,15 @@ public struct TaskWidgetView: View {
             Spacer(minLength: 4)
 
             // Hover actions: Run with Agent & Delete
-            if hoveredTaskID == task.id {
+            if hoveredTaskID == task.id || task.assignedAgent != nil {
                 HStack(spacing: 4) {
-                    if let agent = task.assignedAgent {
+                    if let agent = task.assignedAgent, !task.isCompleted {
                         Button {
                             runWithAgent(task, agent: agent)
                         } label: {
                             HStack(spacing: 2) {
                                 Image(systemName: "bolt.fill")
-                                Text("Run")
+                                Text(task.executionState == .pending ? "Run" : "Re-run")
                             }
                             .font(.system(size: 8.5, weight: .semibold))
                             .foregroundColor(.black)
@@ -346,21 +348,23 @@ public struct TaskWidgetView: View {
                             .padding(.vertical, 2)
                             .background(Color.yellow, in: Capsule())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(ScalePressButtonStyle())
                         .help("Dispatch prompt to \(agent)")
                     }
 
-                    Button {
-                        withAnimation {
-                            taskStore.removeTask(task.id)
+                    if hoveredTaskID == task.id {
+                        Button {
+                            withAnimation {
+                                taskStore.removeTask(task.id)
+                            }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                                .foregroundColor(.red.opacity(0.8))
                         }
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 10))
-                            .foregroundColor(.red.opacity(0.8))
+                        .buttonStyle(ScalePressButtonStyle())
+                        .help("Delete task")
                     }
-                    .buttonStyle(.plain)
-                    .help("Delete task")
                 }
             }
         }
@@ -372,6 +376,47 @@ public struct TaskWidgetView: View {
         )
         .onHover { isHovered in
             hoveredTaskID = isHovered ? task.id : nil
+        }
+    }
+
+    @ViewBuilder
+    private func executionStateBadge(_ task: BantayTask) -> some View {
+        switch task.executionState {
+        case .working:
+            HStack(spacing: 2) {
+                Image(systemName: "bolt.horizontal.fill")
+                    .font(.system(size: 7))
+                Text("Working")
+                    .font(.system(size: 8, weight: .medium))
+            }
+            .foregroundColor(.cyan)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Color.cyan.opacity(0.2), in: Capsule())
+        case .blocked:
+            HStack(spacing: 2) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 7))
+                Text("Blocked")
+                    .font(.system(size: 8, weight: .medium))
+            }
+            .foregroundColor(.orange)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Color.orange.opacity(0.2), in: Capsule())
+        case .failed:
+            HStack(spacing: 2) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 7))
+                Text("Failed")
+                    .font(.system(size: 8, weight: .medium))
+            }
+            .foregroundColor(.red)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Color.red.opacity(0.2), in: Capsule())
+        default:
+            EmptyView()
         }
     }
 
@@ -430,12 +475,6 @@ public struct TaskWidgetView: View {
     }
 
     private func runWithAgent(_ task: BantayTask, agent: String) {
-        // Dispatches prompt to target agent via control gateway
-        let promptText = task.title
-        NotificationCenter.default.post(
-            name: Notification.Name("BantayRunTaskWithAgent"),
-            object: nil,
-            userInfo: ["prompt": promptText, "agent": agent]
-        )
+        taskStore.dispatchTask(task.id)
     }
 }

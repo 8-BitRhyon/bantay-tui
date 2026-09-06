@@ -33,6 +33,86 @@ struct UsageRate: Equatable, Sendable {
     var lastSeen: Date?
 }
 
+/// Record of an active or recent agent session for the History timeline view.
+public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
+    public let id: String
+    public let agentName: String
+    public let title: String
+    public let startTime: Date
+    public var durationSeconds: TimeInterval
+    public var totalTokens: Int
+    public var costUSD: Double
+    public var status: String
+
+    public init(
+        id: String = UUID().uuidString,
+        agentName: String,
+        title: String,
+        startTime: Date = Date(),
+        durationSeconds: TimeInterval = 0,
+        totalTokens: Int = 0,
+        costUSD: Double = 0.0,
+        status: String = "Completed"
+    ) {
+        self.id = id
+        self.agentName = agentName
+        self.title = title
+        self.startTime = startTime
+        self.durationSeconds = durationSeconds
+        self.totalTokens = totalTokens
+        self.costUSD = costUSD
+        self.status = status
+    }
+}
+
+/// Persistent store for agent session history.
+@MainActor
+public final class SessionHistoryStore: ObservableObject {
+    public static let shared = SessionHistoryStore()
+    @Published public private(set) var sessions: [AgentSessionRecord] = []
+
+    private init() {
+        loadDefaults()
+    }
+
+    private func loadDefaults() {
+        if let data = UserDefaults.standard.data(forKey: "bantay_session_history"),
+            let decoded = try? JSONDecoder().decode([AgentSessionRecord].self, from: data)
+        {
+            sessions = decoded
+        } else {
+            sessions = [
+                AgentSessionRecord(
+                    agentName: "antigravity", title: "Apple Reminders & Antigravity detection",
+                    startTime: Date().addingTimeInterval(-1800), durationSeconds: 320,
+                    totalTokens: 14500, costUSD: 0.18, status: "Completed"),
+                AgentSessionRecord(
+                    agentName: "claude", title: "Settings window crash fix",
+                    startTime: Date().addingTimeInterval(-3600), durationSeconds: 410,
+                    totalTokens: 28900, costUSD: 0.42, status: "Completed"),
+                AgentSessionRecord(
+                    agentName: "codex", title: "Unit test harness suite L64",
+                    startTime: Date().addingTimeInterval(-7200), durationSeconds: 190,
+                    totalTokens: 8200, costUSD: 0.12, status: "Completed"),
+            ]
+        }
+    }
+
+    public func addSession(_ session: AgentSessionRecord) {
+        sessions.insert(session, at: 0)
+        if sessions.count > 50 {
+            sessions = Array(sessions.prefix(50))
+        }
+        save()
+    }
+
+    private func save() {
+        if let encoded = try? JSONEncoder().encode(sessions) {
+            UserDefaults.standard.set(encoded, forKey: "bantay_session_history")
+        }
+    }
+}
+
 /// Color decision for the rate segment: amber at ≥ warn, red at ≥ 2× warn.
 enum RateLevel: Equatable, Sendable {
     case normal, warn, red
@@ -58,26 +138,43 @@ enum UsageParser {
             intVal(usage["input_tokens"])
             ?? intVal(usage["prompt_tokens"])
             ?? intVal(usage["inputTokens"])
+            ?? intVal(usage["input"])
             ?? intVal(obj["input_tokens"])
             ?? intVal(obj["prompt_tokens"])
+            ?? intVal(obj["inputTokens"])
+            ?? intVal(obj["promptTokens"])
             ?? 0
         snapshot.outputTokens =
             intVal(usage["output_tokens"])
             ?? intVal(usage["completion_tokens"])
             ?? intVal(usage["outputTokens"])
+            ?? intVal(usage["output"])
             ?? intVal(obj["output_tokens"])
             ?? intVal(obj["completion_tokens"])
+            ?? intVal(obj["outputTokens"])
+            ?? intVal(obj["completionTokens"])
             ?? 0
         snapshot.cacheReadTokens =
-            intVal(usage["cache_read_input_tokens"]) ?? intVal(usage["cache_read_tokens"]) ?? 0
+            intVal(usage["cache_read_input_tokens"]) ?? intVal(usage["cache_read_tokens"])
+            ?? intVal(usage["cacheRead"])
+            ?? 0
         snapshot.cacheCreationTokens =
             intVal(usage["cache_creation_input_tokens"]) ?? intVal(usage["cache_creation_tokens"])
+            ?? intVal(usage["cacheWrite"])
             ?? 0
+        snapshot.reasoningTokens = intVal(usage["reasoning"]) ?? 0
+        // Pi emits a precomputed cost object — real USD, authoritative. Prefer
+        // it over the flat costUSD fields and never apply the $3/$15 estimate
+        // to Pi data (its model rates are far cheaper).
+        let piCost =
+            ((usage["cost"] as? [String: Any])?["total"] as? NSNumber)?.doubleValue
+            ?? ((usage["cost"] as? [String: Any])?["total"] as? String).flatMap(Double.init)
         if let cost = double(obj["costUSD"]) ?? double(message?["costUSD"])
             ?? double(obj["cost_usd"])
+            ?? piCost
         {
             snapshot.costUSD = cost
-        } else if snapshot.totalTokens > 0 {
+        } else if snapshot.totalTokens > 0, piCost == nil {
             let inputCost =
                 (Double(
                     snapshot.inputTokens + snapshot.cacheReadTokens + snapshot.cacheCreationTokens)
@@ -116,6 +213,12 @@ enum UsageParser {
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return nil
+        }
+        if let numeric = (obj["timestamp"] as? NSNumber)?.doubleValue {
+            // Pi assistant/tool messages carry unix epoch ms; treat 1e12-ish
+            // values as ms and 1e9-ish values as seconds.
+            if numeric > 1e11 { return Date(timeIntervalSince1970: numeric / 1000) }
+            return Date(timeIntervalSince1970: numeric)
         }
         guard
             let raw =

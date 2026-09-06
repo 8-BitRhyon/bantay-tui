@@ -21,10 +21,9 @@ public struct MascotView: View {
             mainIcon
                 .font(.system(size: size, weight: .semibold))
                 .foregroundColor(colorForState)
-                .scaleEffect(
-                    (state == .working || state == .needsAttention) && animate ? 1.12 : 1.0
-                )
-                .offset(y: (state == .working || state == .needsAttention) && animate ? -1.5 : 0)
+                .scaleEffect(scaleForState)
+                .offset(x: offsetXForState, y: offsetYForState)
+                .rotationEffect(rotationForState)
 
             // Wearable accessory overlay
             accessoryOverlay
@@ -41,16 +40,57 @@ public struct MascotView: View {
         }
     }
 
+    private var scaleForState: CGFloat {
+        guard animate else { return 1.0 }
+        switch state {
+        case .working: return 1.08
+        case .needsAttention: return 1.22
+        case .completed: return 1.15
+        case .idle: return 1.02
+        case .quotaLow: return 1.0
+        }
+    }
+
+    private var offsetXForState: CGFloat {
+        guard animate else { return 0 }
+        switch state {
+        case .quotaLow: return -1.5
+        default: return 0
+        }
+    }
+
+    private var offsetYForState: CGFloat {
+        guard animate else { return 0 }
+        switch state {
+        case .idle: return -1.5
+        case .working: return -1.0
+        case .needsAttention: return -3.0
+        case .completed: return -2.0
+        default: return 0
+        }
+    }
+
+    private var rotationForState: Angle {
+        guard animate else { return .degrees(0) }
+        switch state {
+        case .completed: return .degrees(360)
+        case .needsAttention: return .degrees(-6)
+        default: return .degrees(0)
+        }
+    }
+
     private var animationForState: Animation {
         switch state {
         case .idle:
-            return .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
+            return .easeInOut(duration: 1.5).repeatForever(autoreverses: true)
         case .working:
-            return .easeInOut(duration: 0.4).repeatForever(autoreverses: true)
+            return .easeInOut(duration: 0.5).repeatForever(autoreverses: true)
         case .needsAttention:
-            return .spring(response: 0.25, dampingFraction: 0.4).repeatForever(autoreverses: true)
-        default:
-            return .default
+            return .spring(response: 0.2, dampingFraction: 0.35).repeatForever(autoreverses: true)
+        case .completed:
+            return .spring(response: 0.6, dampingFraction: 0.6)
+        case .quotaLow:
+            return .easeInOut(duration: 0.15).repeatForever(autoreverses: true)
         }
     }
 

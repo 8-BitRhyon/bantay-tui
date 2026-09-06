@@ -53,6 +53,9 @@ struct SettingsView: View {
     @State private var standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
     @State private var showUsage = NotchHUDConfig.shared.usageTrackingEnabled
     @State private var dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
+    @State private var notifyOnBudgetThresholds = NotchHUDConfig.shared.notifyOnBudgetThresholds
+    @State private var notifyOnHighBurnRate = NotchHUDConfig.shared.notifyOnHighBurnRate
+    @State private var enforceBudgetLimit = NotchHUDConfig.shared.enforceBudgetLimit
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
     @State private var showNotchMascot = NotchHUDConfig.shared.showNotchMascot
     @State private var selectedMascotArchetype = NotchHUDConfig.shared.selectedMascotArchetype
@@ -85,12 +88,21 @@ struct SettingsView: View {
     @State private var opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
     @State private var opencodePluginError = ""
     @State private var showTokenRate = NotchHUDConfig.shared.showTokenRate
+    @State private var showAgentsTab = NotchHUDConfig.shared.showAgentsTab
     @State private var showTasksTab = NotchHUDConfig.shared.showTasksTab
+    @State private var showHistoryTab = NotchHUDConfig.shared.showHistoryTab
+    @State private var showShelfTab = NotchHUDConfig.shared.showShelfTab
+    @State private var showMediaTab = NotchHUDConfig.shared.showMediaTab
+    @State private var showNotesTab = NotchHUDConfig.shared.showNotesTab
+    @State private var hoverSensitivity = NotchHUDConfig.shared.hoverSensitivityPreset
     @State private var enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
+    @State private var globalHotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
     @State private var soundThemePreset = NotchHUDConfig.shared.soundThemePreset
     @State private var approvalSoundName = NotchHUDConfig.shared.approvalSoundName
     @State private var completionSoundName = NotchHUDConfig.shared.completionSoundName
     @State private var errorSoundName = NotchHUDConfig.shared.errorSoundName
+    @State private var autoDispatchTasks = NotchHUDConfig.shared.autoDispatchTasks
+    @State private var focusTerminalOnDispatch = NotchHUDConfig.shared.focusTerminalOnDispatch
 
     /// Whether a section title matches the current search query.
     private func matchesSearch(_ title: String) -> Bool {
@@ -233,7 +245,7 @@ struct SettingsView: View {
         case .appearance:
             ["Pill behavior", "Expanded panel", "Displays", "Mascot & Pet Companion"]
         case .agents:
-            ["Muted sources", "Shelf", "Expanded panel"]
+            ["Muted sources", "Tasks & Dispatching", "Shelf", "Expanded panel"]
         case .notifications:
             ["Alerts", "Push notifications (ntfy.sh)", "Quiet hours", "tmux status bar"]
         case .integrations:
@@ -299,6 +311,34 @@ struct SettingsView: View {
                     .onChange(of: dailyBudgetUSD) { newValue in
                         NotchHUDConfig.shared.dailyBudgetUSD = Double(newValue)
                     }
+                    Toggle(
+                        "Notify at 80% and 100% budget thresholds",
+                        isOn: $notifyOnBudgetThresholds
+                    )
+                    .help(
+                        "Sends warning and alarm notifications when daily spend reaches 80% and 100%."
+                    )
+                    .onChange(of: notifyOnBudgetThresholds) { newValue in
+                        NotchHUDConfig.shared.notifyOnBudgetThresholds = newValue
+                    }
+                    Toggle(
+                        "Alert on high token burn rate (⚡ > 2,500 tpm)",
+                        isOn: $notifyOnHighBurnRate
+                    )
+                    .help(
+                        "Notifies when agents consume tokens at an excessively high rate."
+                    )
+                    .onChange(of: notifyOnHighBurnRate) { newValue in
+                        NotchHUDConfig.shared.notifyOnHighBurnRate = newValue
+                    }
+                    Toggle(
+                        "Enforce budget limit (block task dispatch)",
+                        isOn: $enforceBudgetLimit
+                    )
+                    .help("Blocks new task dispatches when the daily budget is exhausted.")
+                    .onChange(of: enforceBudgetLimit) { newValue in
+                        NotchHUDConfig.shared.enforceBudgetLimit = newValue
+                    }
                 }
             }
 
@@ -322,6 +362,25 @@ struct SettingsView: View {
                             }
                         }
                     }
+                }
+            }
+
+            if selectedCategory == .agents && matchesSearch("Tasks & Dispatching") {
+                Section("Tasks & Dispatching") {
+                    Toggle("Auto-run tasks on creation", isOn: $autoDispatchTasks)
+                        .help(
+                            "Automatically dispatch tasks to target agent when created with @agent tag."
+                        )
+                        .onChange(of: autoDispatchTasks) { newValue in
+                            NotchHUDConfig.shared.autoDispatchTasks = newValue
+                        }
+                    Toggle("Focus terminal or app on dispatch", isOn: $focusTerminalOnDispatch)
+                        .help(
+                            "Bring the agent's terminal pane or desktop IDE window into focus when dispatching."
+                        )
+                        .onChange(of: focusTerminalOnDispatch) { newValue in
+                            NotchHUDConfig.shared.focusTerminalOnDispatch = newValue
+                        }
                 }
             }
 
@@ -900,8 +959,40 @@ struct SettingsView: View {
             }
 
             if selectedCategory == .appearance && matchesSearch("Expanded panel") {
-                Section("Expanded panel") {
-                    Toggle("Attention-only tab", isOn: $attentionFilter)
+                Section("Expanded panel & Modular tabs") {
+                    Toggle("🤖 Agents Roster tab", isOn: $showAgentsTab)
+                        .help("Enable or disable AI agent monitoring and roster in notch.")
+                        .onChange(of: showAgentsTab) { newValue in
+                            NotchHUDConfig.shared.showAgentsTab = newValue
+                        }
+                    Toggle("📋 Tasks & Reminders tab", isOn: $showTasksTab)
+                        .help(
+                            "Adds a Barrie-style Task Manager tab to the expanded Dynamic Island."
+                        )
+                        .onChange(of: showTasksTab) { newValue in
+                            NotchHUDConfig.shared.showTasksTab = newValue
+                        }
+                    Toggle("📜 Session History tab", isOn: $showHistoryTab)
+                        .help("Adds a Session History feed tab to the expanded Dynamic Island.")
+                        .onChange(of: showHistoryTab) { newValue in
+                            NotchHUDConfig.shared.showHistoryTab = newValue
+                        }
+                    Toggle("📁 Drop Shelf & Pasteboard tab", isOn: $showShelfTab)
+                        .help("Adds a file drop shelf & pasteboard history tab to expanded island.")
+                        .onChange(of: showShelfTab) { newValue in
+                            NotchHUDConfig.shared.showShelfTab = newValue
+                        }
+                    Toggle("🎵 Now Playing Media tab", isOn: $showMediaTab)
+                        .help("Adds Apple Music & Spotify player controls to expanded island.")
+                        .onChange(of: showMediaTab) { newValue in
+                            NotchHUDConfig.shared.showMediaTab = newValue
+                        }
+                    Toggle("📝 Quick Notes Scratchpad tab", isOn: $showNotesTab)
+                        .help("Adds an auto-saving markdown quick notes tab to expanded island.")
+                        .onChange(of: showNotesTab) { newValue in
+                            NotchHUDConfig.shared.showNotesTab = newValue
+                        }
+                    Toggle("Attention-only triage tab", isOn: $attentionFilter)
                         .help(
                             "Adds an Attention tab showing only agents that need "
                                 + "you or failed — the 'everything that needs me' triage."
@@ -909,22 +1000,26 @@ struct SettingsView: View {
                         .onChange(of: attentionFilter) { newValue in
                             NotchHUDConfig.shared.attentionFilterEnabled = newValue
                         }
-                    Toggle("Barrie Tasks tab", isOn: $showTasksTab)
-                        .help(
-                            "Adds a Barrie-style Task Manager tab to the expanded Dynamic Island."
-                        )
-                        .onChange(of: showTasksTab) { newValue in
-                            NotchHUDConfig.shared.showTasksTab = newValue
-                        }
+                    Picker("Notch Hover Sensitivity", selection: $hoverSensitivity) {
+                        Text("Instant (0.03s)").tag("Instant")
+                        Text("Snappy (0.08s)").tag("Snappy")
+                        Text("Balanced (0.18s)").tag("Balanced")
+                        Text("Relaxed (0.35s)").tag("Relaxed")
+                    }
+                    .help("Adjust how quickly hovering over the notch expands the UI.")
+                    .onChange(of: hoverSensitivity) { newValue in
+                        NotchHUDConfig.shared.hoverSensitivityPreset = newValue
+                    }
                     Toggle("Quota-Axi provider gauge", isOn: $enableQuotaAxiGauge)
                         .help("Displays live Quota-Axi provider percentage in header bar.")
                         .onChange(of: enableQuotaAxiGauge) { newValue in
                             NotchHUDConfig.shared.enableQuotaAxiGauge = newValue
                         }
-                    Toggle("Group agents by state", isOn: $expandedGroupByState)
-                        .help("Need-input first, then working, done, failed, idle.")
-                        .onChange(of: expandedGroupByState) { newValue in
-                            NotchHUDConfig.shared.expandedGroupByState = newValue
+                    Toggle("⌨️ Global Hotkey (⌥Space)", isOn: $globalHotkeyEnabled)
+                        .help("Press Option+Space from anywhere to toggle the Dynamic Island.")
+                        .onChange(of: globalHotkeyEnabled) { newValue in
+                            NotchHUDConfig.shared.globalHotkeyEnabled = newValue
+                            GlobalHotkeyManager.shared.registerGlobalHotkey()
                         }
                 }
             }

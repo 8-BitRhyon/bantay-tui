@@ -244,7 +244,8 @@ final class AgentEventManagerTests: XCTestCase {
             paneId: "w3:p3",
             workspaceId: "w3",
             terminalTitle: "Kilo CLI | Working",
-            cwd: "/Users/runner/work/bantay-tui/bantay-tui")
+            cwd: "/Users/runner/work/bantay-tui/bantay-tui",
+            agentSession: nil)
         let snapshot = AgentEventManager.snapshot(for: agent)
         XCTAssertEqual(snapshot?.source, "kilo")
         XCTAssertEqual(snapshot?.kind, .accessRequest)
@@ -252,6 +253,24 @@ final class AgentEventManagerTests: XCTestCase {
         XCTAssertEqual(snapshot?.workspaceId, "w3")
         XCTAssertEqual(snapshot?.title, "Kilo CLI | Working")
         XCTAssertEqual(snapshot?.id, "w3:p3")
+    }
+
+    func testPiBlockedMapsToWaitingNotAccessRequest() {
+        // Pi has no built-in permission system — "blocked" is an extension/
+        // trust dialog, so it must surface as amber "Blocked" (.waiting), not
+        // a red "Need approval" alarm (.accessRequest).
+        let agent = HerdrAgentInfo(
+            agent: "pi",
+            agentStatus: "blocked",
+            paneId: "w1:p1",
+            workspaceId: "w1",
+            terminalTitle: "pi | Working",
+            cwd: "/Users/runner/work/bantay-tui/bantay-tui",
+            agentSession: nil)
+        let snapshot = AgentEventManager.snapshot(for: agent)
+        XCTAssertEqual(snapshot?.kind, .waiting)
+        XCTAssertEqual(AgentEventManager.kind(for: "blocked", agent: "pi"), .waiting)
+        XCTAssertEqual(AgentEventManager.kind(for: "blocked", agent: "kilo"), .accessRequest)
     }
 
     // MARK: - herdr capture update() logic
@@ -263,7 +282,8 @@ final class AgentEventManagerTests: XCTestCase {
             paneId: pane,
             workspaceId: String(pane.split(separator: ":").first ?? ""),
             terminalTitle: "\(name) | \(status)",
-            cwd: nil)
+            cwd: nil,
+            agentSession: nil)
     }
 
     func testFirstPollEmitsWorkingEvent() {

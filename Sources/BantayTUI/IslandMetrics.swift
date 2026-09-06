@@ -546,6 +546,26 @@ public enum IslandMetrics: Sendable {
         return remMinutes > 0 ? "\(hours)h\(remMinutes)m" : "\(hours)h"
     }
 
+    /// Strips raw markdown links, escape sequences (\n), and file path dumps
+    /// to format clean single-line HUD subtitle strings.
+    public static func cleanHUDText(_ text: String) -> String {
+        var s =
+            text
+            .replacingOccurrences(of: "\\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        let pattern = "\\[([^\\]]+)\\]\\([^\\)]+\\)"
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+            let range = NSRange(location: 0, length: s.utf16.count)
+            s = regex.stringByReplacingMatches(
+                in: s, options: [], range: range, withTemplate: "$1")
+        }
+        s = s.replacingOccurrences(of: "file:///[^\\s]+", with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? text : trimmed
+    }
+
     /// Whether the roster should react to single-key shortcuts (Y/N/digits).
     /// Requires the island window to be key (clicked/global hotkey focus).
     public static func shortcutKey(for char: Character) -> ApprovalShortcut? {
@@ -802,7 +822,7 @@ public enum IslandMetrics: Sendable {
     }
 
     public static func shouldExpand(hovering: Bool, hasAgents: Bool) -> Bool {
-        hovering && hasAgents
+        hovering
     }
 
     public static func shouldCollapse(isExpanded: Bool, hasAgents: Bool) -> Bool {

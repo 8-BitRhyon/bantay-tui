@@ -187,14 +187,21 @@ final class AgentEventManager: ObservableObject {
     private var lastSoundAt: [String: Date] = [:]
     /// PERF-2: last time the standalone ps scan ran (throttle state).
     private var lastStandaloneScan: Date?
+    /// Cached standalone detected agents between scans (prevent wiping roster between ticks).
+    private var lastDetectedAgents: [DetectedAgent] = []
     /// PERF-2: minimum interval between standalone `ps` scans.
-    static let minScanInterval: TimeInterval = 30
+    static let minScanInterval: TimeInterval = 2.0
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
     /// expensive enumeration + read on each poll.
     private var transcriptMtimes: [String: Date] = [:]
     /// Last kilo cumulative snapshot + poll interval, for tpm poll-and-diff.
     private var lastKiloSnapshot: UsageSnapshot?
     private var kiloPollInterval: TimeInterval = 2.0
+    /// Direction B: Budget & Quota active alert tracking state.
+    private var didAlertBudget80 = false
+    private var didAlertBudget100 = false
+    private var lastBudgetAlertDay: Int = Calendar.current.component(.day, from: Date())
+    private var lastHighBurnAlertDate: Date?
     /// When each pane's current working burst started (for elapsed timers).
     /// Set when a pane transitions into progress/started; cleared when it
     /// leaves working state.
@@ -432,6 +439,8 @@ final class AgentEventManager: ObservableObject {
                 source: source, kind: event.kind, title: event.title ?? event.message,
                 paneId: event.paneId)
         }
+        TaskStore.shared.updateTaskState(
+            paneId: event.paneId, source: event.sourceKey, kind: event.kind)
         if event.kind == .accessRequest || event.kind == .waiting {
             pendingApprovals[key] = (variance: event.variance, choices: event.choices)
         } else if event.kind != .progress && event.kind != .started {
@@ -550,6 +559,16 @@ extension AgentEventManager {
         }
     }
 
+    /// Agent-aware status mapping. Pi has no built-in permission system — a
+    /// `blocked` status is an extension/trust dialog, not a request Bantay can
+    /// approve. Surface it as amber `.waiting` instead of a red "Need
+    /// approval" alarm (which implies an approvable security decision).
+    nonisolated static func kind(for status: String, agent: String) -> AgentEventKind? {
+        guard let kind = kind(for: status) else { return nil }
+        if agent == "pi", kind == .accessRequest { return .waiting }
+        return kind
+    }
+
     nonisolated static func severity(of kind: AgentEventKind) -> Int {
         switch kind {
         case .accessRequest: return 4
@@ -562,7 +581,7 @@ extension AgentEventManager {
     }
 
     nonisolated static func snapshot(for agent: HerdrAgentInfo) -> AgentSnapshot? {
-        guard let kind = kind(for: agent.agentStatus ?? "") else { return nil }
+        guard let kind = kind(for: agent.agentStatus ?? "", agent: agent.agent) else { return nil }
         let projectContext: ProjectContext? = {
             guard let cwd = agent.cwd, !cwd.isEmpty else { return nil }
             return ProjectContext(cwd: cwd)
@@ -601,7 +620,9 @@ extension AgentEventManager {
 
         var grouped: [String: [AgentEvent]] = [:]
         for agent in agents {
-            guard let kind = kind(for: agent.agentStatus ?? ""), kind != .idle else { continue }
+            guard let kind = kind(for: agent.agentStatus ?? "", agent: agent.agent),
+                kind != .idle
+            else { continue }
             let key = agent.paneId ?? agent.agent
             grouped[key, default: []].append(
                 AgentEvent(
@@ -738,20 +759,22 @@ extension AgentEventManager {
                 minInterval: Self.minScanInterval)
         if rescan {
             lastStandaloneScan = Date()
+            lastDetectedAgents = StandaloneAgentScanner.scan()
         }
+        let currentDetected = scanStandalone ? lastDetectedAgents : []
         let agents: [HerdrAgentInfo] = await Task.detached(priority: .userInitiated) {
-            let detected = rescan ? StandaloneAgentScanner.scan() : []
             return herdrAgents
-                + detected.filter {
+                + currentDetected.filter {
                     !Set(herdrAgents.map { $0.agent }).contains($0.name)
                 }.map {
                     HerdrAgentInfo(
                         agent: $0.name,
                         agentStatus: "working",
-                        paneId: nil,
+                        paneId: "standalone:\($0.name)",
                         workspaceId: nil,
                         terminalTitle: $0.activity,
-                        cwd: nil
+                        cwd: nil,
+                        agentSession: nil
                     )
                 }
         }.value
@@ -820,6 +843,7 @@ extension AgentEventManager {
                 self.usage = usageAndRate.0
                 self.usageRate = usageAndRate.1
             }
+            evaluateBudgetAndQuotaAlerts()
         }
         let liveStatuses: [String: String] = Dictionary(
             agents.compactMap {
@@ -1056,10 +1080,102 @@ extension AgentEventManager {
                 paneId: nil,
                 workspaceId: nil,
                 terminalTitle: $0.activity,
-                cwd: nil
+                cwd: nil,
+                agentSession: nil
             )
         }
         return herdr + extras
+    }
+
+    // MARK: - Active Budget & Quota Enforcement (Direction B)
+
+    /// Pure helper to evaluate budget threshold state transitions (testable without side-effects).
+    static func evaluateBudgetThreshold(
+        cost: Double,
+        budget: Double,
+        alreadyAlerted80: Bool,
+        alreadyAlerted100: Bool
+    ) -> (alert80: Bool, alert100: Bool) {
+        let safeBudget = max(budget, 0.5)
+        let ratio = cost / safeBudget
+        var trigger80 = false
+        var trigger100 = false
+        if ratio >= 1.0 && !alreadyAlerted100 {
+            trigger100 = true
+        } else if ratio >= 0.8 && !alreadyAlerted80 && !alreadyAlerted100 {
+            trigger80 = true
+        }
+        return (trigger80, trigger100)
+    }
+
+    /// Evaluates daily spend against budget limit and checks for runaway burn rates.
+    func evaluateBudgetAndQuotaAlerts() {
+        let currentDay = Calendar.current.component(.day, from: Date())
+        if currentDay != lastBudgetAlertDay {
+            // Day rollover: reset daily budget alert flags
+            didAlertBudget80 = false
+            didAlertBudget100 = false
+            lastBudgetAlertDay = currentDay
+        }
+
+        let config = NotchHUDConfig.shared
+        guard config.usageTrackingEnabled else { return }
+
+        // 1. Budget Threshold Alerts (80% and 100%)
+        if config.notifyOnBudgetThresholds {
+            let budget = max(config.dailyBudgetUSD, 0.5)
+            let cost = usage.costUSD
+            let (trigger80, trigger100) = Self.evaluateBudgetThreshold(
+                cost: cost,
+                budget: budget,
+                alreadyAlerted80: didAlertBudget80,
+                alreadyAlerted100: didAlertBudget100
+            )
+
+            if trigger100 {
+                didAlertBudget100 = true
+                didAlertBudget80 = true
+                let formattedCost = String(format: "$%.2f", cost)
+                let formattedBudget = String(format: "$%.2f", budget)
+                ApprovalNotificationController.shared.postAlert(
+                    title: "🚨 Daily AI Budget Exceeded",
+                    subtitle: "Spend \(formattedCost) has reached the \(formattedBudget) limit",
+                    soundName: config.errorSoundName
+                )
+                if let sound = NSSound(named: config.errorSoundName) {
+                    sound.play()
+                }
+            } else if trigger80 {
+                didAlertBudget80 = true
+                let formattedCost = String(format: "$%.2f", cost)
+                let formattedBudget = String(format: "$%.2f", budget)
+                ApprovalNotificationController.shared.postAlert(
+                    title: "⚠️ Daily AI Budget Warning",
+                    subtitle: "Spend \(formattedCost) has reached 80% of \(formattedBudget) limit",
+                    soundName: config.approvalSoundName
+                )
+                if let sound = NSSound(named: config.approvalSoundName) {
+                    sound.play()
+                }
+            }
+        }
+
+        // 2. High Burn Rate Alert (Runaway agent loops)
+        if config.notifyOnHighBurnRate,
+            let tpm = usageRate.tokensPerMinute,
+            tpm >= config.highBurnThresholdTPM
+        {
+            let now = Date()
+            if lastHighBurnAlertDate == nil || now.timeIntervalSince(lastHighBurnAlertDate!) > 300 {
+                lastHighBurnAlertDate = now
+                let formattedRate = String(format: "%.0f", tpm)
+                ApprovalNotificationController.shared.postAlert(
+                    title: "⚡ High Token Burn Rate",
+                    subtitle: "Current velocity is \(formattedRate) tokens/min",
+                    soundName: config.approvalSoundName
+                )
+            }
+        }
     }
 }
 

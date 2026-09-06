@@ -35,6 +35,13 @@ enum AgentDetector {
                 homePath + "/.gemini/sessions",
                 homePath + "/.gemini/antigravity-ide/brain",
             ]
+        case "antigravity", "antigravity-ide", "antigravity-cli", "agy":
+            return [
+                homePath + "/.gemini/antigravity-ide/brain",
+                homePath + "/.gemini/sessions",
+                homePath + "/.gemini/antigravity-ide",
+                homePath + "/.gemini",
+            ]
         case "cursor", "cursor-agent":
             return [homePath + "/.cursor-agent"]
         case "kilo", "kilocode":
@@ -51,6 +58,14 @@ enum AgentDetector {
                 homePath + "/.local/state/manicode/projects",
                 homePath + "/.local/state/manicode",
             ]
+        case "pi":
+            return [
+                // Pi auto-saves every session as append-only JSONL under
+                // ~/.pi/agent/sessions, one file per cwd tree. The parent
+                // ~/.pi/agent dir holds settings/auth/trust files that aren't
+                // transcripts, so sessions is the single authoritative root.
+                homePath + "/.pi/agent/sessions"
+            ]
         case "herdr":
             return [
                 homePath + "/.config/herdr",
@@ -64,6 +79,18 @@ enum AgentDetector {
     /// Maps a process name (basename) to a canonical agent name, or nil.
     static func canonicalName(forProcess processName: String) -> String? {
         let lower = processName.lowercased()
+        if lower.contains("helper")
+            || lower.contains("renderer")
+            || lower.contains("gpu")
+            || lower.contains("plugin")
+            || lower.contains("crashpad")
+            || lower.contains("utility")
+        {
+            return nil
+        }
+        if lower.contains("antigravity") || lower.contains("agy") {
+            return "antigravity"
+        }
         switch lower {
         case "claude", "claude-code", "claude-agent", "claude-ai":
             return "claude"
@@ -83,8 +110,6 @@ enum AgentDetector {
             return "opencode"
         case "grok", "grok-cli":
             return "grok"
-        case "agy", "antigravity":
-            return "antigravity"
         case "pi":
             return "pi"
         case "copilot":
@@ -108,15 +133,16 @@ enum AgentDetector {
     static func canonicalNameFromCommand(_ command: String) -> String? {
         let lower = command.lowercased()
         // Skip obvious helper/browser subprocesses first.
-        if lower.contains("helper")
-            || lower.contains("renderer")
-            || lower.contains("gpu")
-            || lower.contains("extension host")
-            || lower.contains(".app/contents")
+        if lower.contains("helper (gpu)")
+            || lower.contains("helper (renderer)")
+            || lower.contains("helper (plugin)")
         {
             return nil
         }
         let tokens: [(String, String)] = [
+            ("antigravity", "antigravity"),
+            ("antigravity-ide", "antigravity"),
+            ("agy", "antigravity"),
             ("kilo", "kilo"),
             ("freebuff", "freebuff"),
             ("herdr", "herdr"),
@@ -126,6 +152,7 @@ enum AgentDetector {
             ("cursor", "cursor"),
             ("opencode", "opencode"),
             ("aider", "aider"),
+            ("pi", "pi"),
         ]
         // Lookalike suffixes that are NOT the agent CLI (e.g. claude-searchd,
         // kilo-daemon, herdr-fs-watch) must not match.
@@ -207,7 +234,58 @@ enum AgentDetector {
         let text = String(data: data, encoding: .utf8) ?? ""
         let lines = text.split(whereSeparator: \.isNewline)
         guard let last = lines.last else { return nil }
-        let snippet = String(last).trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.readableLine(String(last))
+    }
+
+    /// Extracts a readable one-line snippet from a transcript line. JSONL
+    /// transcripts (claude/codex/pi/opencode) keep messages nested, so the
+    /// raw line is unreadable; this surfaces the assistant text or the bash
+    /// command instead. Falls back to the raw trimmed line.
+    static func readableLine(_ line: String) -> String? {
+        if let data = line.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            // Antigravity transcripts (direct content string or tool_calls array)
+            if let contentStr = obj["content"] as? String {
+                let trimmed = contentStr.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return String(trimmed.prefix(160))
+                }
+            }
+            if let toolCalls = obj["tool_calls"] as? [[String: Any]] {
+                let summaries = toolCalls.compactMap {
+                    ($0["toolSummary"] as? String) ?? ($0["toolAction"] as? String)
+                }
+                let joined = summaries.joined(separator: ", ").trimmingCharacters(
+                    in: .whitespacesAndNewlines)
+                if !joined.isEmpty {
+                    return String(joined.prefix(160))
+                }
+            }
+            if let message = obj["message"] as? [String: Any] {
+                if let content = message["content"] as? [[String: Any]] {
+                    let texts = content.compactMap { $0["text"] as? String }
+                    let joined = texts.joined(separator: " ").trimmingCharacters(
+                        in: .whitespacesAndNewlines)
+                    if !joined.isEmpty {
+                        return String(joined.prefix(160))
+                    }
+                }
+                if let text = message["text"] as? String, !text.isEmpty {
+                    return String(text.prefix(160))
+                }
+                if let command = message["command"] as? String, !command.isEmpty {
+                    return String(command.prefix(160))
+                }
+            }
+            if let bash = obj["bashExecution"] as? [String: Any],
+                let command = bash["command"] as? String,
+                !command.isEmpty
+            {
+                return String(command.prefix(160))
+            }
+        }
+        let snippet = line.trimmingCharacters(in: .whitespacesAndNewlines)
         return snippet.isEmpty ? nil : String(snippet.prefix(160))
     }
 }
@@ -228,7 +306,20 @@ enum StandaloneAgentScanner {
     /// processes (they are already surfaced via the herdr adapter) and
     /// processes that are not known agent CLIs.
     static func detect(samples: [ProcessSample], home: String) -> [DetectedAgent] {
-        samples.compactMap { sample in
+        let raw = samples.compactMap { sample -> DetectedAgent? in
+            let procLower = sample.name.lowercased()
+            let cmdLower = sample.command.lowercased()
+            if procLower.contains("helper") || procLower.contains("renderer")
+                || procLower.contains("gpu")
+                || procLower.contains("plugin") || procLower.contains("crashpad")
+                || procLower.contains("utility")
+                || cmdLower.contains("helper") || cmdLower.contains("renderer")
+                || cmdLower.contains("gpu")
+                || cmdLower.contains("plugin") || cmdLower.contains("crashpad")
+                || cmdLower.contains("utility")
+            {
+                return nil
+            }
             guard
                 let name = AgentDetector.canonicalName(forProcess: sample.name)
                     ?? AgentDetector.canonicalNameFromCommand(sample.command)
@@ -244,6 +335,14 @@ enum StandaloneAgentScanner {
                 activity = AgentDetector.latestActivity(root: root)
             }
             return DetectedAgent(pid: sample.pid, name: name, activity: activity)
+        }
+
+        var seenKeys = Set<String>()
+        return raw.filter { agent in
+            let key = "\(agent.name):\(agent.activity ?? "")"
+            guard !seenKeys.contains(key) else { return false }
+            seenKeys.insert(key)
+            return true
         }
     }
 

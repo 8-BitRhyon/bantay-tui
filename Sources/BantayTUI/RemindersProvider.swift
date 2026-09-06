@@ -17,11 +17,14 @@ public final class RemindersProvider: ObservableObject {
     @Published public private(set) var isLoading = false
     @Published public private(set) var defaultList: EKCalendar?
 
-    // EKEventStore is thread-safe for the calls below; marking it
-    // nonisolated(unsafe) avoids the Swift 6.1 "sending 'self.store' risks
-    // causing data races" error when awaiting its nonisolated async methods
-    // from a @MainActor class. All real accesses stay on the main actor.
-    nonisolated(unsafe) private let store = EKEventStore()
+    private var _store: EKEventStore?
+    private var store: EKEventStore? {
+        guard ApprovalNotificationController.hasBundleProxy else { return nil }
+        if _store == nil {
+            _store = EKEventStore()
+        }
+        return _store
+    }
 
     private init() {
         checkAuthorizationStatus()
@@ -32,13 +35,14 @@ public final class RemindersProvider: ObservableObject {
         let auth = isAuthorized
         authorized = auth
         if auth {
-            defaultList = store.defaultCalendarForNewReminders()
+            defaultList = store?.defaultCalendarForNewReminders()
         }
     }
 
     /// Whether Reminders access is already granted (macOS 13-safe; the 14+
     /// `.fullAccess` enum case is mapped to authorized here).
     public var isAuthorized: Bool {
+        guard ApprovalNotificationController.hasBundleProxy else { return false }
         let status = EKEventStore.authorizationStatus(for: .reminder)
         switch status {
         case .authorized, .fullAccess:
@@ -50,8 +54,14 @@ public final class RemindersProvider: ObservableObject {
 
     /// Request Reminders permission (prompts once).
     public func requestAccess() async -> Bool {
+        guard let store else { return false }
         do {
-            let granted = try await store.requestAccess(to: .reminder)
+            let granted: Bool
+            if #available(macOS 14.0, *) {
+                granted = try await store.requestFullAccessToReminders()
+            } else {
+                granted = try await store.requestAccess(to: .reminder)
+            }
             authorized = granted
             if granted { defaultList = store.defaultCalendarForNewReminders() }
             return granted
@@ -66,7 +76,7 @@ public final class RemindersProvider: ObservableObject {
         if isAuthorized {
             authorized = true
             if defaultList == nil {
-                defaultList = store.defaultCalendarForNewReminders()
+                defaultList = store?.defaultCalendarForNewReminders()
             }
             return true
         }
@@ -78,6 +88,7 @@ public final class RemindersProvider: ObservableObject {
         guard await ensureAccess() else { return }
         isLoading = true
         defer { isLoading = false }
+        guard let store else { return }
         let calendar = defaultList ?? store.defaultCalendarForNewReminders()
         guard let calendar else { return }
         let predicate = store.predicateForReminders(in: [calendar])
@@ -103,6 +114,7 @@ public final class RemindersProvider: ObservableObject {
     @discardableResult
     public func add(title: String, due: Date? = nil) async -> Bool {
         guard await ensureAccess() else { return false }
+        guard let store else { return false }
         let list = defaultList ?? store.defaultCalendarForNewReminders()
         guard let list else { return false }
         let reminder = EKReminder(eventStore: store)
@@ -123,6 +135,7 @@ public final class RemindersProvider: ObservableObject {
 
     /// Mark a reminder complete.
     public func complete(_ reminder: EKReminder) async {
+        guard let store else { return }
         reminder.isCompleted = true
         try? store.save(reminder, commit: true)
         await refresh()
@@ -130,6 +143,7 @@ public final class RemindersProvider: ObservableObject {
 
     /// Remove a reminder.
     public func remove(_ reminder: EKReminder) async {
+        guard let store else { return }
         try? store.remove(reminder, commit: true)
         await refresh()
     }
