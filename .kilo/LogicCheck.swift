@@ -5421,6 +5421,24 @@ struct LogicCheckMain {
             kiloDetected.isEmpty,
             "L114 StandaloneAgentScanner rejects kilo background extension server")
 
+        // L115 NaturalLanguageParser 'next week' & 'in N weeks' cleanTitle isolation
+        let nextWeekTask = NaturalLanguageParser.parse("Ship feature next week")
+        check(
+            nextWeekTask.cleanTitle == "Ship feature",
+            "L115 cleanTitle for 'next week' does not leak 'next' (got: '\(nextWeekTask.cleanTitle)')"
+        )
+        check(
+            nextWeekTask.dueDate != nil,
+            "L115 dueDate for 'next week' is populated")
+        let inWeeksTask = NaturalLanguageParser.parse("Deploy release in 2 weeks !!")
+        check(
+            inWeeksTask.cleanTitle == "Deploy release",
+            "L115 cleanTitle for 'in 2 weeks' does not leak tokens (got: '\(inWeeksTask.cleanTitle)')"
+        )
+        check(
+            inWeeksTask.priority == .high,
+            "L115 priority for '!!' is high")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

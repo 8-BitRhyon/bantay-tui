@@ -40,36 +40,6 @@ enum CodexUsageAdapter {
         snapshot.costBySource["codex"] = cost
         return snapshot
     }
-
-    private static func sqlite3Query(sql: String, db: URL) -> [[String]]? {
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
-        guard sqlite3_open_v2(db.path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            if handle != nil { sqlite3_close(handle) }
-            return nil
-        }
-        defer { sqlite3_close(handle) }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
-            sqlite3_finalize(stmt)
-            return nil
-        }
-        defer { sqlite3_finalize(stmt) }
-        var rows: [[String]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let cols = sqlite3_column_count(stmt)
-            var row: [String] = []
-            for i in 0..<cols {
-                if let text = sqlite3_column_text(stmt, i) {
-                    row.append(String(cString: text))
-                } else {
-                    row.append("")
-                }
-            }
-            rows.append(row)
-        }
-        return rows
-    }
 }
 
 /// Universal adapter reading Cursor AI daily statistics from `state.vscdb`.
@@ -120,34 +90,35 @@ enum CursorUsageAdapter {
         snapshot.costBySource["cursor"] = cost
         return snapshot
     }
+}
 
-    private static func sqlite3Query(sql: String, db: URL) -> [[String]]? {
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
-        guard sqlite3_open_v2(db.path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            if handle != nil { sqlite3_close(handle) }
-            return nil
-        }
-        defer { sqlite3_close(handle) }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
-            sqlite3_finalize(stmt)
-            return nil
-        }
-        defer { sqlite3_finalize(stmt) }
-        var rows: [[String]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let cols = sqlite3_column_count(stmt)
-            var row: [String] = []
-            for i in 0..<cols {
-                if let text = sqlite3_column_text(stmt, i) {
-                    row.append(String(cString: text))
-                } else {
-                    row.append("")
-                }
-            }
-            rows.append(row)
-        }
-        return rows
+// ponytail: single shared SQLite query helper eliminating 30 lines of duplicate C-API boilerplate
+private func sqlite3Query(sql: String, db: URL) -> [[String]]? {
+    var handle: OpaquePointer?
+    let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
+    guard sqlite3_open_v2(db.path, &handle, flags, nil) == SQLITE_OK, let handle else {
+        if handle != nil { sqlite3_close(handle) }
+        return nil
     }
+    defer { sqlite3_close(handle) }
+    var stmt: OpaquePointer?
+    guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+        sqlite3_finalize(stmt)
+        return nil
+    }
+    defer { sqlite3_finalize(stmt) }
+    var rows: [[String]] = []
+    while sqlite3_step(stmt) == SQLITE_ROW {
+        let cols = sqlite3_column_count(stmt)
+        var row: [String] = []
+        for i in 0..<cols {
+            if let text = sqlite3_column_text(stmt, i) {
+                row.append(String(cString: text))
+            } else {
+                row.append("")
+            }
+        }
+        rows.append(row)
+    }
+    return rows
 }

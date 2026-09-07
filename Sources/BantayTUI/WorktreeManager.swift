@@ -33,22 +33,9 @@ enum WorktreeManager {
         let worktreePath = (worktreeBase as NSString).appendingPathComponent(
             (branch as NSString).lastPathComponent
         )
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["worktree", "add", "-b", branch, worktreePath]
-        process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
-                return worktreePath
-            }
-        } catch {
-            return nil
-        }
-        return nil
+        let (status, _) = runGit(
+            ["worktree", "add", "-b", branch, worktreePath], repoRoot: repoRoot)
+        return status == 0 ? worktreePath : nil
     }
 
     /// Removes an existing Git worktree and prunes its entry.
@@ -57,45 +44,36 @@ enum WorktreeManager {
         repoRoot: String,
         worktreePath: String
     ) async -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["worktree", "remove", "--force", worktreePath]
-        process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        runGit(["worktree", "remove", "--force", worktreePath], repoRoot: repoRoot).status == 0
     }
 
     /// Lists active worktree paths for a given git repository.
     static func listWorktrees(repoRoot: String) async -> [String] {
+        let (_, text) = runGit(["worktree", "list", "--porcelain"], repoRoot: repoRoot)
+        return text.split(separator: "\n").compactMap { line in
+            line.hasPrefix("worktree ") ? String(line.dropFirst("worktree ".count)) : nil
+        }
+    }
+
+    // ponytail: single shared process runner for git CLI operations
+    @discardableResult
+    private static func runGit(_ args: [String], repoRoot: String) -> (
+        status: Int32, output: String
+    ) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["worktree", "list", "--porcelain"]
+        process.arguments = args
         process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
-
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-
         do {
             try process.run()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            guard let text = String(data: data, encoding: .utf8) else { return [] }
-
-            return text.split(separator: "\n").compactMap { line -> String? in
-                if line.hasPrefix("worktree ") {
-                    return String(line.dropFirst("worktree ".count))
-                }
-                return nil
-            }
+            return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
         } catch {
-            return []
+            return (-1, "")
         }
     }
 }

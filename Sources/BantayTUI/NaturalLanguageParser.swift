@@ -199,20 +199,25 @@ public enum NaturalLanguageParser {
             let nextMonth = calendar.date(byAdding: .month, value: 1, to: startOfDay)!
             let comps = calendar.dateComponents([.year, .month], from: nextMonth)
             return calendar.date(from: comps)!
-        case "day", "days":
-            // "in 3 days" → prior token was a number.
-            if idx >= 1, let n = Int(tokens[idx - 1]) {
-                index = idx + 1
-                return calendar.date(byAdding: .day, value: n, to: startOfDay)
-            }
-            return nil
-        case "week":
-            if idx >= 1, tokens[idx - 1] == "next" {
-                index = idx + 1
-                return calendar.date(byAdding: .day, value: 7, to: startOfDay)
-            }
-            return nil
         case "next":
+            // ponytail: handle 'next week/month/weekday' atomically so 'next' doesn't leak into cleanTitle
+            if idx + 1 < tokens.count {
+                let nextToken = tokens[idx + 1].lowercased()
+                if nextToken == "week" || nextToken == "weeks" {
+                    index = idx + 2
+                    return calendar.date(byAdding: .day, value: 7, to: startOfDay)
+                }
+                if nextToken == "month" || nextToken == "months" {
+                    index = idx + 2
+                    return calendar.date(byAdding: .month, value: 1, to: startOfDay)
+                }
+                if let weekday = weekdayNames[nextToken] {
+                    var daysAhead = weekday - calendar.component(.weekday, from: startOfDay)
+                    if daysAhead <= 0 { daysAhead += 7 }
+                    index = idx + 2
+                    return calendar.date(byAdding: .day, value: daysAhead, to: startOfDay)
+                }
+            }
             return nil
         default:
             break
@@ -226,12 +231,21 @@ public enum NaturalLanguageParser {
             return calendar.date(byAdding: .day, value: daysAhead, to: startOfDay)
         }
 
-        // "in N days" where "in" is the current token.
+        // "in N days/weeks" or bare "N days/weeks"
         if token == "in", idx + 1 < tokens.count, let n = Int(tokens[idx + 1]),
-            idx + 2 < tokens.count, ["day", "days", "week", "weeks"].contains(tokens[idx + 2])
+            idx + 2 < tokens.count,
+            ["day", "days", "week", "weeks"].contains(tokens[idx + 2].lowercased())
         {
-            let isWeeks = tokens[idx + 2].hasPrefix("week")
+            let isWeeks = tokens[idx + 2].lowercased().hasPrefix("week")
             index = idx + 3
+            let value = isWeeks ? n * 7 : n
+            return calendar.date(byAdding: .day, value: value, to: startOfDay)
+        }
+        if let n = Int(token), idx + 1 < tokens.count,
+            ["day", "days", "week", "weeks"].contains(tokens[idx + 1].lowercased())
+        {
+            let isWeeks = tokens[idx + 1].lowercased().hasPrefix("week")
+            index = idx + 2
             let value = isWeeks ? n * 7 : n
             return calendar.date(byAdding: .day, value: value, to: startOfDay)
         }
