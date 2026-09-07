@@ -82,6 +82,14 @@ public enum NaturalLanguageParser {
                 continue
             }
 
+            // #tokens → tags.
+            if raw.hasPrefix("#") && raw.count > 1 {
+                let tag = String(raw.dropFirst()).lowercased()
+                tags.append(tag)
+                i += 1
+                continue
+            }
+
             // Times (at/by 5pm, 17:00, at 5:30) — before dates so "at 5pm"
             // isn't swallowed by the date introducer.
             if let time = parseTime(tokens: tokens, at: &i, calendar: calendar) {

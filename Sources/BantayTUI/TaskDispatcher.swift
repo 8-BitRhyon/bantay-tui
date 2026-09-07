@@ -23,6 +23,7 @@ public final class TaskDispatcher: ObservableObject {
     }
 
     /// Dispatches a task to its assigned agent and returns the linked pane/target ID if successful.
+    /// Dispatches a task to its assigned agent and returns the linked pane/target ID if successful.
     @discardableResult
     public func dispatch(task: BantayTask) -> String? {
         if !Self.isDispatchAllowed(
@@ -37,10 +38,25 @@ public final class TaskDispatcher: ObservableObject {
             task.assignedAgent
             ?? AgentDetector.canonicalNameFromCommand(task.title)
             ?? "claude"
-        let agentName = rawAgent.lowercased()
+        let agentName = Self.canonicalAgentAlias(rawAgent)
         let promptText = task.title
 
         let activeAgents = AgentEventManager.shared.agents
+
+        // 1. If task already had a linked pane, verify that it is still alive in the active roster
+        if let previousPane = task.linkedPaneID, !previousPane.isEmpty {
+            let isStillLive = activeAgents.contains { $0.paneId == previousPane }
+            if isStillLive {
+                adapter.sendLine(paneId: previousPane, text: promptText)
+                if NotchHUDConfig.shared.focusTerminalOnDispatch {
+                    adapter.focusPane(paneId: previousPane)
+                }
+                return previousPane
+            }
+            // Previous pane died/closed; fall through to resolve a live target
+        }
+
+        // 2. Search for an active agent snapshot matching the canonical agent name
         let matchingSnapshot = activeAgents.first {
             $0.source.lowercased() == agentName || $0.id.lowercased().contains(agentName)
         }
@@ -62,5 +78,28 @@ public final class TaskDispatcher: ObservableObject {
         }
 
         return targetPaneID
+    }
+
+    /// Normalizes agent aliases to canonical internal identifiers.
+    public static func canonicalAgentAlias(_ raw: String) -> String {
+        let lower = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        switch lower {
+        case "claude", "claude-code", "claude-agent", "claude-cli":
+            return "claude"
+        case "codex", "codex-cli", "codex-exec":
+            return "codex"
+        case "antigravity", "antigravity-ide", "antigravity-cli", "agy":
+            return "antigravity"
+        case "cursor", "cursor-agent", "cursor-cli":
+            return "cursor"
+        case "pi", "pi-agent":
+            return "pi"
+        case "herdr", "herdr-cli":
+            return "herdr"
+        case "kilo", "kilocode", "kilo-cli":
+            return "kilo"
+        default:
+            return lower
+        }
     }
 }

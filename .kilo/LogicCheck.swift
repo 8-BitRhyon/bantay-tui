@@ -5223,6 +5223,107 @@ struct LogicCheckMain {
         cfg.notifyOnHighBurnRate = origBurnNotify
         cfg.enforceBudgetLimit = origEnforce
 
+        // L97 Inbound Reminder Deduplication Test
+        let tempTaskURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l97-\(UUID().uuidString).jsonl")
+        let taskStore = TaskStore(fileURL: tempTaskURL)
+        let initialCount = taskStore.tasks.count
+        let firstIngest = taskStore.ingestExternalReminder(rawTitle: "Run tests @claude")
+        check(firstIngest != nil, "L97 first inbound reminder ingested")
+        let duplicateIngest = taskStore.ingestExternalReminder(rawTitle: "Run tests @claude")
+        check(duplicateIngest == nil, "L97 duplicate inbound reminder rejected")
+        check(
+            taskStore.tasks.count == initialCount + 1,
+            "L97 task store contains one additional item")
+
+        // L98 Inbound Natural Language Parsing Test
+        let nlpIngest = taskStore.ingestExternalReminder(rawTitle: "Fix memory leak !! @pi #perf")
+        check(nlpIngest != nil, "L98 nlp reminder ingested")
+        check(nlpIngest?.priority == .high, "L98 priority parsed as high")
+        check(nlpIngest?.assignedAgent == "pi", "L98 assigned agent parsed as pi")
+        check(nlpIngest?.tags.contains("perf") == true, "L98 tag parsed as perf")
+
+        // L99 Inbound Auto-Dispatch Trigger Test
+        let origAutoDispatch = cfg.autoDispatchTasks
+        cfg.autoDispatchTasks = true
+        let autoTask = taskStore.ingestExternalReminder(rawTitle: "Ship feature @herdr")
+        check(autoTask != nil, "L99 auto-dispatch task ingested")
+        check(autoTask?.assignedAgent == "herdr", "L99 assigned agent herdr")
+        cfg.autoDispatchTasks = origAutoDispatch
+
+        // L100 Dispatcher Alias Normalization Test
+        check(
+            TaskDispatcher.canonicalAgentAlias("claude-code") == "claude",
+            "L100 claude-code alias")
+        check(TaskDispatcher.canonicalAgentAlias("agy") == "antigravity", "L100 agy alias")
+        check(TaskDispatcher.canonicalAgentAlias("codex-cli") == "codex", "L100 codex alias")
+        check(TaskDispatcher.canonicalAgentAlias("cursor-agent") == "cursor", "L100 cursor alias")
+
+        // L101 Backpass SessionInteraction Model Test
+        let interaction1 = BackpassEngine.SessionInteraction(
+            sessionId: "session-1",
+            agentSource: "claude",
+            userCorrection: "Always run scripts/build-logic-harness.sh before testing",
+            hadError: true
+        )
+        check(interaction1.sessionId == "session-1", "L101 sessionId mapped")
+        check(interaction1.agentSource == "claude", "L101 agentSource mapped")
+        check(interaction1.hadError == true, "L101 hadError is true")
+
+        // L102 Backpass 2-Session Evidence Gate Rejection (1 Session Fluke)
+        let flukeInteractions = [
+            interaction1,
+            BackpassEngine.SessionInteraction(
+                sessionId: "session-1",
+                agentSource: "claude",
+                userCorrection: "Always run scripts/build-logic-harness.sh before testing",
+                hadError: true
+            ),
+        ]
+        let flukeCandidate = BackpassEngine.evaluateCandidate(
+            id: "rule-1",
+            instruction: "Always run scripts/build-logic-harness.sh before testing",
+            scope: "build",
+            interactions: flukeInteractions
+        )
+        check(flukeCandidate == nil, "L102 1-session fluke rejected by evidence gate")
+
+        // L103 Backpass 2-Session Evidence Gate Approval (2 Independent Sessions)
+        let multiSessionInteractions = [
+            interaction1,
+            BackpassEngine.SessionInteraction(
+                sessionId: "session-2",
+                agentSource: "antigravity",
+                userCorrection: "Always run scripts/build-logic-harness.sh before testing",
+                hadError: false
+            ),
+        ]
+        let approvedCandidate = BackpassEngine.evaluateCandidate(
+            id: "rule-1",
+            instruction: "Always run scripts/build-logic-harness.sh before testing",
+            scope: "build",
+            interactions: multiSessionInteractions
+        )
+        check(approvedCandidate != nil, "L103 2-session pattern approved by evidence gate")
+        check(approvedCandidate?.hasMetEvidenceThreshold == true, "L103 evidence threshold met")
+        check(approvedCandidate?.evidenceSessionIds.count == 2, "L103 evidence session count is 2")
+
+        // L104 Backpass AGENTS.md Directive Formatting Test
+        if let approved = approvedCandidate {
+            let directive = BackpassEngine.formatAgentsDirective(candidate: approved)
+            check(directive.contains("**[BUILD]**"), "L104 directive contains scope header")
+            check(
+                directive.contains("Validated across 2 sessions"),
+                "L104 directive contains session validation count")
+        } else {
+            check(false, "L104 approved candidate missing")
+        }
+
+        // L105 Backpass Rule Synthesis Test
+        let synthesized = BackpassEngine.synthesizeRules(from: multiSessionInteractions)
+        check(synthesized.count == 1, "L105 synthesized exactly 1 recurring rule")
+        check(synthesized.first?.occurrenceCount == 2, "L105 rule occurrence count is 2")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

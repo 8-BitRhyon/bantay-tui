@@ -26,6 +26,9 @@ public final class RemindersProvider: ObservableObject {
         return _store
     }
 
+    private var eventStoreObserver: NSObjectProtocol?
+    private var debounceSyncTask: Task<Void, Never>?
+
     private init() {
         checkAuthorizationStatus()
     }
@@ -36,6 +39,42 @@ public final class RemindersProvider: ObservableObject {
         authorized = auth
         if auth {
             defaultList = store?.defaultCalendarForNewReminders()
+            startStoreObserver()
+        }
+    }
+
+    /// Listens for iCloud / background updates to the EventStore.
+    public func startStoreObserver() {
+        guard ApprovalNotificationController.hasBundleProxy else { return }
+        guard eventStoreObserver == nil else { return }
+        eventStoreObserver = NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.debounceInboundSync()
+        }
+    }
+
+    private func debounceInboundSync() {
+        debounceSyncTask?.cancel()
+        debounceSyncTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            await self.syncInboundReminders()
+        }
+    }
+
+    /// Background inbound sync from Apple Reminders into Bantay TaskStore.
+    public func syncInboundReminders(into taskStore: TaskStore = .shared) async {
+        guard NotchHUDConfig.shared.syncAppleReminders else { return }
+        await refresh()
+        for item in reminders {
+            guard let title = item.title, !title.isEmpty else { continue }
+            let due = item.dueDateComponents?.date
+            let externalId = item.calendarItemIdentifier
+            taskStore.ingestExternalReminder(rawTitle: title, dueDate: due, externalID: externalId)
         }
     }
 

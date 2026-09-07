@@ -110,6 +110,45 @@ public final class TaskStore: ObservableObject {
         return task
     }
 
+    /// Ingests a task discovered externally (e.g. from Apple Reminders via iCloud).
+    /// Deduplicates by matching cleanTitle or rawTitle, parses natural language metadata,
+    /// and triggers auto-dispatch if configured and budget permits.
+    @discardableResult
+    public func ingestExternalReminder(
+        rawTitle: String,
+        dueDate: Date? = nil,
+        externalID: String? = nil
+    ) -> BantayTask? {
+        let parsed = TaskStore.parseNaturalLanguage(rawTitle)
+        let trimmedTitle = parsed.cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return nil }
+
+        // Deduplication: check if existing task matches clean title or raw title
+        let rawTrimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let exists = tasks.contains { task in
+            task.title.caseInsensitiveCompare(trimmedTitle) == .orderedSame
+                || task.title.caseInsensitiveCompare(rawTrimmed) == .orderedSame
+        }
+        guard !exists else { return nil }
+
+        let finalDueDate = dueDate ?? parsed.dueDate
+        let task = BantayTask(
+            title: trimmedTitle,
+            dueDate: finalDueDate,
+            priority: parsed.priority,
+            tags: parsed.tags,
+            assignedAgent: parsed.assignedAgent
+        )
+        tasks.insert(task, at: 0)
+        save()
+
+        if task.assignedAgent != nil && NotchHUDConfig.shared.autoDispatchTasks {
+            dispatchTask(task.id)
+        }
+
+        return task
+    }
+
     /// Dispatches an agent task to its target process or multiplexer pane.
     public func dispatchTask(_ taskID: UUID) {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
