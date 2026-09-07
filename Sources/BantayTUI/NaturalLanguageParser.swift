@@ -73,8 +73,9 @@ public enum NaturalLanguageParser {
             // @tokens → agents or tags.
             if raw.hasPrefix("@") && raw.count > 1 {
                 let tag = String(raw.dropFirst()).lowercased()
-                if knownAgents.contains(tag) {
-                    assignedAgent = tag
+                let canonical = TaskDispatcher.canonicalAgentAlias(tag)
+                if knownAgents.contains(tag) || knownAgents.contains(canonical) {
+                    assignedAgent = canonical
                 } else {
                     tags.append(tag)
                 }

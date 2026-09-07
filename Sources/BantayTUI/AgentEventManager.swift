@@ -64,6 +64,7 @@ struct ProjectContext: Equatable, Sendable {
     let project: String
     let branch: String?
     let isGit: Bool
+    let diffStat: String?
 
     /// Short-lived per-cwd cache so `.git/HEAD` is read at most once per cwd
     /// per interval instead of on every poll's roster rebuild (the read runs
@@ -74,12 +75,27 @@ struct ProjectContext: Equatable, Sendable {
         [:]
     private static let cacheLock = NSLock()
 
-    init(cwd: String) {
+    init(project: String, branch: String?, isGit: Bool, diffStat: String? = nil) {
+        self.project = project
+        self.branch = branch
+        self.isGit = isGit
+        self.diffStat = diffStat
+    }
+
+    init(cwd: String, diffStat: String? = nil) {
         if let hit = Self.cached(cwd) {
+            if let diffStat, hit.diffStat != diffStat {
+                let updated = ProjectContext(
+                    project: hit.project, branch: hit.branch, isGit: hit.isGit, diffStat: diffStat)
+                Self.store(cwd, updated)
+                self = updated
+                return
+            }
             self = hit
             return
         }
         self.project = (cwd as NSString).lastPathComponent
+        self.diffStat = diffStat
         let headURL = URL(fileURLWithPath: cwd).appendingPathComponent(".git/HEAD")
         if let content = try? String(contentsOf: headURL, encoding: .utf8) {
             let parsed = Self.parseHead(content)
@@ -123,6 +139,28 @@ struct ProjectContext: Equatable, Sendable {
             return ("detached", true)
         }
         return (nil, false)
+    }
+
+    /// Pure parser for git shortstat lines (e.g. "2 files changed, 14 insertions(+), 3 deletions(-)").
+    /// Returns compact representation like "+14 -3" or nil.
+    static func parseDiffStat(_ shortstat: String) -> String? {
+        let trimmed = shortstat.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var ins = ""
+        var del = ""
+        let parts = trimmed.components(separatedBy: ",")
+        for part in parts {
+            let lower = part.lowercased()
+            if lower.contains("insertion") {
+                let nums = part.filter { $0.isNumber }
+                if !nums.isEmpty { ins = "+\(nums)" }
+            } else if lower.contains("deletion") {
+                let nums = part.filter { $0.isNumber }
+                if !nums.isEmpty { del = "-\(nums)" }
+            }
+        }
+        let joined = [ins, del].filter { !$0.isEmpty }.joined(separator: " ")
+        return joined.isEmpty ? nil : joined
     }
 }
 

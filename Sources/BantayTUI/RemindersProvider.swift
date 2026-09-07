@@ -52,7 +52,9 @@ public final class RemindersProvider: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.debounceInboundSync()
+            Task { @MainActor in
+                self?.debounceInboundSync()
+            }
         }
     }
 
@@ -66,8 +68,13 @@ public final class RemindersProvider: ObservableObject {
         }
     }
 
-    /// Background inbound sync from Apple Reminders into Bantay TaskStore.
-    public func syncInboundReminders(into taskStore: TaskStore = .shared) async {
+    /// Background inbound sync from Apple Reminders into Bantay TaskStore using default shared store.
+    public func syncInboundReminders() async {
+        await syncInboundReminders(into: .shared)
+    }
+
+    /// Background inbound sync from Apple Reminders into an explicit TaskStore.
+    public func syncInboundReminders(into taskStore: TaskStore) async {
         guard NotchHUDConfig.shared.syncAppleReminders else { return }
         await refresh()
         for item in reminders {

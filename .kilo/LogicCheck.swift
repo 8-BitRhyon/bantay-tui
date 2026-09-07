@@ -5324,6 +5324,74 @@ struct LogicCheckMain {
         check(synthesized.count == 1, "L105 synthesized exactly 1 recurring rule")
         check(synthesized.first?.occurrenceCount == 2, "L105 rule occurrence count is 2")
 
+        // L106 DiffStat Parser Tests
+        let stat1 = ProjectContext.parseDiffStat(
+            "2 files changed, 14 insertions(+), 3 deletions(-)")
+        check(stat1 == "+14 -3", "L106 diffStat parsed +14 -3 (got \(stat1 ?? "nil"))")
+        let stat2 = ProjectContext.parseDiffStat("1 file changed, 5 insertions(+)")
+        check(stat2 == "+5", "L106 diffStat parsed +5 (got \(stat2 ?? "nil"))")
+        let stat3 = ProjectContext.parseDiffStat("3 files changed, 8 deletions(-)")
+        check(stat3 == "-8", "L106 diffStat parsed -8 (got \(stat3 ?? "nil"))")
+        check(ProjectContext.parseDiffStat("") == nil, "L106 empty stat returns nil")
+
+        // L107 Worktree Branch Slug Tests
+        let fixedUUID = UUID(uuidString: "12345678-ABCD-EF01-2345-6789ABCDEF01")!
+        let slug1 = WorktreeManager.branchSlug(from: "Fix memory leak in parser", id: fixedUUID)
+        check(
+            slug1 == "bantay/fix-memory-leak-in-123456",
+            "L107 slug generated sanitized branch name (got \(slug1))")
+        let slugEmpty = WorktreeManager.branchSlug(from: "!!! ???", id: fixedUUID)
+        check(
+            slugEmpty == "bantay/task-123456",
+            "L107 empty slug falls back to task prefix (got \(slugEmpty))")
+
+        // L108 Codex Usage Adapter Tests
+        let codexURL = CodexUsageAdapter.databaseURL(home: "/custom/home")
+        check(
+            codexURL.path == "/custom/home/.codex/state_5.sqlite",
+            "L108 codex URL path mapped correctly")
+        check(
+            CodexUsageAdapter.detect(home: "/non/existent/path") == false,
+            "L108 detect returns false for missing db")
+        check(
+            CodexUsageAdapter.snapshot(since: 3600, home: "/non/existent/path") == nil,
+            "L108 snapshot returns nil for missing db")
+
+        // L109 Cursor Usage Adapter Tests
+        let cursorURL = CursorUsageAdapter.databaseURL(home: "/custom/home")
+        check(
+            cursorURL.path
+                == "/custom/home/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+            "L109 cursor URL path mapped correctly")
+        check(
+            CursorUsageAdapter.detect(home: "/non/existent/path") == false,
+            "L109 detect returns false for missing db")
+        check(
+            CursorUsageAdapter.snapshot(home: "/non/existent/path") == nil,
+            "L109 snapshot returns nil for missing db")
+
+        // L110 ProjectContext with DiffStat Cache Update Test
+        let ctx = ProjectContext(
+            project: "test-proj", branch: "feat/perf", isGit: true, diffStat: "+10 -2")
+        check(ctx.diffStat == "+10 -2", "L110 ProjectContext retains diffStat")
+        check(ctx.branch == "feat/perf", "L110 ProjectContext retains branch")
+
+        // L111 Hashtag & Agent Mixed Parser Test
+        let mixedNLP = NaturalLanguageParser.parse(
+            "Review pull request #security @cursor-agent tomorrow")
+        check(
+            mixedNLP.assignedAgent == "cursor",
+            "L111 assigned agent parsed (got \(mixedNLP.assignedAgent ?? "nil"))")
+        check(mixedNLP.tags.contains("security"), "L111 hashtag tag parsed into tags list")
+
+        // L112 Keyboard Shortcut Metric & Range Check
+        check(
+            IslandMetrics.shortcutKey(for: "1") == .option(1),
+            "L112 shortcutKey 1 resolves")
+        check(
+            IslandMetrics.shortcutKey(for: "7") == .option(7),
+            "L112 shortcutKey 7 resolves")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

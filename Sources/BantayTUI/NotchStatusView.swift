@@ -589,6 +589,7 @@ struct NotchStatusView: View {
 
     private func endPeek() {
         peekingPaneId = nil
+        peekText = ""
         peekTask?.cancel()
         peekTask = nil
     }
@@ -1361,6 +1362,7 @@ struct NotchStatusView: View {
                     showTasks = false
                     showHistory = false
                 }
+                .keyboardShortcut("1", modifiers: .command)
             }
             if NotchHUDConfig.shared.showTasksTab {
                 shelfTabButton(title: "Tasks", selected: showTasks) {
@@ -1369,6 +1371,7 @@ struct NotchStatusView: View {
                     showTasks = true
                     showHistory = false
                 }
+                .keyboardShortcut("2", modifiers: .command)
             }
             if NotchHUDConfig.shared.attentionFilterEnabled {
                 shelfTabButton(
@@ -1379,6 +1382,7 @@ struct NotchStatusView: View {
                     showTasks = false
                     showHistory = false
                 }
+                .keyboardShortcut("3", modifiers: .command)
             }
             if NotchHUDConfig.shared.showHistoryTab {
                 shelfTabButton(title: "History", selected: showHistory) {
@@ -1387,6 +1391,7 @@ struct NotchStatusView: View {
                     showTasks = false
                     showHistory = true
                 }
+                .keyboardShortcut("4", modifiers: .command)
             }
             if NotchHUDConfig.shared.showShelfTab {
                 shelfTabButton(title: "Shelf", selected: showShelf) {
@@ -1397,6 +1402,7 @@ struct NotchStatusView: View {
                     showMedia = false
                     showNotes = false
                 }
+                .keyboardShortcut("5", modifiers: .command)
             }
             if NotchHUDConfig.shared.showMediaTab {
                 shelfTabButton(title: "Media", selected: showMedia) {
@@ -1407,6 +1413,7 @@ struct NotchStatusView: View {
                     showMedia = true
                     showNotes = false
                 }
+                .keyboardShortcut("6", modifiers: .command)
             }
             if NotchHUDConfig.shared.showNotesTab {
                 shelfTabButton(title: "Notes", selected: showNotes) {
@@ -1417,6 +1424,7 @@ struct NotchStatusView: View {
                     showMedia = false
                     showNotes = true
                 }
+                .keyboardShortcut("7", modifiers: .command)
             }
             Spacer(minLength: 2)
 
@@ -2297,174 +2305,192 @@ struct NotchStatusView: View {
 
     private func agentRow(agent: AgentSnapshot) -> some View {
         let composing = composingPaneId == agent.paneId
-        return HStack(spacing: 8) {
-            // Item 2: pulsing dot for working agents. The pulse modifier is on
-            // the dot itself (a same-color overlay composites to constant
-            // color and is invisible), and only .progress/.started pulse —
-            // blocked rows shouldn't read as "busy". `enabled` carries the
-            // reduce-motion + kind gate so the modifier type-checks fast.
-            Circle().fill(Color(hex: agent.kind.color)).frame(width: 6, height: 6)
-                .modifier(
-                    PulsingDotModifier(
-                        enabled: (agent.kind == .progress || agent.kind == .started)
-                            && !reduceMotion))
-            if composing {
-                TextField("Ask agent…", text: $promptText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white)
-                    .focused($promptFocused)
-                    .onSubmit { submitPrompt() }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                // Item 2: pulsing dot for working agents. The pulse modifier is on
+                // the dot itself (a same-color overlay composites to constant
+                // color and is invisible), and only .progress/.started pulse —
+                // blocked rows shouldn't read as "busy". `enabled` carries the
+                // reduce-motion + kind gate so the modifier type-checks fast.
+                Circle().fill(Color(hex: agent.kind.color)).frame(width: 6, height: 6)
                     .modifier(
-                        EscapeCancelsModifier { cancelComposing() }
-                    )
-                    .padding(.horizontal, 6)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 20)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08))
-                    )
-                    .layoutPriority(0)
-                Button(action: submitPrompt) {
-                    Image(systemName: "paperplane.fill").font(.system(size: 9))
+                        PulsingDotModifier(
+                            enabled: (agent.kind == .progress || agent.kind == .started)
+                                && !reduceMotion))
+                if composing {
+                    TextField("Ask agent…", text: $promptText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundColor(.white)
-                }
-                .buttonStyle(.plain)
-                .help("Send prompt (Return)")
-                .layoutPriority(1)
-                Button(action: cancelComposing) {
-                    Image(systemName: "xmark").font(.system(size: 9)).foregroundColor(
-                        .white.opacity(0.6))
-                }
-                .buttonStyle(.plain)
-                .help("Cancel (Esc)")
-                .layoutPriority(1)
-            } else {
-                Button(action: { beginComposing(agent) }) {
-                    HStack(spacing: 6) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 5) {
-                                if let ctx = agent.projectContext {
-                                    // Item 12: .tail truncation so the
-                                    // differentiating suffix stays visible.
-                                    Text(ctx.project)
-                                        .font(
-                                            .system(
-                                                size: 10.5, weight: .semibold, design: .monospaced)
-                                        )
-                                        .foregroundColor(.white).lineLimit(1).truncationMode(
-                                            .tail)
-                                    if let branch = ctx.branch {
-                                        Text(branch)
+                        .focused($promptFocused)
+                        .onSubmit { submitPrompt() }
+                        .modifier(
+                            EscapeCancelsModifier { cancelComposing() }
+                        )
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08))
+                        )
+                        .layoutPriority(0)
+                    Button(action: submitPrompt) {
+                        Image(systemName: "paperplane.fill").font(.system(size: 9))
+                            .foregroundColor(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Send prompt (Return)")
+                    .layoutPriority(1)
+                    Button(action: cancelComposing) {
+                        Image(systemName: "xmark").font(.system(size: 9)).foregroundColor(
+                            .white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel (Esc)")
+                    .layoutPriority(1)
+                } else {
+                    Button(action: { beginComposing(agent) }) {
+                        HStack(spacing: 6) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack(spacing: 5) {
+                                    if let ctx = agent.projectContext {
+                                        // Item 12: .tail truncation so the
+                                        // differentiating suffix stays visible.
+                                        Text(ctx.project)
+                                            .font(
+                                                .system(
+                                                    size: 10.5, weight: .semibold,
+                                                    design: .monospaced)
+                                            )
+                                            .foregroundColor(.white).lineLimit(1).truncationMode(
+                                                .tail)
+                                        if let branch = ctx.branch {
+                                            Text(branch)
+                                                .font(
+                                                    .system(
+                                                        size: 8.5, weight: .medium,
+                                                        design: .monospaced)
+                                                )
+                                                .foregroundColor(.white.opacity(0.4))
+                                                .lineLimit(1)
+                                        }
+                                        if let diff = ctx.diffStat {
+                                            Text(diff)
+                                                .font(
+                                                    .system(
+                                                        size: 8, weight: .semibold,
+                                                        design: .monospaced)
+                                                )
+                                                .monospacedDigit()
+                                                .foregroundColor(Color.green.opacity(0.9))
+                                                .padding(.horizontal, 3)
+                                                .padding(.vertical, 0.5)
+                                                .background(
+                                                    RoundedRectangle(
+                                                        cornerRadius: 3, style: .continuous
+                                                    )
+                                                    .fill(Color.green.opacity(0.12))
+                                                )
+                                                .lineLimit(1)
+                                        }
+                                    } else {
+                                        Text(agent.source)
+                                            .font(
+                                                .system(
+                                                    size: 10.5, weight: .semibold,
+                                                    design: .monospaced)
+                                            )
+                                            .foregroundColor(.white).lineLimit(1).truncationMode(
+                                                .tail)
+                                    }
+                                }
+                                HStack(spacing: 5) {
+                                    if agent.kind == .failed, let reason = agent.message {
+                                        // Failure reason (rate_limit/auth/billing…)
+                                        // must be visible, not just "Failed".
+                                        Text(reason)
+                                            .font(.system(size: 8.5, weight: .medium))
+                                            .foregroundColor(
+                                                Color(hex: AgentEventKind.failed.color)
+                                            )
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    } else if let live = agent.title ?? agent.message,
+                                        agent.kind.isOngoing
+                                    {
+                                        Text(cleanHUDText(live))
+                                            .font(.system(size: 8.5, weight: .medium))
+                                            .foregroundColor(.white.opacity(0.75))
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    } else {
+                                        Text(agent.kind.label)
+                                            .font(.system(size: 8.5, weight: .medium))
+                                            .foregroundColor(.secondary).lineLimit(1)
+                                    }
+                                    if NotchHUDConfig.shared.showElapsedTime,
+                                        let startedAt = agent.startedAt,
+                                        agent.kind.isOngoing
+                                    {
+                                        Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
                                             .font(
                                                 .system(
                                                     size: 8.5, weight: .medium, design: .monospaced)
                                             )
-                                            .foregroundColor(.white.opacity(0.4))
-                                            .lineLimit(1)
+                                            .foregroundColor(.white.opacity(0.5))
                                     }
-                                } else {
-                                    Text(agent.source)
-                                        .font(
-                                            .system(
-                                                size: 10.5, weight: .semibold, design: .monospaced)
-                                        )
-                                        .foregroundColor(.white).lineLimit(1).truncationMode(
-                                            .tail)
                                 }
                             }
-                            HStack(spacing: 5) {
-                                if agent.kind == .failed, let reason = agent.message {
-                                    // Failure reason (rate_limit/auth/billing…)
-                                    // must be visible, not just "Failed".
-                                    Text(reason)
-                                        .font(.system(size: 8.5, weight: .medium))
-                                        .foregroundColor(Color(hex: AgentEventKind.failed.color))
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                } else if let live = agent.title ?? agent.message,
-                                    agent.kind.isOngoing
-                                {
-                                    Text(cleanHUDText(live))
-                                        .font(.system(size: 8.5, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.75))
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                } else {
-                                    Text(agent.kind.label)
-                                        .font(.system(size: 8.5, weight: .medium))
-                                        .foregroundColor(.secondary).lineLimit(1)
-                                }
-                                if NotchHUDConfig.shared.showElapsedTime,
-                                    let startedAt = agent.startedAt,
-                                    agent.kind.isOngoing
-                                {
-                                    Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
-                                        .font(
-                                            .system(size: 8.5, weight: .medium, design: .monospaced)
-                                        )
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
+                            Spacer(minLength: 4)
+                            if let title = agent.title, !agent.kind.isOngoing {
+                                Text(cleanHUDText(title))
+                                    .font(.system(size: 9, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
                             }
                         }
-                        Spacer(minLength: 4)
-                        if let title = agent.title, !agent.kind.isOngoing {
-                            Text(cleanHUDText(title))
-                                .font(.system(size: 9, weight: .regular))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(ScalePressButtonStyle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(0)
+                    if let paneId = agent.paneId {
+                        if agent.kind == .accessRequest || agent.kind == .waiting {
+                            // Approval controls stay visible — those need attention.
+                            inlineApprovalControls(agent: agent)
+                                .layoutPriority(1)
+                        }
+                        // Focus/stop/peek are revealed on row hover to keep rows
+                        // calm (BoringNotch HoverButton pattern). Always
+                        // reachable: hover or tab already shows the row bg.
+                        let rowHovered = hoveredRow == agent.id
+                        Button(action: { focusAgentPane(paneId) }) {
+                            Image(systemName: "arrow.up.right").font(.system(size: 9))
                                 .foregroundColor(.white.opacity(0.6))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
                         }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(ScalePressButtonStyle())
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(0)
-                if let paneId = agent.paneId {
-                    if agent.kind == .accessRequest || agent.kind == .waiting {
-                        // Approval controls stay visible — those need attention.
-                        inlineApprovalControls(agent: agent)
-                            .layoutPriority(1)
-                    }
-                    // Focus/stop/peek are revealed on row hover to keep rows
-                    // calm (BoringNotch HoverButton pattern). Always
-                    // reachable: hover or tab already shows the row bg.
-                    let rowHovered = hoveredRow == agent.id
-                    Button(action: { focusAgentPane(paneId) }) {
-                        Image(systemName: "arrow.up.right").font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Focus pane")
-                    .accessibilityLabel("Focus \(agent.source)")
-                    .layoutPriority(1)
-                    .opacity(rowHovered ? 1 : 0)
-                    // Item 3: asymmetric hover timing.
-                    .animation(
-                        rowHovered
-                            ? .easeOut(duration: 0.12)
-                            : .easeOut(duration: 0.06),
-                        value: rowHovered)
-                    Button(action: {
-                        eventManager.performAction(paneId: paneId) {
-                            $0.stop(paneId: paneId)
+                        .buttonStyle(.plain)
+                        .help("Focus pane")
+                        .accessibilityLabel("Focus \(agent.source)")
+                        .layoutPriority(1)
+                        .opacity(rowHovered ? 1 : 0)
+                        // Item 3: asymmetric hover timing.
+                        .animation(
+                            rowHovered
+                                ? .easeOut(duration: 0.12)
+                                : .easeOut(duration: 0.06),
+                            value: rowHovered)
+                        Button(action: {
+                            eventManager.performAction(paneId: paneId) {
+                                $0.stop(paneId: paneId)
+                            }
+                        }) {
+                            Image(systemName: "stop.fill").font(.system(size: 9))
+                                .foregroundColor(.red.opacity(0.8))
                         }
-                    }) {
-                        Image(systemName: "stop.fill").font(.system(size: 9))
-                            .foregroundColor(.red.opacity(0.8))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Stop (Ctrl-C)")
-                    .accessibilityLabel("Stop \(agent.source)")
-                    .layoutPriority(1)
-                    .opacity(rowHovered ? 1 : 0)
-                    .animation(
-                        rowHovered
-                            ? .easeOut(duration: 0.12)
-                            : .easeOut(duration: 0.06),
-                        value: rowHovered)
-                    peekButton(agent: agent)
+                        .buttonStyle(.plain)
+                        .help("Stop (Ctrl-C)")
+                        .accessibilityLabel("Stop \(agent.source)")
                         .layoutPriority(1)
                         .opacity(rowHovered ? 1 : 0)
                         .animation(
@@ -2472,31 +2498,57 @@ struct NotchStatusView: View {
                                 ? .easeOut(duration: 0.12)
                                 : .easeOut(duration: 0.06),
                             value: rowHovered)
-                } else if agent.kind == .accessRequest || agent.kind == .waiting {
-                    // Standalone agent (opencode/Claude outside herdr): there
-                    // is no pane to send keys to, so an Approve/Deny would be
-                    // a silent phantom. The honest action is to raise the
-                    // terminal where the prompt is waiting.
-                    Button(action: {
-                        _ = TerminalFocusser.focus(
-                            preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
-                    }) {
-                        Image(systemName: "terminal.fill").font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.7))
+                        peekButton(agent: agent)
+                            .layoutPriority(1)
+                            .opacity(rowHovered ? 1 : 0)
+                            .animation(
+                                rowHovered
+                                    ? .easeOut(duration: 0.12)
+                                    : .easeOut(duration: 0.06),
+                                value: rowHovered)
+                    } else if agent.kind == .accessRequest || agent.kind == .waiting {
+                        // Standalone agent (opencode/Claude outside herdr): there
+                        // is no pane to send keys to, so an Approve/Deny would be
+                        // a silent phantom. The honest action is to raise the
+                        // terminal where the prompt is waiting.
+                        Button(action: {
+                            _ = TerminalFocusser.focus(
+                                preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+                        }) {
+                            Image(systemName: "terminal.fill").font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open terminal — answer there (no herdr pane)")
+                        .accessibilityLabel("Open terminal for \(agent.source)")
+                        .layoutPriority(1)
                     }
-                    .buttonStyle(.plain)
-                    .help("Open terminal — answer there (no herdr pane)")
-                    .accessibilityLabel("Open terminal for \(agent.source)")
-                    .layoutPriority(1)
                 }
             }
+            .padding(.horizontal, 16)
+            .frame(height: rowHeight(for: agent))
+
+            if let paneId = agent.paneId,
+                peekingPaneId == paneId,
+                !peekText.isEmpty
+            {
+                terminalPeekDrawer(text: peekText)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
-        .padding(.horizontal, 16)
-        .frame(height: rowHeight(for: agent))
         .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
         .modifier(AgentRowAccessibility(agent: agent))
-        .onHover { hovering in hoveredRow = hovering ? agent.id : nil }
+        .onHover { hovering in
+            hoveredRow = hovering ? agent.id : nil
+            if hovering {
+                if let paneId = agent.paneId {
+                    fetchPeek(paneId: paneId)
+                }
+            } else if peekingPaneId == agent.paneId {
+                endPeek()
+            }
+        }
         .contextMenu {
             if let paneId = agent.paneId {
                 Button("Focus Pane") { focusAgentPane(paneId) }
@@ -2520,6 +2572,39 @@ struct NotchStatusView: View {
                 }
             }
         }
+    }
+
+    private func terminalPeekDrawer(text: String) -> some View {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        let displayLines = Array(lines.suffix(4))
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(displayLines.enumerated()), id: \.offset) { _, line in
+                HStack(spacing: 4) {
+                    Text("❯")
+                        .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                        .foregroundColor(.green.opacity(0.7))
+                    Text(String(line))
+                        .font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(red: 0.05, green: 0.05, blue: 0.09))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
+        .padding(.bottom, 6)
     }
 
     /// Best-effort: reveal the workspace directory in Finder. Falls back to

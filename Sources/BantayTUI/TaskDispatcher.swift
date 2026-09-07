@@ -81,7 +81,7 @@ public final class TaskDispatcher: ObservableObject {
     }
 
     /// Normalizes agent aliases to canonical internal identifiers.
-    public static func canonicalAgentAlias(_ raw: String) -> String {
+    nonisolated public static func canonicalAgentAlias(_ raw: String) -> String {
         let lower = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         switch lower {
         case "claude", "claude-code", "claude-agent", "claude-cli":
