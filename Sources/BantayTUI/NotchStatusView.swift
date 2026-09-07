@@ -19,12 +19,24 @@ struct NotchStatusView: View {
     @State private var showWelcome = false
     @State private var glowPulse = false
     @State private var now = Date()
-    @State private var showShelf = false
-    @State private var showAttention = false
-    @State private var showTasks = false
-    @State private var showHistory = false
-    @State private var showMedia = false
-    @State private var showNotes = false
+    enum ShelfTab: String, CaseIterable, Identifiable {
+        case agents = "Agents"
+        case tasks = "Tasks"
+        case attention = "Attention"
+        case history = "History"
+        case shelf = "Shelf"
+        case media = "Media"
+        case notes = "Notes"
+        var id: String { rawValue }
+    }
+    @State private var selectedTab: ShelfTab = .agents
+
+    private var showTasks: Bool { selectedTab == .tasks }
+    private var showAttention: Bool { selectedTab == .attention }
+    private var showHistory: Bool { selectedTab == .history }
+    private var showShelf: Bool { selectedTab == .shelf }
+    private var showMedia: Bool { selectedTab == .media }
+    private var showNotes: Bool { selectedTab == .notes }
     @State private var groupByWorkspace = false
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
     /// icon stays reactive; the config is the single behavioral source of
@@ -313,9 +325,7 @@ struct NotchStatusView: View {
         )
         .offset(x: islandOffsetX)
         .animation(morphAnimation, value: isExpanded)
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showTasks)
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showShelf)
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showAttention)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: selectedTab)
         .background(Color.clear.allowsHitTesting(false))
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
@@ -1355,74 +1365,47 @@ struct NotchStatusView: View {
             if NotchHUDConfig.shared.showAgentsTab {
                 shelfTabButton(
                     title: "Agents",
-                    selected: !showShelf && !showAttention && !showTasks && !showHistory
+                    selected: selectedTab == .agents
                 ) {
-                    showShelf = false
-                    showAttention = false
-                    showTasks = false
-                    showHistory = false
+                    selectedTab = .agents
                 }
                 .keyboardShortcut("1", modifiers: .command)
             }
             if NotchHUDConfig.shared.showTasksTab {
-                shelfTabButton(title: "Tasks", selected: showTasks) {
-                    showShelf = false
-                    showAttention = false
-                    showTasks = true
-                    showHistory = false
+                shelfTabButton(title: "Tasks", selected: selectedTab == .tasks) {
+                    selectedTab = .tasks
                 }
                 .keyboardShortcut("2", modifiers: .command)
             }
             if NotchHUDConfig.shared.attentionFilterEnabled {
                 shelfTabButton(
-                    title: "Attention", selected: showAttention
+                    title: "Attention", selected: selectedTab == .attention
                 ) {
-                    showShelf = false
-                    showAttention = true
-                    showTasks = false
-                    showHistory = false
+                    selectedTab = .attention
                 }
                 .keyboardShortcut("3", modifiers: .command)
             }
             if NotchHUDConfig.shared.showHistoryTab {
-                shelfTabButton(title: "History", selected: showHistory) {
-                    showShelf = false
-                    showAttention = false
-                    showTasks = false
-                    showHistory = true
+                shelfTabButton(title: "History", selected: selectedTab == .history) {
+                    selectedTab = .history
                 }
                 .keyboardShortcut("4", modifiers: .command)
             }
             if NotchHUDConfig.shared.showShelfTab {
-                shelfTabButton(title: "Shelf", selected: showShelf) {
-                    showAttention = false
-                    showShelf = true
-                    showTasks = false
-                    showHistory = false
-                    showMedia = false
-                    showNotes = false
+                shelfTabButton(title: "Shelf", selected: selectedTab == .shelf) {
+                    selectedTab = .shelf
                 }
                 .keyboardShortcut("5", modifiers: .command)
             }
             if NotchHUDConfig.shared.showMediaTab {
-                shelfTabButton(title: "Media", selected: showMedia) {
-                    showAttention = false
-                    showShelf = false
-                    showTasks = false
-                    showHistory = false
-                    showMedia = true
-                    showNotes = false
+                shelfTabButton(title: "Media", selected: selectedTab == .media) {
+                    selectedTab = .media
                 }
                 .keyboardShortcut("6", modifiers: .command)
             }
             if NotchHUDConfig.shared.showNotesTab {
-                shelfTabButton(title: "Notes", selected: showNotes) {
-                    showAttention = false
-                    showShelf = false
-                    showTasks = false
-                    showHistory = false
-                    showMedia = false
-                    showNotes = true
+                shelfTabButton(title: "Notes", selected: selectedTab == .notes) {
+                    selectedTab = .notes
                 }
                 .keyboardShortcut("7", modifiers: .command)
             }
@@ -2528,26 +2511,12 @@ struct NotchStatusView: View {
             .padding(.horizontal, 16)
             .frame(height: rowHeight(for: agent))
 
-            if let paneId = agent.paneId,
-                peekingPaneId == paneId,
-                !peekText.isEmpty
-            {
-                terminalPeekDrawer(text: peekText)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
         }
         .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
         .modifier(AgentRowAccessibility(agent: agent))
         .onHover { hovering in
             hoveredRow = hovering ? agent.id : nil
-            if hovering {
-                if let paneId = agent.paneId {
-                    fetchPeek(paneId: paneId)
-                }
-            } else if peekingPaneId == agent.paneId {
-                endPeek()
-            }
         }
         .contextMenu {
             if let paneId = agent.paneId {
@@ -2697,8 +2666,7 @@ struct NotchStatusView: View {
     /// drop-on-notch behavior.
     private func handleFileDragEntered() {
         NSLog("bantay-drop: handleFileDragEntered")
-        showAttention = false
-        showShelf = true
+        selectedTab = .shelf
         expandTo(true)
     }
 
@@ -2708,8 +2676,7 @@ struct NotchStatusView: View {
         // The ShelfStore owns persistence, copy-to-storage, and retention.
         ShelfStore.shared.add(urls: urls)
         // Show the shelf so the landed files are immediately visible.
-        showAttention = false
-        showShelf = true
+        selectedTab = .shelf
         expandTo(true)
         // Brief glow so the drop "lands" with feedback.
         withAnimation(.easeOut(duration: 0.4)) { shelfDropGlow = true }

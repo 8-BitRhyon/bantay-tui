@@ -907,6 +907,14 @@ extension AgentEventManager {
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
+        for agent in agents where agent.agentStatus == "working" {
+            let key = agent.paneId ?? agent.agent
+            if startedAtByPane[key] == nil {
+                startedAtByPane[key] = Date()
+            }
+        }
+        let liveAgentKeys = Set(agents.compactMap { $0.paneId ?? $0.agent })
+        startedAtByPane = startedAtByPane.filter { liveAgentKeys.contains($0.key) }
         self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)
@@ -968,7 +976,7 @@ extension AgentEventManager {
     /// the full interactive surface and elapsed timers.
     func mergeApprovals(into roster: [AgentSnapshot]) -> [AgentSnapshot] {
         let muted = NotchHUDConfig.shared.mutedSources
-        return roster.compactMap { agent in
+        return roster.compactMap { (agent: AgentSnapshot) -> AgentSnapshot? in
             guard !muted.contains(agent.source) else { return nil }
             let key = agent.paneId ?? agent.source
             var variance = agent.variance

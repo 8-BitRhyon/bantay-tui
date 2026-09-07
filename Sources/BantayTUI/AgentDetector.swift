@@ -201,13 +201,29 @@ enum AgentDetector {
             let enumerator = FileManager.default.enumerator(
                 at: URL(fileURLWithPath: root, isDirectory: true),
                 includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
+                options: []
             )
         else {
             return nil
         }
         var best: (url: URL, date: Date)?
         for case let url as URL in enumerator {
+            let path = url.path
+            if path.contains("/.git/") || path.contains("/node_modules/")
+                || path.contains("/.Trash/")
+            {
+                enumerator.skipDescendants()
+                continue
+            }
+            let relPath = String(path.dropFirst(root.count))
+            let relComponents = relPath.split(separator: "/")
+            let hasHiddenSubdir = relComponents.dropLast().contains { comp in
+                comp.hasPrefix(".") && comp != ".system_generated"
+            }
+            if hasHiddenSubdir {
+                enumerator.skipDescendants()
+                continue
+            }
             let ext = url.pathExtension.lowercased()
             let name = url.lastPathComponent.lowercased()
             guard
@@ -233,8 +249,12 @@ enum AgentDetector {
         let data = handle.readDataToEndOfFile()
         let text = String(data: data, encoding: .utf8) ?? ""
         let lines = text.split(whereSeparator: \.isNewline)
-        guard let last = lines.last else { return nil }
-        return Self.readableLine(String(last))
+        for line in lines.reversed() {
+            if let readable = Self.readableLine(String(line)) {
+                return readable
+            }
+        }
+        return nil
     }
 
     /// Extracts a readable one-line snippet from a transcript line. JSONL
@@ -250,6 +270,14 @@ enum AgentDetector {
                 let trimmed = contentStr.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     return String(trimmed.prefix(160))
+                }
+            }
+            if let thinkingStr = obj["thinking"] as? String {
+                let trimmed = thinkingStr.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let firstLine =
+                        trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+                    return String(firstLine.prefix(160))
                 }
             }
             if let toolCalls = obj["tool_calls"] as? [[String: Any]] {
@@ -352,7 +380,7 @@ enum StandaloneAgentScanner {
     static func runningProcesses() -> [ProcessSample] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,comm="]
+        process.arguments = ["-axo", "pid=,command="]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -365,12 +393,19 @@ enum StandaloneAgentScanner {
         process.waitUntilExit()
         guard let text = String(data: data, encoding: .utf8) else { return [] }
         return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let parts = line.split(whereSeparator: \.isWhitespace)
-            guard parts.count >= 2, let pid = Int(parts[0]) else { return nil }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let firstSpace = trimmed.firstIndex(where: { $0.isWhitespace }),
+                let pid = Int(trimmed[..<firstSpace])
+            else { return nil }
+            let fullCommand = String(trimmed[firstSpace...]).trimmingCharacters(in: .whitespaces)
+            let binaryPath =
+                fullCommand.split(whereSeparator: \.isWhitespace).first.map(String.init)
+                ?? fullCommand
+            let procName = URL(fileURLWithPath: binaryPath).lastPathComponent
             return ProcessSample(
                 pid: pid,
-                name: String(parts[1]),
-                command: String(line),
+                name: procName,
+                command: fullCommand,
                 environmentLines: [])
         }
     }

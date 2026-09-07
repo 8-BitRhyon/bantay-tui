@@ -65,35 +65,42 @@ public final class MediaController: ObservableObject {
 
     public func togglePlayPause() {
         guard let source = currentTrack?.playerSource else { return }
+        let isSpotify = source == "Spotify"
         let script =
-            source == "Spotify"
+            isSpotify
             ? "tell application \"Spotify\" to playpause"
             : "tell application \"Music\" to playpause"
-        executeScript(script)
+        let bundleId = isSpotify ? "com.spotify.client" : "com.apple.Music"
+        executeScript(script, bundleId: bundleId)
         pollMediaState()
     }
 
     public func nextTrack() {
         guard let source = currentTrack?.playerSource else { return }
+        let isSpotify = source == "Spotify"
         let script =
-            source == "Spotify"
+            isSpotify
             ? "tell application \"Spotify\" to next track"
             : "tell application \"Music\" to next track"
-        executeScript(script)
+        let bundleId = isSpotify ? "com.spotify.client" : "com.apple.Music"
+        executeScript(script, bundleId: bundleId)
         pollMediaState()
     }
 
     public func previousTrack() {
         guard let source = currentTrack?.playerSource else { return }
+        let isSpotify = source == "Spotify"
         let script =
-            source == "Spotify"
+            isSpotify
             ? "tell application \"Spotify\" to previous track"
             : "tell application \"Music\" to previous track"
-        executeScript(script)
+        let bundleId = isSpotify ? "com.spotify.client" : "com.apple.Music"
+        executeScript(script, bundleId: bundleId)
         pollMediaState()
     }
 
-    private func executeScript(_ source: String) {
+    private func executeScript(_ source: String, bundleId: String) {
+        guard Self.isAppRunning(bundleId: bundleId) else { return }
         Task.detached(priority: .utility) {
             var error: NSDictionary?
             if let appleScript = NSAppleScript(source: source) {
@@ -102,20 +109,24 @@ public final class MediaController: ObservableObject {
         }
     }
 
+    nonisolated private static func isAppRunning(bundleId: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty
+    }
+
     nonisolated private static func fetchAppleMusicState() -> MediaTrack? {
-        guard ApprovalNotificationController.hasBundleProxy else { return nil }
+        guard ApprovalNotificationController.hasBundleProxy,
+            isAppRunning(bundleId: "com.apple.Music")
+        else { return nil }
         let scriptSource = """
-            if application "Music" is running then
-                tell application "Music"
-                    if player state is playing or player state is paused then
-                        set trackTitle to name of current track
-                        set trackArtist to artist of current track
-                        set trackAlbum to album of current track
-                        set pState to (player state is playing)
-                        return trackTitle & "|||" & trackArtist & "|||" & trackAlbum & "|||" & (pState as string)
-                    end if
-                end tell
-            end if
+            tell application "Music"
+                if player state is playing or player state is paused then
+                    set trackTitle to name of current track
+                    set trackArtist to artist of current track
+                    set trackAlbum to album of current track
+                    set pState to (player state is playing)
+                    return trackTitle & "|||" & trackArtist & "|||" & trackAlbum & "|||" & (pState as string)
+                end if
+            end tell
             return ""
             """
         var error: NSDictionary?
@@ -139,19 +150,19 @@ public final class MediaController: ObservableObject {
     }
 
     nonisolated private static func fetchSpotifyState() -> MediaTrack? {
-        guard ApprovalNotificationController.hasBundleProxy else { return nil }
+        guard ApprovalNotificationController.hasBundleProxy,
+            isAppRunning(bundleId: "com.spotify.client")
+        else { return nil }
         let scriptSource = """
-            if application "Spotify" is running then
-                tell application "Spotify"
-                    if player state is playing or player state is paused then
-                        set trackTitle to name of current track
-                        set trackArtist to artist of current track
-                        set trackAlbum to album of current track
-                        set pState to (player state is playing)
-                        return trackTitle & "|||" & trackArtist & "|||" & trackAlbum & "|||" & (pState as string)
-                    end if
-                end tell
-            end if
+            tell application "Spotify"
+                if player state is playing or player state is paused then
+                    set trackTitle to name of current track
+                    set trackArtist to artist of current track
+                    set trackAlbum to album of current track
+                    set pState to (player state is playing)
+                    return trackTitle & "|||" & trackArtist & "|||" & trackAlbum & "|||" & (pState as string)
+                end if
+            end tell
             return ""
             """
         var error: NSDictionary?
