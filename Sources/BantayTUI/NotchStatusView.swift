@@ -17,7 +17,6 @@ struct NotchStatusView: View {
     @State private var pulse = false
     @State private var queueSelections: [String: Set<Int>] = [:]
     @State private var showWelcome = false
-    @State private var glowPulse = false
     @State private var now = Date()
     enum ShelfTab: String, CaseIterable, Identifiable {
         case agents = "Agents"
@@ -266,12 +265,6 @@ struct NotchStatusView: View {
 
     private var cornerRad: CGFloat { IslandMetrics.cornerRadius(expanded: isExpanded) }
 
-    private var activeHoverScale: CGFloat {
-        max(
-            pulse ? 1.03 : 1, IslandMetrics.hoverScale(isHovered: isHovered, isExpanded: isExpanded)
-        )
-    }
-
     private var morphAnimation: Animation {
         switch IslandMetrics.morphStyle(reduceMotion: reduceMotion) {
         case .spring:
@@ -305,7 +298,6 @@ struct NotchStatusView: View {
         }
         .overlay(edgeGlow)
         .overlay(systemHUDOverlay, alignment: .bottom)
-        .scaleEffect(activeHoverScale, anchor: .top)
         .frame(
             width: islandWidth + cornerRad * 2,
             height: islandHeight,
@@ -323,7 +315,6 @@ struct NotchStatusView: View {
         )
         .offset(x: islandOffsetX)
         .animation(morphAnimation, value: isExpanded)
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: selectedTab)
         .background(Color.clear.allowsHitTesting(false))
         .opacity(opacity)
         .animation(morphAnimation, value: isExpanded)
@@ -436,22 +427,12 @@ struct NotchStatusView: View {
         let blocked = !approvalQueueAgents.isEmpty
         let config = NotchHUDConfig.shared
         if config.edgeGlowEnabled && blocked && !isExpanded {
-            RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
-                .strokeBorder(
-                    Color(hex: IslandMetrics.glowBlockedColor).opacity(glowPulse ? 0.95 : 0.25),
-                    lineWidth: 2
-                )
-                .frame(width: islandWidth, height: islandHeight)
-                .allowsHitTesting(false)
-                .onAppear {
-                    if reduceMotion {
-                        glowPulse = true
-                    } else {
-                        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                            glowPulse = true
-                        }
-                    }
-                }
+            EdgeGlowView(
+                cornerRadius: cornerRad,
+                width: islandWidth,
+                height: islandHeight,
+                reduceMotion: reduceMotion
+            )
         }
     }
 
@@ -1200,7 +1181,7 @@ struct NotchStatusView: View {
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(ScalePressButtonStyle())
+        .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(label ?? help)
         .disabled(disabled)
@@ -1219,7 +1200,7 @@ struct NotchStatusView: View {
                 .frame(minWidth: 24, minHeight: 24)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(ScalePressButtonStyle())
+        .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(accessibilityLabel ?? help)
         .disabled(disabled)
@@ -1238,7 +1219,7 @@ struct NotchStatusView: View {
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(ScalePressButtonStyle())
+        .buttonStyle(.plain)
         .help("View live output + git diff")
         .accessibilityLabel("View live output for \(agent.source)")
     }
@@ -1411,9 +1392,7 @@ struct NotchStatusView: View {
 
             // Workspace grouping toggle button
             Button(action: {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                    groupByWorkspace.toggle()
-                }
+                groupByWorkspace.toggle()
             }) {
                 HStack(spacing: 3) {
                     Image(systemName: groupByWorkspace ? "folder.fill.badge.gearshape" : "folder")
@@ -1430,7 +1409,7 @@ struct NotchStatusView: View {
                             groupByWorkspace ? Color.cyan.opacity(0.2) : Color.white.opacity(0.08))
                 )
             }
-            .buttonStyle(ScalePressButtonStyle())
+            .buttonStyle(.plain)
             .help("Group agents by project workspace folder")
         }
         .padding(.horizontal, 10)
@@ -1453,7 +1432,7 @@ struct NotchStatusView: View {
             .padding(.vertical, 3)
             .contentShape(Rectangle())
         }
-        .buttonStyle(ScalePressButtonStyle())
+        .buttonStyle(.plain)
         .accessibilityValue(selected ? "selected" : "not selected")
     }
 
@@ -1771,7 +1750,7 @@ struct NotchStatusView: View {
                         .foregroundColor(.white.opacity(0.7))
                         .background(Color.black.opacity(0.6).clipShape(Circle()))
                 }
-                .buttonStyle(ScalePressButtonStyle())
+                .buttonStyle(.plain)
                 .help("Remove from shelf")
                 .offset(x: 4, y: -4)
             }
@@ -2017,7 +1996,7 @@ struct NotchStatusView: View {
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(ScalePressButtonStyle())
+            .buttonStyle(.plain)
             .help(panelPinned ? "Unpin panel" : "Pin panel open")
             .accessibilityLabel(panelPinned ? "Unpin panel" : "Pin panel open")
             .accessibilityValue(panelPinned ? "pinned" : "unpinned")
@@ -2031,7 +2010,7 @@ struct NotchStatusView: View {
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(ScalePressButtonStyle())
+            .buttonStyle(.plain)
             .help("Open Settings")
             .accessibilityLabel("Open Settings")
         }
@@ -2165,11 +2144,7 @@ struct NotchStatusView: View {
                                 ? Color.accentColor.opacity(0.18) : Color.clear
                         )
                 }
-                // Item 1: staggered appear animation per row.
-                .transition(.opacity.combined(with: .offset(y: 4)))
-                .animation(
-                    .easeOut(duration: 0.2).delay(Double(index) * 0.03),
-                    value: mergedRoster.count)
+                .transition(.opacity)
             }
             recentActivitySection
         }
@@ -2862,7 +2837,31 @@ struct NotchStatusView: View {
 struct ScalePressButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .opacity(configuration.isPressed ? 0.72 : 1.0)
+    }
+}
+
+private struct EdgeGlowView: View {
+    let cornerRadius: CGFloat
+    let width: CGFloat
+    let height: CGFloat
+    let reduceMotion: Bool
+    @State private var glowPulse = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .strokeBorder(
+                Color(hex: IslandMetrics.glowBlockedColor).opacity(glowPulse ? 0.95 : 0.25),
+                lineWidth: 2
+            )
+            .frame(width: width, height: height)
+            .allowsHitTesting(false)
+            .animation(
+                reduceMotion ? nil : .easeInOut(duration: 0.8).repeatForever(autoreverses: true),
+                value: glowPulse
+            )
+            .onAppear {
+                glowPulse = true
+            }
     }
 }
 

@@ -38,8 +38,11 @@ public final class RemindersProvider: ObservableObject {
         let auth = isAuthorized
         authorized = auth
         if auth {
-            defaultList = store?.defaultCalendarForNewReminders()
             startStoreObserver()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.defaultList = self.store?.defaultCalendarForNewReminders()
+            }
         }
     }
 
@@ -142,10 +145,21 @@ public final class RemindersProvider: ObservableObject {
         // through an @unchecked Sendable box (single-writer, continuation
         // ordered) like the rest of the codebase's AppKit bridges.
         let box = RemindersBox()
+        let guardBox = BoxBool()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             store.fetchReminders(matching: predicate) { items in
-                box.items = items ?? []
-                cont.resume()
+                if !guardBox.value {
+                    guardBox.value = true
+                    box.items = items ?? []
+                    cont.resume()
+                }
+            }
+            // Timeout safety: resume after 2.0s if EventKit daemon is slow/unresponsive
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                if !guardBox.value {
+                    guardBox.value = true
+                    cont.resume()
+                }
             }
         }
         reminders = box.items
@@ -200,4 +214,8 @@ public final class RemindersProvider: ObservableObject {
 /// ordering make this safe).
 private final class RemindersBox: @unchecked Sendable {
     var items: [EKReminder] = []
+}
+
+private final class BoxBool: @unchecked Sendable {
+    var value = false
 }

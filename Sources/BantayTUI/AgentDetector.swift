@@ -281,40 +281,66 @@ enum AgentDetector {
         return nil
     }
 
+    /// Whether an activity snippet indicates an ongoing, active agent task.
+    static func isWorkingActivity(_ activity: String?) -> Bool {
+        guard let act = activity?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            !act.isEmpty
+        else { return false }
+        if act == "idle" || act.contains("exiting loop") || act.contains("turn.close")
+            || act.contains("turn close") || act.contains("session.turn.close")
+            || act.hasPrefix("init") || act.contains("message=init") || act.contains("waiting")
+            || act.contains("completed") || act.contains("done")
+        {
+            return false
+        }
+        return true
+    }
+
     /// Extracts a readable one-line snippet from a transcript line.
-    /// Prioritizes tool calls (actions/files) over rambling assistant thought text,
+    /// Prioritizes concise action summaries over rambling assistant text or long filenames,
     /// cleans paths down to basenames, and strips log envelopes.
     static func readableLine(_ line: String) -> String? {
+        let lower = line.lowercased()
+        // Skip log warnings, debug, and trace lines entirely - they are internal engine chatter
+        if lower.contains("level=warn") || lower.contains("level=debug")
+            || lower.contains("level=trace")
+            || lower.contains("lvl=warn") || lower.contains("lvl=debug")
+            || lower.contains("lvl=trace")
+            || lower.contains("duplicate skill name")
+        {
+            return nil
+        }
+        if lower.contains("exiting loop") || lower.contains("turn.close")
+            || lower.contains("session.turn.close") || lower.contains("message=init ")
+            || lower.contains("message=\"init\"")
+        {
+            return "Idle"
+        }
+
         if let data = line.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {
-            // Prioritize concrete tool calls over monologue or thinking
+            // Prioritize concise tool summaries over full filenames or monologue
             if let toolCalls = obj["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
                 let summaries = toolCalls.compactMap { tc -> String? in
                     let summary =
                         (tc["toolSummary"] as? String)
                         ?? (tc["toolAction"] as? String)
+                    if let summary, !summary.isEmpty {
+                        return summary
+                    }
                     let args =
                         (tc["args"] as? [String: Any])
                         ?? (tc["parameters"] as? [String: Any])
-                    if let file = (args?["TargetFile"] as? String)
-                        ?? (args?["AbsolutePath"] as? String)
-                    {
-                        let filename = URL(
-                            fileURLWithPath: file.trimmingCharacters(
-                                in: CharacterSet(charactersIn: "\""))
-                        ).lastPathComponent
-                        if let summary, !summary.isEmpty {
-                            return "\(summary): \(filename)"
-                        }
-                        return "File: \(filename)"
+                    if args?["TargetFile"] != nil || args?["AbsolutePath"] != nil {
+                        return "Editing file"
                     }
-                    return summary
+                    return nil
                 }
                 let joined = summaries.joined(separator: ", ").trimmingCharacters(
                     in: .whitespacesAndNewlines)
                 if !joined.isEmpty {
-                    return IslandMetrics.cleanHUDText(joined, maxCharacters: 55)
+                    return IslandMetrics.cleanHUDText(joined, maxCharacters: 40)
                 }
             }
             if let message = obj["message"] as? [String: Any] {
@@ -323,23 +349,23 @@ enum AgentDetector {
                     let joined = texts.joined(separator: " ").trimmingCharacters(
                         in: .whitespacesAndNewlines)
                     if !joined.isEmpty {
-                        return IslandMetrics.cleanHUDText(joined, maxCharacters: 55)
+                        return IslandMetrics.cleanHUDText(joined, maxCharacters: 40)
                     }
                 }
                 if let contentStr = message["content"] as? String, !contentStr.isEmpty {
-                    return IslandMetrics.cleanHUDText(contentStr, maxCharacters: 55)
+                    return IslandMetrics.cleanHUDText(contentStr, maxCharacters: 40)
                 }
                 if let text = message["text"] as? String, !text.isEmpty {
-                    return IslandMetrics.cleanHUDText(text, maxCharacters: 55)
+                    return IslandMetrics.cleanHUDText(text, maxCharacters: 40)
                 }
                 if let command = message["command"] as? String, !command.isEmpty {
-                    return IslandMetrics.cleanHUDText(command, maxCharacters: 55)
+                    return IslandMetrics.cleanHUDText(command, maxCharacters: 40)
                 }
             }
             if let contentStr = obj["content"] as? String {
                 let trimmed = contentStr.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    return IslandMetrics.cleanHUDText(trimmed, maxCharacters: 55)
+                    return IslandMetrics.cleanHUDText(trimmed, maxCharacters: 40)
                 }
             }
             if let thinkingStr = obj["thinking"] as? String {
@@ -347,14 +373,14 @@ enum AgentDetector {
                 if !trimmed.isEmpty {
                     let firstLine =
                         trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
-                    return IslandMetrics.cleanHUDText(firstLine, maxCharacters: 55)
+                    return IslandMetrics.cleanHUDText(firstLine, maxCharacters: 40)
                 }
             }
             if let bash = obj["bashExecution"] as? [String: Any],
                 let command = bash["command"] as? String,
                 !command.isEmpty
             {
-                return IslandMetrics.cleanHUDText(command, maxCharacters: 55)
+                return IslandMetrics.cleanHUDText(command, maxCharacters: 40)
             }
         }
         let snippet = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -362,7 +388,7 @@ enum AgentDetector {
         if snippet.hasPrefix("{") {
             return String(snippet.prefix(160))
         }
-        return IslandMetrics.cleanHUDText(snippet, maxCharacters: 55)
+        return IslandMetrics.cleanHUDText(snippet, maxCharacters: 40)
     }
 }
 
@@ -416,7 +442,7 @@ enum StandaloneAgentScanner {
             for root in roots where activity == nil {
                 if let info = AgentDetector.latestActivityInfo(root: root) {
                     activity = info.activity
-                    isWorking = info.isRecent
+                    isWorking = info.isRecent && AgentDetector.isWorkingActivity(info.activity)
                 }
             }
             return DetectedAgent(

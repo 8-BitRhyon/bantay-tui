@@ -5437,7 +5437,37 @@ struct LogicCheckMain {
         )
         check(
             inWeeksTask.priority == .high,
-            "L115 priority for '!!' is high")
+            "L116 priority for '!!' is high")
+
+        // L116 Agent HUD text refinement and Kilo idle activity gate
+        let toolCallLine = """
+            {"tool_calls":[{"toolSummary":"File edit","toolAction":"Editing file","args":{"TargetFile":"/Users/rhyon/Bantay/RemindersProvider.swift"}}]}
+            """
+        let cleanTool = AgentDetector.readableLine(toolCallLine)
+        check(
+            cleanTool == "File edit",
+            "L116 readableLine returns concise action without file name (got: \(String(describing: cleanTool)))"
+        )
+        let warnLine =
+            "timestamp=2026-09-07T12:27:54.464Z level=WARN message=\"duplicate skill name\" name=ui-styling"
+        check(
+            AgentDetector.readableLine(warnLine) == nil,
+            "L116 readableLine suppresses internal log warnings"
+        )
+        let kiloExitLine =
+            "timestamp=2026-09-07T12:19:32.964Z level=INFO message=\"exiting loop\""
+        check(
+            AgentDetector.readableLine(kiloExitLine) == "Idle",
+            "L116 readableLine converts loop exit to Idle"
+        )
+        check(
+            !AgentDetector.isWorkingActivity("Idle"),
+            "L116 isWorkingActivity evaluates Idle as not working"
+        )
+        check(
+            AgentDetector.isWorkingActivity("File edit"),
+            "L116 isWorkingActivity evaluates File edit as working"
+        )
 
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)

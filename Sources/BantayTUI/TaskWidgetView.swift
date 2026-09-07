@@ -285,7 +285,7 @@ public struct TaskWidgetView: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(task.isCompleted ? .green : .white.opacity(0.5))
             }
-            .buttonStyle(ScalePressButtonStyle())
+            .buttonStyle(.plain)
             .help(task.isCompleted ? "Mark incomplete" : "Mark completed")
             .accessibilityLabel(task.isCompleted ? "Completed" : "Incomplete")
 
@@ -348,7 +348,7 @@ public struct TaskWidgetView: View {
                             .padding(.vertical, 2)
                             .background(Color.yellow, in: Capsule())
                         }
-                        .buttonStyle(ScalePressButtonStyle())
+                        .buttonStyle(.plain)
                         .help("Dispatch prompt to \(agent)")
                     }
 
@@ -362,7 +362,7 @@ public struct TaskWidgetView: View {
                                 .font(.system(size: 10))
                                 .foregroundColor(.red.opacity(0.8))
                         }
-                        .buttonStyle(ScalePressButtonStyle())
+                        .buttonStyle(.plain)
                         .help("Delete task")
                     }
                 }

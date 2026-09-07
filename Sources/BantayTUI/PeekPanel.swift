@@ -290,7 +290,7 @@ private struct PeekPanelView: View {
                                 .padding(.vertical, 4)
                                 .background(Color.cyan, in: Capsule())
                             }
-                            .buttonStyle(ScalePressButtonStyle())
+                            .buttonStyle(.plain)
                         }
                     }
                 }
