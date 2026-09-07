@@ -546,24 +546,67 @@ public enum IslandMetrics: Sendable {
         return remMinutes > 0 ? "\(hours)h\(remMinutes)m" : "\(hours)h"
     }
 
-    /// Strips raw markdown links, escape sequences (\n), and file path dumps
-    /// to format clean single-line HUD subtitle strings.
-    public static func cleanHUDText(_ text: String) -> String {
+    /// Strips raw markdown links, escape sequences (\n), log envelopes (timestamp=...),
+    /// and replaces long file paths with their basename to format clean single-line HUD strings.
+    public static func cleanHUDText(_ text: String, maxCharacters: Int = 60) -> String {
         var s =
             text
             .replacingOccurrences(of: "\\n", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
-        let pattern = "\\[([^\\]]+)\\]\\([^\\)]+\\)"
-        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+
+        // Strip log envelope metadata (timestamp=... level=... run=... msg=...)
+        s = s.replacingOccurrences(
+            of: "(?:timestamp|time)=[0-9T:.Z+-]+\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:level|lvl)=(?:INFO|WARN|ERROR|DEBUG|TRACE)\\s*",
+            with: "",
+            options: [.regularExpression, .caseInsensitive])
+        s = s.replacingOccurrences(
+            of: "run=[a-zA-Z0-9_-]+\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:message|msg)=\"?([^\"]*)\"?",
+            with: "$1",
+            options: .regularExpression)
+
+        // Strip markdown links: [text](url) -> text
+        let mdLinkPattern = "\\[([^\\]]+)\\]\\([^\\)]+\\)"
+        if let regex = try? NSRegularExpression(pattern: mdLinkPattern, options: []) {
             let range = NSRange(location: 0, length: s.utf16.count)
             s = regex.stringByReplacingMatches(
                 in: s, options: [], range: range, withTemplate: "$1")
         }
-        s = s.replacingOccurrences(of: "file:///[^\\s]+", with: "", options: .regularExpression)
+
+        // Strip raw file URLs
+        s = s.replacingOccurrences(of: "file:///[^\\s)]+", with: "", options: .regularExpression)
+
+        // Replace absolute filesystem paths with their last component (basename)
+        // e.g. /Users/rhyon/.../Sources/BantayTUI/MascotModel.swift -> MascotModel.swift
+        let pathWithExtPattern = "/(?:[^\\s/]+/)+([^\\s/]+\\.[a-zA-Z0-9_]+)"
+        if let regex = try? NSRegularExpression(pattern: pathWithExtPattern, options: []) {
+            let range = NSRange(location: 0, length: s.utf16.count)
+            s = regex.stringByReplacingMatches(
+                in: s, options: [], range: range, withTemplate: "$1")
+        }
+
+        // Strip bold/italic/code markdown delimiters
+        s = s.replacingOccurrences(of: "**", with: "")
+        s = s.replacingOccurrences(of: "`", with: "")
+
+        // Collapse excess whitespace
         s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? text : trimmed
+        guard !trimmed.isEmpty else { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        if maxCharacters > 0, trimmed.count > maxCharacters {
+            let prefix = String(trimmed.prefix(maxCharacters - 3))
+            return prefix.trimmingCharacters(in: .whitespaces) + "..."
+        }
+        return trimmed
     }
 
     /// Whether the roster should react to single-key shortcuts (Y/N/digits).

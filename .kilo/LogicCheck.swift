@@ -5392,6 +5392,35 @@ struct LogicCheckMain {
             IslandMetrics.shortcutKey(for: "7") == .option(7),
             "L112 shortcutKey 7 resolves")
 
+        // L113 HUD text path compaction and log envelope stripping
+        let rawLogPath =
+            "timestamp=2026-09-07T10:50:31.705Z level=INFO run=5baa8966 message=Editing /Users/rhyon/Projects/bantay-tui/Sources/BantayTUI/MascotModel.swift"
+        let compacted = IslandMetrics.cleanHUDText(rawLogPath)
+        check(
+            !compacted.contains("timestamp="),
+            "L113 cleanHUDText strips timestamp log envelope")
+        check(
+            !compacted.contains("/Users/rhyon"),
+            "L113 cleanHUDText strips full directory paths")
+        check(
+            compacted.contains("MascotModel.swift"),
+            "L113 cleanHUDText retains file basename")
+
+        // L114 Kilo extension server filter & isWorking gate
+        let kiloServerCmd =
+            "/Users/rhyon/.antigravity-ide/extensions/kilocode.kilo-code-7.5.15-darwin-arm64/bin/kilo serve --port 0"
+        check(
+            AgentDetector.canonicalNameFromCommand(kiloServerCmd) == nil,
+            "L114 kilo serve --port 0 is filtered out from standalone agents")
+        let kiloDetected = StandaloneAgentScanner.detect(
+            samples: [
+                ProcessSample(
+                    pid: 5622, name: "kilo", command: kiloServerCmd, environmentLines: [])
+            ], home: "/dev/null")
+        check(
+            kiloDetected.isEmpty,
+            "L114 StandaloneAgentScanner rejects kilo background extension server")
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 

@@ -807,7 +807,7 @@ extension AgentEventManager {
                 }.map {
                     HerdrAgentInfo(
                         agent: $0.name,
-                        agentStatus: "working",
+                        agentStatus: $0.isWorking ? "working" : "idle",
                         paneId: "standalone:\($0.name)",
                         workspaceId: nil,
                         terminalTitle: $0.activity,
@@ -1122,7 +1122,7 @@ extension AgentEventManager {
         let extras = detected.filter { !herdrNames.contains($0.name) }.map {
             HerdrAgentInfo(
                 agent: $0.name,
-                agentStatus: "working",
+                agentStatus: $0.isWorking ? "working" : "idle",
                 paneId: nil,
                 workspaceId: nil,
                 terminalTitle: $0.activity,

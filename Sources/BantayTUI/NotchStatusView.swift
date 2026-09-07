@@ -65,8 +65,6 @@ struct NotchStatusView: View {
     /// Cancels the pending hotkey-blink reset so rapid presses extend the
     /// flash rather than stacking resets.
     @State private var hotkeyBlinkResetTask: Task<Void, Never>?
-    /// Namespace for tab bar underline matchedGeometryEffect (item 11).
-    @Namespace private var tabBarNamespace
     private let adapter = HerdrSocketAdapter()
 
     /// Docked idle chips sit flush in the notch row; only expanded/center drop
@@ -1448,24 +1446,15 @@ struct NotchStatusView: View {
                     .font(.system(size: 10, weight: selected ? .semibold : .medium))
                     .foregroundColor(selected ? .white : .white.opacity(0.9))
                     .padding(.horizontal, 4)
-                // Item 11: sliding underline indicator.
-                if selected {
-                    Rectangle()
-                        .fill(.white)
-                        .frame(height: 1.5)
-                        .matchedGeometryEffect(id: "tabIndicator", in: tabBarNamespace)
-                } else {
-                    Rectangle()
-                        .fill(.clear)
-                        .frame(height: 1.5)
-                }
+                Rectangle()
+                    .fill(selected ? Color.white : Color.clear)
+                    .frame(height: 1.5)
             }
             .padding(.vertical, 3)
             .contentShape(Rectangle())
         }
         .buttonStyle(ScalePressButtonStyle())
         .accessibilityValue(selected ? "selected" : "not selected")
-        .animation(.easeInOut(duration: 0.2), value: selected)
     }
 
     private var shelfContent: some View {
@@ -1997,7 +1986,11 @@ struct NotchStatusView: View {
                 quotaAxiBadge
             }
             Spacer(minLength: 4)
-            if let rawTitle = eventManager.currentEvent?.title, !rawTitle.hasPrefix("Created At:") {
+            if let rawTitle = eventManager.currentEvent?.title,
+                !rawTitle.hasPrefix("Created At:"),
+                !rawTitle.contains("timestamp="),
+                !rawTitle.contains("level=")
+            {
                 let cleanedTitle = cleanHUDText(rawTitle)
                 if !cleanedTitle.isEmpty {
                     Text(cleanedTitle)
@@ -2332,110 +2325,108 @@ struct NotchStatusView: View {
                     .help("Cancel (Esc)")
                     .layoutPriority(1)
                 } else {
-                    Button(action: { beginComposing(agent) }) {
-                        HStack(spacing: 6) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                HStack(spacing: 5) {
-                                    if let ctx = agent.projectContext {
-                                        // Item 12: .tail truncation so the
-                                        // differentiating suffix stays visible.
-                                        Text(ctx.project)
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 5) {
+                                if let ctx = agent.projectContext {
+                                    // Item 12: .tail truncation so the
+                                    // differentiating suffix stays visible.
+                                    Text(ctx.project)
+                                        .font(
+                                            .system(
+                                                size: 10.5, weight: .semibold,
+                                                design: .monospaced)
+                                        )
+                                        .foregroundColor(.white).lineLimit(1).truncationMode(
+                                            .tail)
+                                    if let branch = ctx.branch {
+                                        Text(branch)
                                             .font(
                                                 .system(
-                                                    size: 10.5, weight: .semibold,
+                                                    size: 8.5, weight: .medium,
                                                     design: .monospaced)
                                             )
-                                            .foregroundColor(.white).lineLimit(1).truncationMode(
-                                                .tail)
-                                        if let branch = ctx.branch {
-                                            Text(branch)
-                                                .font(
-                                                    .system(
-                                                        size: 8.5, weight: .medium,
-                                                        design: .monospaced)
-                                                )
-                                                .foregroundColor(.white.opacity(0.4))
-                                                .lineLimit(1)
-                                        }
-                                        if let diff = ctx.diffStat {
-                                            Text(diff)
-                                                .font(
-                                                    .system(
-                                                        size: 8, weight: .semibold,
-                                                        design: .monospaced)
-                                                )
-                                                .monospacedDigit()
-                                                .foregroundColor(Color.green.opacity(0.9))
-                                                .padding(.horizontal, 3)
-                                                .padding(.vertical, 0.5)
-                                                .background(
-                                                    RoundedRectangle(
-                                                        cornerRadius: 3, style: .continuous
-                                                    )
-                                                    .fill(Color.green.opacity(0.12))
-                                                )
-                                                .lineLimit(1)
-                                        }
-                                    } else {
-                                        Text(agent.source)
+                                            .foregroundColor(.white.opacity(0.4))
+                                            .lineLimit(1)
+                                    }
+                                    if let diff = ctx.diffStat {
+                                        Text(diff)
                                             .font(
                                                 .system(
-                                                    size: 10.5, weight: .semibold,
+                                                    size: 8, weight: .semibold,
                                                     design: .monospaced)
                                             )
-                                            .foregroundColor(.white).lineLimit(1).truncationMode(
-                                                .tail)
-                                    }
-                                }
-                                HStack(spacing: 5) {
-                                    if agent.kind == .failed, let reason = agent.message {
-                                        // Failure reason (rate_limit/auth/billing…)
-                                        // must be visible, not just "Failed".
-                                        Text(reason)
-                                            .font(.system(size: 8.5, weight: .medium))
-                                            .foregroundColor(
-                                                Color(hex: AgentEventKind.failed.color)
+                                            .monospacedDigit()
+                                            .foregroundColor(Color.green.opacity(0.9))
+                                            .padding(.horizontal, 3)
+                                            .padding(.vertical, 0.5)
+                                            .background(
+                                                RoundedRectangle(
+                                                    cornerRadius: 3, style: .continuous
+                                                )
+                                                .fill(Color.green.opacity(0.12))
                                             )
                                             .lineLimit(1)
-                                            .truncationMode(.tail)
-                                    } else if let live = agent.title ?? agent.message,
-                                        agent.kind.isOngoing
-                                    {
-                                        Text(cleanHUDText(live))
-                                            .font(.system(size: 8.5, weight: .medium))
-                                            .foregroundColor(.white.opacity(0.75))
-                                            .lineLimit(1)
-                                            .truncationMode(.tail)
-                                    } else {
-                                        Text(agent.kind.label)
-                                            .font(.system(size: 8.5, weight: .medium))
-                                            .foregroundColor(.secondary).lineLimit(1)
                                     }
-                                    if NotchHUDConfig.shared.showElapsedTime,
-                                        let startedAt = agent.startedAt,
-                                        agent.kind.isOngoing
-                                    {
-                                        Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
-                                            .font(
-                                                .system(
-                                                    size: 8.5, weight: .medium, design: .monospaced)
-                                            )
-                                            .foregroundColor(.white.opacity(0.5))
-                                    }
+                                } else {
+                                    Text(agent.source)
+                                        .font(
+                                            .system(
+                                                size: 10.5, weight: .semibold,
+                                                design: .monospaced)
+                                        )
+                                        .foregroundColor(.white).lineLimit(1).truncationMode(
+                                            .tail)
                                 }
                             }
-                            Spacer(minLength: 4)
-                            if let title = agent.title, !agent.kind.isOngoing {
-                                Text(cleanHUDText(title))
-                                    .font(.system(size: 9, weight: .regular))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
+                            HStack(spacing: 5) {
+                                if agent.kind == .failed, let reason = agent.message {
+                                    // Failure reason (rate_limit/auth/billing…)
+                                    // must be visible, not just "Failed".
+                                    Text(cleanHUDText(reason))
+                                        .font(.system(size: 8.5, weight: .medium))
+                                        .foregroundColor(
+                                            Color(hex: AgentEventKind.failed.color)
+                                        )
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                } else if let live = agent.title ?? agent.message,
+                                    agent.kind.isOngoing
+                                {
+                                    Text(cleanHUDText(live))
+                                        .font(.system(size: 8.5, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.75))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                } else {
+                                    Text(agent.kind.label)
+                                        .font(.system(size: 8.5, weight: .medium))
+                                        .foregroundColor(.secondary).lineLimit(1)
+                                }
+                                if NotchHUDConfig.shared.showElapsedTime,
+                                    let startedAt = agent.startedAt,
+                                    agent.kind.isOngoing
+                                {
+                                    Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
+                                        .font(
+                                            .system(
+                                                size: 8.5, weight: .medium, design: .monospaced)
+                                        )
+                                        .foregroundColor(.white.opacity(0.5))
+                                }
                             }
                         }
-                        .contentShape(Rectangle())
+                        Spacer(minLength: 4)
+                        if let title = agent.title, !agent.kind.isOngoing {
+                            Text(cleanHUDText(title))
+                                .font(.system(size: 9, weight: .regular))
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
-                    .buttonStyle(ScalePressButtonStyle())
+                    .contentShape(Rectangle())
+                    .onTapGesture { beginComposing(agent) }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(0)
                     if let paneId = agent.paneId {
@@ -2865,13 +2856,13 @@ struct NotchStatusView: View {
     }
 }
 
-/// Tactile scale-on-press feedback (make-interfaces-feel-better principle 12).
-/// Applies a subtle scale(0.96) on press for buttons across the control plane.
+/// Tactile press feedback (make-interfaces-feel-better principle 12).
+/// Uses subtle opacity on press across the control plane without altering
+/// geometry or invalidating ScrollViewResponder / AttributeGraph tables.
 struct ScalePressButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .opacity(configuration.isPressed ? 0.72 : 1.0)
     }
 }
 

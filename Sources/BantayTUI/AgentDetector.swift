@@ -8,6 +8,15 @@ struct DetectedAgent: Equatable, Sendable {
     let name: String
     /// Latest human-readable activity (tail of the agent's transcript).
     let activity: String?
+    /// Whether the agent was modified recently enough to be actively running work.
+    let isWorking: Bool
+
+    init(pid: Int, name: String, activity: String?, isWorking: Bool = false) {
+        self.pid = pid
+        self.name = name
+        self.activity = activity
+        self.isWorking = isWorking
+    }
 }
 
 /// Pure process classification + transcript discovery for standalone agents.
@@ -132,10 +141,17 @@ enum AgentDetector {
     /// don't become phantom agents.
     static func canonicalNameFromCommand(_ command: String) -> String? {
         let lower = command.lowercased()
-        // Skip obvious helper/browser subprocesses first.
+        // Skip obvious helper/browser subprocesses, extension servers, and daemons first.
         if lower.contains("helper (gpu)")
             || lower.contains("helper (renderer)")
             || lower.contains("helper (plugin)")
+            || lower.contains(" serve")
+            || lower.contains("serve ")
+            || lower.contains("--port")
+            || lower.contains("/extensions/")
+            || lower.contains("language-server")
+            || lower.contains("lsp")
+            || lower.contains("daemon")
         {
             return nil
         }
@@ -197,6 +213,13 @@ enum AgentDetector {
     /// Latest non-empty activity line from any transcript under `root`.
     /// Returns a trimmed, single-line snippet.
     static func latestActivity(root: String, maxBytes: Int = 4000) -> String? {
+        latestActivityInfo(root: root, maxBytes: maxBytes)?.activity
+    }
+
+    /// Latest activity line and recency check from any transcript under `root`.
+    static func latestActivityInfo(
+        root: String, maxBytes: Int = 4000, recentThreshold: TimeInterval = 180
+    ) -> (activity: String, isRecent: Bool)? {
         guard
             let enumerator = FileManager.default.enumerator(
                 at: URL(fileURLWithPath: root, isDirectory: true),
@@ -249,45 +272,49 @@ enum AgentDetector {
         let data = handle.readDataToEndOfFile()
         let text = String(data: data, encoding: .utf8) ?? ""
         let lines = text.split(whereSeparator: \.isNewline)
+        let isRecent = Date().timeIntervalSince(best.date) <= recentThreshold
         for line in lines.reversed() {
             if let readable = Self.readableLine(String(line)) {
-                return readable
+                return (readable, isRecent)
             }
         }
         return nil
     }
 
-    /// Extracts a readable one-line snippet from a transcript line. JSONL
-    /// transcripts (claude/codex/pi/opencode) keep messages nested, so the
-    /// raw line is unreadable; this surfaces the assistant text or the bash
-    /// command instead. Falls back to the raw trimmed line.
+    /// Extracts a readable one-line snippet from a transcript line.
+    /// Prioritizes tool calls (actions/files) over rambling assistant thought text,
+    /// cleans paths down to basenames, and strips log envelopes.
     static func readableLine(_ line: String) -> String? {
         if let data = line.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {
-            // Antigravity transcripts (direct content string or tool_calls array)
-            if let contentStr = obj["content"] as? String {
-                let trimmed = contentStr.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    return String(trimmed.prefix(160))
-                }
-            }
-            if let thinkingStr = obj["thinking"] as? String {
-                let trimmed = thinkingStr.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    let firstLine =
-                        trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
-                    return String(firstLine.prefix(160))
-                }
-            }
-            if let toolCalls = obj["tool_calls"] as? [[String: Any]] {
-                let summaries = toolCalls.compactMap {
-                    ($0["toolSummary"] as? String) ?? ($0["toolAction"] as? String)
+            // Prioritize concrete tool calls over monologue or thinking
+            if let toolCalls = obj["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
+                let summaries = toolCalls.compactMap { tc -> String? in
+                    let summary =
+                        (tc["toolSummary"] as? String)
+                        ?? (tc["toolAction"] as? String)
+                    let args =
+                        (tc["args"] as? [String: Any])
+                        ?? (tc["parameters"] as? [String: Any])
+                    if let file = (args?["TargetFile"] as? String)
+                        ?? (args?["AbsolutePath"] as? String)
+                    {
+                        let filename = URL(
+                            fileURLWithPath: file.trimmingCharacters(
+                                in: CharacterSet(charactersIn: "\""))
+                        ).lastPathComponent
+                        if let summary, !summary.isEmpty {
+                            return "\(summary): \(filename)"
+                        }
+                        return "File: \(filename)"
+                    }
+                    return summary
                 }
                 let joined = summaries.joined(separator: ", ").trimmingCharacters(
                     in: .whitespacesAndNewlines)
                 if !joined.isEmpty {
-                    return String(joined.prefix(160))
+                    return IslandMetrics.cleanHUDText(joined, maxCharacters: 55)
                 }
             }
             if let message = obj["message"] as? [String: Any] {
@@ -296,25 +323,46 @@ enum AgentDetector {
                     let joined = texts.joined(separator: " ").trimmingCharacters(
                         in: .whitespacesAndNewlines)
                     if !joined.isEmpty {
-                        return String(joined.prefix(160))
+                        return IslandMetrics.cleanHUDText(joined, maxCharacters: 55)
                     }
                 }
+                if let contentStr = message["content"] as? String, !contentStr.isEmpty {
+                    return IslandMetrics.cleanHUDText(contentStr, maxCharacters: 55)
+                }
                 if let text = message["text"] as? String, !text.isEmpty {
-                    return String(text.prefix(160))
+                    return IslandMetrics.cleanHUDText(text, maxCharacters: 55)
                 }
                 if let command = message["command"] as? String, !command.isEmpty {
-                    return String(command.prefix(160))
+                    return IslandMetrics.cleanHUDText(command, maxCharacters: 55)
+                }
+            }
+            if let contentStr = obj["content"] as? String {
+                let trimmed = contentStr.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return IslandMetrics.cleanHUDText(trimmed, maxCharacters: 55)
+                }
+            }
+            if let thinkingStr = obj["thinking"] as? String {
+                let trimmed = thinkingStr.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let firstLine =
+                        trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+                    return IslandMetrics.cleanHUDText(firstLine, maxCharacters: 55)
                 }
             }
             if let bash = obj["bashExecution"] as? [String: Any],
                 let command = bash["command"] as? String,
                 !command.isEmpty
             {
-                return String(command.prefix(160))
+                return IslandMetrics.cleanHUDText(command, maxCharacters: 55)
             }
         }
         let snippet = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        return snippet.isEmpty ? nil : String(snippet.prefix(160))
+        if snippet.isEmpty { return nil }
+        if snippet.hasPrefix("{") {
+            return String(snippet.prefix(160))
+        }
+        return IslandMetrics.cleanHUDText(snippet, maxCharacters: 55)
     }
 }
 
@@ -345,6 +393,11 @@ enum StandaloneAgentScanner {
                 || cmdLower.contains("gpu")
                 || cmdLower.contains("plugin") || cmdLower.contains("crashpad")
                 || cmdLower.contains("utility")
+                || cmdLower.contains(" serve") || cmdLower.contains("serve ")
+                || cmdLower.contains("--port")
+                || cmdLower.contains("/extensions/") || cmdLower.contains(".vscode/extensions")
+                || cmdLower.contains(".antigravity-ide/extensions")
+                || cmdLower.contains("language-server") || cmdLower.contains("daemon")
             {
                 return nil
             }
@@ -359,10 +412,19 @@ enum StandaloneAgentScanner {
             }
             let roots = AgentDetector.transcriptSearchPaths(home: home, name: name)
             var activity: String? = nil
+            var isWorking = false
             for root in roots where activity == nil {
-                activity = AgentDetector.latestActivity(root: root)
+                if let info = AgentDetector.latestActivityInfo(root: root) {
+                    activity = info.activity
+                    isWorking = info.isRecent
+                }
             }
-            return DetectedAgent(pid: sample.pid, name: name, activity: activity)
+            return DetectedAgent(
+                pid: sample.pid,
+                name: name,
+                activity: activity,
+                isWorking: isWorking
+            )
         }
 
         var seenKeys = Set<String>()
