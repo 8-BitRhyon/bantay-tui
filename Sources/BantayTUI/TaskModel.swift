@@ -69,6 +69,7 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
     public var isCompleted: Bool
     public var createdAt: Date
     public var completedAt: Date?
+    public var externalID: String?
 
     public init(
         id: UUID = UUID(),
@@ -82,7 +83,8 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         dispatchedAt: Date? = nil,
         isCompleted: Bool = false,
         createdAt: Date = Date(),
-        completedAt: Date? = nil
+        completedAt: Date? = nil,
+        externalID: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -96,6 +98,7 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         self.isCompleted = isCompleted
         self.createdAt = createdAt
         self.completedAt = completedAt
+        self.externalID = externalID
     }
 
     /// Computes category dynamically based on completion and dueDate relative to today.

@@ -53,32 +53,34 @@ public struct TaskWidgetView: View {
 
             // Scrollable task list categorized into Barrie sections
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 10) {
                     // Apple Reminders sync section (top, compact).
                     remindersSection
 
-                    let overdue = taskStore.tasks(in: .overdue, searchQuery: newTaskTitle)
-                    let today = taskStore.tasks(in: .today, searchQuery: newTaskTitle)
-                    let later = taskStore.tasks(in: .later, searchQuery: newTaskTitle)
-                    let completed = taskStore.tasks(in: .completed, searchQuery: newTaskTitle)
+                    let categorized = taskStore.categorizedTasks(searchQuery: newTaskTitle)
 
-                    if overdue.isEmpty && today.isEmpty && later.isEmpty && completed.isEmpty {
+                    if categorized.isEmpty {
                         emptyStateView
                     } else {
-                        if !overdue.isEmpty {
+                        if !categorized.overdue.isEmpty {
                             taskSection(
-                                title: "OVERDUE", tasks: overdue, color: Color(hex: "FF453A"))
+                                title: "OVERDUE", tasks: categorized.overdue,
+                                color: BantayTheme.statusFailed)
                         }
-                        if !today.isEmpty {
-                            taskSection(title: "TODAY", tasks: today, color: Color(hex: "FF9F0A"))
-                        }
-                        if !later.isEmpty {
-                            taskSection(title: "LATER", tasks: later, color: Color(hex: "64D2FF"))
-                        }
-                        if !completed.isEmpty {
+                        if !categorized.today.isEmpty {
                             taskSection(
-                                title: "COMPLETED (\(taskStore.doneTodayCount) DONE TODAY 🎉)",
-                                tasks: completed, color: Color(hex: "30D158"))
+                                title: "TODAY", tasks: categorized.today,
+                                color: BantayTheme.statusQuota)
+                        }
+                        if !categorized.later.isEmpty {
+                            taskSection(
+                                title: "LATER", tasks: categorized.later,
+                                color: BantayTheme.statusWorking)
+                        }
+                        if !categorized.completed.isEmpty {
+                            taskSection(
+                                title: "COMPLETED (\(categorized.doneTodayCount) DONE TODAY 🎉)",
+                                tasks: categorized.completed, color: BantayTheme.statusCompleted)
                         }
                     }
                 }
@@ -274,7 +276,7 @@ public struct TaskWidgetView: View {
         HStack(spacing: 8) {
             // Interactive Barrie checkmark circle
             Button {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
+                withAnimation(BantayTheme.springSnappy) {
                     taskStore.toggleCompleted(task.id)
                 }
                 if !task.isCompleted {
@@ -283,7 +285,8 @@ public struct TaskWidgetView: View {
             } label: {
                 Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(task.isCompleted ? .green : .white.opacity(0.5))
+                    .foregroundColor(
+                        task.isCompleted ? BantayTheme.statusCompleted : BantayTheme.textTertiary)
             }
             .buttonStyle(.plain)
             .help(task.isCompleted ? "Mark incomplete" : "Mark completed")
@@ -294,14 +297,16 @@ public struct TaskWidgetView: View {
                 HStack(spacing: 4) {
                     Text(task.title)
                         .font(.system(size: 11, weight: .regular))
-                        .foregroundColor(task.isCompleted ? .white.opacity(0.4) : .white)
+                        .foregroundColor(
+                            task.isCompleted ? BantayTheme.textTertiary : BantayTheme.textPrimary
+                        )
                         .strikethrough(task.isCompleted)
                         .lineLimit(2)
 
                     if task.priority == .high {
                         Text("!!")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundColor(.red)
+                            .foregroundColor(BantayTheme.statusFailed)
                     }
                 }
 
@@ -313,10 +318,10 @@ public struct TaskWidgetView: View {
                             Text(agent)
                                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                         }
-                        .foregroundColor(.cyan)
+                        .foregroundColor(BantayTheme.statusWorking)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
-                        .background(Color.cyan.opacity(0.15), in: Capsule())
+                        .background(BantayTheme.statusWorking.opacity(0.15), in: Capsule())
 
                         executionStateBadge(task)
                     }
@@ -324,7 +329,7 @@ public struct TaskWidgetView: View {
                     ForEach(task.tags, id: \.self) { tag in
                         Text("#\(tag)")
                             .font(.system(size: 8, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(BantayTheme.textTertiary)
                     }
                 }
             }
@@ -346,7 +351,7 @@ public struct TaskWidgetView: View {
                             .foregroundColor(.black)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.yellow, in: Capsule())
+                            .background(BantayTheme.statusAttention, in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .help("Dispatch prompt to \(agent)")
@@ -360,7 +365,7 @@ public struct TaskWidgetView: View {
                         } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 10))
-                                .foregroundColor(.red.opacity(0.8))
+                                .foregroundColor(BantayTheme.statusFailed.opacity(0.8))
                         }
                         .buttonStyle(.plain)
                         .help("Delete task")
@@ -371,8 +376,14 @@ public struct TaskWidgetView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
-            hoveredTaskID == task.id ? Color.white.opacity(0.08) : Color.white.opacity(0.03),
-            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            hoveredTaskID == task.id ? BantayTheme.cardHover : BantayTheme.cardBackground,
+            in: RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+                .stroke(
+                    hoveredTaskID == task.id ? BantayTheme.borderStandard : Color.clear,
+                    lineWidth: 0.5)
         )
         .onHover { isHovered in
             hoveredTaskID = isHovered ? task.id : nil
@@ -389,10 +400,10 @@ public struct TaskWidgetView: View {
                 Text("Working")
                     .font(.system(size: 8, weight: .medium))
             }
-            .foregroundColor(.cyan)
+            .foregroundColor(BantayTheme.statusWorking)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(Color.cyan.opacity(0.2), in: Capsule())
+            .background(BantayTheme.statusWorking.opacity(0.2), in: Capsule())
         case .blocked:
             HStack(spacing: 2) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -400,10 +411,10 @@ public struct TaskWidgetView: View {
                 Text("Blocked")
                     .font(.system(size: 8, weight: .medium))
             }
-            .foregroundColor(.orange)
+            .foregroundColor(BantayTheme.statusAttention)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(Color.orange.opacity(0.2), in: Capsule())
+            .background(BantayTheme.statusAttention.opacity(0.2), in: Capsule())
         case .failed:
             HStack(spacing: 2) {
                 Image(systemName: "xmark.circle.fill")
@@ -411,10 +422,10 @@ public struct TaskWidgetView: View {
                 Text("Failed")
                     .font(.system(size: 8, weight: .medium))
             }
-            .foregroundColor(.red)
+            .foregroundColor(BantayTheme.statusFailed)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(Color.red.opacity(0.2), in: Capsule())
+            .background(BantayTheme.statusFailed.opacity(0.2), in: Capsule())
         default:
             EmptyView()
         }

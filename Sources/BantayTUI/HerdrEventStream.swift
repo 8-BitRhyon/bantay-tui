@@ -89,10 +89,20 @@ final class HerdrEventStream {
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let settle = SendableFlag()
+            let onDisconnect: @Sendable () -> Void = {
+                if settle.markOnce() {
+                    continuation.resume()
+                }
+            }
+
             // Assign the handler BEFORE start so the `.ready` callback is not
             // missed (NWConnection fires state updates once started).
-            connection.stateUpdateHandler = { state in
+            connection.stateUpdateHandler = { [weak self, weak connection] state in
                 MainActor.assumeIsolated {
+                    guard let self, let connection else {
+                        onDisconnect()
+                        return
+                    }
                     switch state {
                     case .ready:
                         let sub = HerdrSocketProtocol.requestLine(
@@ -104,13 +114,12 @@ final class HerdrEventStream {
                             completion: .contentProcessed { _ in })
                         self.isSubscribed = true
                         self.reconnectAttempt = 0
-                        self.receiveLoop(connection)
-                        if settle.markOnce() { continuation.resume() }
+                        self.receiveLoop(connection, onDisconnect: onDisconnect)
                     case .failed, .cancelled:
                         self.connection = nil
                         self.isSubscribed = false
                         self.onEvent?(.disconnected)
-                        if settle.markOnce() { continuation.resume() }
+                        onDisconnect()
                     default:
                         break
                     }
@@ -120,10 +129,15 @@ final class HerdrEventStream {
         }
     }
 
-    private func receiveLoop(_ connection: NWConnection) {
+    private func receiveLoop(
+        _ connection: NWConnection, onDisconnect: @escaping @Sendable () -> Void
+    ) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) {
             [weak self] data, _, isComplete, error in
-            guard let self else { return }
+            guard let self else {
+                onDisconnect()
+                return
+            }
             MainActor.assumeIsolated {
                 if let data, !data.isEmpty {
                     self.buffer.append(data)
@@ -134,9 +148,10 @@ final class HerdrEventStream {
                     self.isSubscribed = false
                     self.reconnectAttempt += 1
                     self.onEvent?(.disconnected)
+                    onDisconnect()
                     return
                 }
-                self.receiveLoop(connection)
+                self.receiveLoop(connection, onDisconnect: onDisconnect)
             }
         }
     }

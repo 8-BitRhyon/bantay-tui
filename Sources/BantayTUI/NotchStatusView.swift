@@ -1400,13 +1400,24 @@ struct NotchStatusView: View {
                     Text("Workspace")
                         .font(.system(size: 9, weight: groupByWorkspace ? .bold : .regular))
                 }
-                .foregroundColor(groupByWorkspace ? .cyan : .white.opacity(0.6))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
+                .foregroundColor(
+                    groupByWorkspace ? BantayTheme.statusWorking : BantayTheme.textTertiary
+                )
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2.5)
                 .background(
                     Capsule()
                         .fill(
-                            groupByWorkspace ? Color.cyan.opacity(0.2) : Color.white.opacity(0.08))
+                            groupByWorkspace
+                                ? BantayTheme.statusWorking.opacity(0.18)
+                                : Color.white.opacity(0.06))
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            groupByWorkspace
+                                ? BantayTheme.statusWorking.opacity(0.35) : Color.clear,
+                            lineWidth: 0.5)
                 )
             }
             .buttonStyle(.plain)
@@ -1422,14 +1433,14 @@ struct NotchStatusView: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Text(title)
-                    .font(.system(size: 10, weight: selected ? .semibold : .medium))
-                    .foregroundColor(selected ? .white : .white.opacity(0.9))
+                    .font(.system(size: 10, weight: selected ? .bold : .medium))
+                    .foregroundColor(selected ? BantayTheme.textPrimary : BantayTheme.textTertiary)
                     .padding(.horizontal, 4)
-                Rectangle()
-                    .fill(selected ? Color.white : Color.clear)
-                    .frame(height: 1.5)
+                Capsule()
+                    .fill(selected ? BantayTheme.statusWorking : Color.clear)
+                    .frame(height: 2)
             }
-            .padding(.vertical, 3)
+            .padding(.vertical, 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1792,8 +1803,11 @@ struct NotchStatusView: View {
             budget >= 10 && budget.truncatingRemainder(dividingBy: 1) == 0
             ? String(format: "$%.0f", budget)
             : String(format: "$%.2f", budget)
-        let color: Color = ratio >= 1.0 ? .red : (ratio >= 0.7 ? .orange : .cyan)
-        return HStack(spacing: 3) {
+        let color: Color =
+            ratio >= 1.0
+            ? BantayTheme.statusFailed
+            : (ratio >= 0.7 ? BantayTheme.statusQuota : BantayTheme.statusWorking)
+        return HStack(spacing: BantayTheme.space4) {
             Circle().fill(color).frame(width: 4, height: 4)
             Text("\(formattedCost)/\(formattedBudget)")
                 .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
@@ -1801,9 +1815,10 @@ struct NotchStatusView: View {
                 .monospacedDigit()
                 .foregroundColor(color)
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1.5)
-        .background(color.opacity(0.12), in: Capsule())
+        .padding(.horizontal, BantayTheme.space6)
+        .padding(.vertical, BantayTheme.space2)
+        .background(color.opacity(0.14), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
         .fixedSize(horizontal: true, vertical: true)
         .help("Daily AI Spend: \(formattedCost) of \(formattedBudget) limit")
     }
@@ -1820,16 +1835,18 @@ struct NotchStatusView: View {
                 return "⚡\(tpm)/m"
             }
         }()
-        return HStack(spacing: 2) {
+        let color = BantayTheme.statusWorking
+        return HStack(spacing: BantayTheme.space2) {
             Text(rateText)
                 .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
                 .monospacedDigit()
-                .foregroundColor(.cyan)
+                .foregroundColor(color)
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1.5)
-        .background(Color.cyan.opacity(0.12), in: Capsule())
+        .padding(.horizontal, BantayTheme.space6)
+        .padding(.vertical, BantayTheme.space2)
+        .background(color.opacity(0.14), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
         .fixedSize(horizontal: true, vertical: true)
         .help("Live token processing rate over the last minute")
         .accessibilityLabel("Token rate \(tpm) tokens per minute")
@@ -1852,9 +1869,12 @@ struct NotchStatusView: View {
         )
         let minQuota = quotas.min(by: { $0.remainingPercent < $1.remainingPercent })
         let percentInt = Int(minQuota?.remainingPercent ?? 100)
-        let color: Color = percentInt <= 20 ? .red : (percentInt <= 50 ? .orange : .green)
+        let color: Color =
+            percentInt <= 20
+            ? BantayTheme.statusFailed
+            : (percentInt <= 50 ? BantayTheme.statusQuota : BantayTheme.statusCompleted)
 
-        return HStack(spacing: 3) {
+        return HStack(spacing: BantayTheme.space4) {
             Circle().fill(color).frame(width: 4, height: 4)
             Text("Q:\(percentInt)%")
                 .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
@@ -1862,9 +1882,10 @@ struct NotchStatusView: View {
                 .monospacedDigit()
                 .foregroundColor(color)
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1.5)
-        .background(color.opacity(0.12), in: Capsule())
+        .padding(.horizontal, BantayTheme.space6)
+        .padding(.vertical, BantayTheme.space2)
+        .background(color.opacity(0.14), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
         .fixedSize(horizontal: true, vertical: true)
         .help("Live Provider Quota: \(minQuota?.provider ?? "AI") \(percentInt)% remaining")
         .accessibilityLabel("Quota remaining \(percentInt) percent")
@@ -1889,41 +1910,49 @@ struct NotchStatusView: View {
     }
 
     private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: BantayTheme.space8) {
             if NotchHUDConfig.shared.showNotchMascot {
                 Button {
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                    withAnimation(BantayTheme.springSnappy) {
                         showThoughtBubble.toggle()
                     }
                 } label: {
                     MascotView(
                         archetype: NotchHUDConfig.shared.selectedMascotArchetype,
                         state: currentMascotState,
-                        size: 15
+                        size: 16
                     )
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showThoughtBubble, arrowEdge: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
                             Text(NotchHUDConfig.shared.selectedMascotArchetype.displayName)
                                 .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.yellow)
+                                .foregroundColor(BantayTheme.color(for: currentMascotState))
                             Spacer(minLength: 0)
                             Text("Lv.\(NotchHUDConfig.shared.mascotLevel)")
                                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.6))
+                                .foregroundColor(BantayTheme.textTertiary)
                         }
                         Text(
                             "“\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: currentMascotState))”"
                         )
                         .font(.system(size: 9.5, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundColor(BantayTheme.textPrimary)
                         .lineLimit(3)
                     }
-                    .padding(8)
-                    .frame(width: 190)
-                    .background(Color.black.opacity(0.9))
+                    .padding(10)
+                    .frame(width: 200)
+                    .background(BantayTheme.panelBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: BantayTheme.radiusMedium)
+                            .stroke(
+                                BantayTheme.color(for: currentMascotState).opacity(0.35),
+                                lineWidth: 1)
+                    )
                 }
                 .help(
                     "\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): “\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: currentMascotState))”"
@@ -1937,20 +1966,20 @@ struct NotchStatusView: View {
                     .font(.system(size: 10.5, weight: .semibold))
                     .lineLimit(1)
                     .monospacedDigit()
-                    .foregroundColor(.yellow)
+                    .foregroundColor(BantayTheme.statusAttention)
             }
             if counts.working > 0 {
                 Text("\(counts.working) working")
                     .font(.system(size: 10.5, weight: .semibold))
                     .lineLimit(1)
                     .monospacedDigit()
-                    .foregroundColor(.white)
+                    .foregroundColor(BantayTheme.statusWorking)
             }
             if counts.needsInput == 0 && counts.working == 0 {
                 Text("Agents")
                     .font(.system(size: 10.5, weight: .semibold))
                     .lineLimit(1)
-                    .foregroundColor(.white)
+                    .foregroundColor(BantayTheme.textPrimary)
             }
             if NotchHUDConfig.shared.enableSpendGlow {
                 spendGaugeBadge
@@ -1974,7 +2003,7 @@ struct NotchStatusView: View {
                 if !cleanedTitle.isEmpty {
                     Text(cleanedTitle)
                         .font(.system(size: 8.5, weight: .regular))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(BantayTheme.textTertiary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: 120, alignment: .trailing)
@@ -1991,9 +2020,11 @@ struct NotchStatusView: View {
                 }
             } label: {
                 Image(systemName: panelPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(panelPinned ? .white : .white.opacity(0.5))
-                    .frame(width: 22, height: 22)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(
+                        panelPinned ? BantayTheme.statusWorking : BantayTheme.textTertiary
+                    )
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -2005,9 +2036,9 @@ struct NotchStatusView: View {
                 AppDelegate.showSettings()
             } label: {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .frame(width: 22, height: 22)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(BantayTheme.textTertiary)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

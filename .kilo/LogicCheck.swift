@@ -1,4 +1,5 @@
 import AppKit
+import EventKit
 import Foundation
 
 @main
@@ -5078,49 +5079,51 @@ struct LogicCheckMain {
             "L82 TaskDispatcher resolves target agent target ID")
 
         // L83 TaskStore dispatchTask Execution State Update Test
-        let task3 = TaskStore.shared.addTask("Refactor API @claude")
-        TaskStore.shared.dispatchTask(task3.id)
-        let updated = TaskStore.shared.tasks.first { $0.id == task3.id }
+        let tempTaskStoreL83URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l83-\(UUID().uuidString).json")
+        let taskStoreL83 = TaskStore(fileURL: tempTaskStoreL83URL)
+        let task3 = taskStoreL83.addTask("Refactor API @claude")
+        taskStoreL83.dispatchTask(task3.id)
+        let updated = taskStoreL83.tasks.first { $0.id == task3.id }
         check(
             updated?.executionState == .dispatched,
             "L83 dispatchTask updates task executionState to dispatched")
         check(
             updated?.dispatchedAt != nil,
             "L83 dispatchTask records dispatchedAt timestamp")
-        TaskStore.shared.removeTask(task3.id)
 
         // L84 TaskStore Event Auto-Completion Test
-        let task4 = TaskStore.shared.addTask("Build feature @codex")
-        TaskStore.shared.dispatchTask(task4.id)
-        TaskStore.shared.updateTaskState(paneId: nil, source: "codex", kind: .completed)
-        let completedTask = TaskStore.shared.tasks.first { $0.id == task4.id }
+        let task4 = taskStoreL83.addTask("Build feature @codex")
+        taskStoreL83.dispatchTask(task4.id)
+        taskStoreL83.updateTaskState(paneId: nil, source: "codex", kind: .completed)
+        let completedTask = taskStoreL83.tasks.first { $0.id == task4.id }
         check(
             completedTask?.executionState == .completed,
             "L84 updateTaskState completes matching task")
         check(
             completedTask?.isCompleted == true,
             "L84 updateTaskState marks isCompleted true")
-        TaskStore.shared.removeTask(task4.id)
 
         // L85 TaskStore Event Blocked State Test
-        let task5 = TaskStore.shared.addTask("Deploy staging @kilo")
-        TaskStore.shared.dispatchTask(task5.id)
-        TaskStore.shared.updateTaskState(paneId: nil, source: "kilo", kind: .accessRequest)
-        let blockedTask = TaskStore.shared.tasks.first { $0.id == task5.id }
+        let task5 = taskStoreL83.addTask("Deploy staging @kilo")
+        taskStoreL83.dispatchTask(task5.id)
+        taskStoreL83.updateTaskState(paneId: nil, source: "kilo", kind: .accessRequest)
+        let blockedTask = taskStoreL83.tasks.first { $0.id == task5.id }
         check(
             blockedTask?.executionState == .blocked,
             "L85 updateTaskState marks task blocked on accessRequest")
-        TaskStore.shared.removeTask(task5.id)
 
         // L86 TaskStore Event Failed State Test
-        let task6 = TaskStore.shared.addTask("Run migration @freebuff")
-        TaskStore.shared.dispatchTask(task6.id)
-        TaskStore.shared.updateTaskState(paneId: nil, source: "freebuff", kind: .failed)
-        let failedTask = TaskStore.shared.tasks.first { $0.id == task6.id }
+        let tempTaskStoreL86URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l86-\(UUID().uuidString).json")
+        let taskStoreL86 = TaskStore(fileURL: tempTaskStoreL86URL)
+        let task6 = taskStoreL86.addTask("Run migration @freebuff")
+        taskStoreL86.dispatchTask(task6.id)
+        taskStoreL86.updateTaskState(paneId: nil, source: "freebuff", kind: .failed)
+        let failedTask = taskStoreL86.tasks.first { $0.id == task6.id }
         check(
             failedTask?.executionState == .failed,
             "L86 updateTaskState marks task failed on failed event")
-        TaskStore.shared.removeTask(task6.id)
 
         // L87 Task Dispatch Configuration Persistence Test
         let cfg = NotchHUDConfig.shared
@@ -5136,14 +5139,16 @@ struct LogicCheckMain {
         cfg.focusTerminalOnDispatch = origFocus
 
         // L88 Auto-Dispatch on Task Add Test
+        let tempTaskStoreL88URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l88-\(UUID().uuidString).json")
+        let taskStoreL88 = TaskStore(fileURL: tempTaskStoreL88URL)
         NotchHUDConfig.shared.autoDispatchTasks = true
-        let task8 = TaskStore.shared.addTask("Auto task @pi")
-        let added = TaskStore.shared.tasks.first { $0.id == task8.id }
+        let task8 = taskStoreL88.addTask("Auto task @pi")
+        let added = taskStoreL88.tasks.first { $0.id == task8.id }
         check(
             added?.executionState == .dispatched,
             "L88 addTask auto-dispatches when autoDispatchTasks is true")
         NotchHUDConfig.shared.autoDispatchTasks = false
-        TaskStore.shared.removeTask(task8.id)
 
         // L89 HUD Text Sanitization Test (Markdown links, escaped newlines, file URLs)
         let rawMarkdown =
@@ -5469,8 +5474,141 @@ struct LogicCheckMain {
             "L116 isWorkingActivity evaluates File edit as working"
         )
 
+        // MARK: - L117 TaskStore Max Capacity Clamping Test
+        let tempL117URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l117-\(UUID().uuidString).json")
+        var bloatList: [BantayTask] = []
+        for i in 1...250 {
+            bloatList.append(BantayTask(title: "Bloat task \(i)"))
+        }
+        let encoderL117 = JSONEncoder()
+        encoderL117.dateEncodingStrategy = .iso8601
+        if let bloatData = try? encoderL117.encode(bloatList) {
+            try? bloatData.write(to: tempL117URL)
+        }
+        let taskStoreL117 = TaskStore(fileURL: tempL117URL)
+        check(
+            taskStoreL117.tasks.count <= TaskStore.maxCapacity,
+            "L117 TaskStore load clamps 250 tasks to maxCapacity (got: \(taskStoreL117.tasks.count))"
+        )
+        for i in 1...10 {
+            taskStoreL117.addTask("Runtime task \(i)")
+        }
+        taskStoreL117.saveSync()
+        check(
+            taskStoreL117.tasks.count <= TaskStore.maxCapacity,
+            "L117 TaskStore runtime addTask clamps to maxCapacity (got: \(taskStoreL117.tasks.count))"
+        )
+        try? FileManager.default.removeItem(at: tempL117URL)
+
+        // MARK: - L118 Single-Pass CategorizedTasks Test
+        let tempL118URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l118-\(UUID().uuidString).json")
+        let taskStoreL118 = TaskStore(fileURL: tempL118URL)
+        while !taskStoreL118.tasks.isEmpty {
+            taskStoreL118.removeTask(taskStoreL118.tasks[0].id)
+        }
+        let nowL118 = Date()
+        let overdueDate = Calendar.current.date(byAdding: .day, value: -2, to: nowL118)
+        let todayDate = Calendar.current.date(byAdding: .hour, value: 2, to: nowL118)
+        let laterDate = Calendar.current.date(byAdding: .day, value: 5, to: nowL118)
+
+        let tOverdue = taskStoreL118.addTask("Fix critical bug", dueDate: overdueDate)
+        let tToday = taskStoreL118.addTask("Review pull request", dueDate: todayDate)
+        let tLater = taskStoreL118.addTask("Refactor architecture", dueDate: laterDate)
+        let tCompleted = taskStoreL118.addTask("Morning standup", dueDate: todayDate)
+        taskStoreL118.toggleCompleted(tCompleted.id)
+
+        let catAll = taskStoreL118.categorizedTasks(searchQuery: "", relativeTo: nowL118)
+        check(catAll.overdue.contains(where: { $0.id == tOverdue.id }), "L118 categorizedTasks identifies overdue task")
+        check(catAll.today.contains(where: { $0.id == tToday.id }), "L118 categorizedTasks identifies today task")
+        check(catAll.later.contains(where: { $0.id == tLater.id }), "L118 categorizedTasks identifies later task")
+        check(catAll.completed.contains(where: { $0.id == tCompleted.id }), "L118 categorizedTasks identifies completed task")
+        check(catAll.doneTodayCount >= 1, "L118 categorizedTasks counts doneTodayCount")
+
+        let catSearch = taskStoreL118.categorizedTasks(searchQuery: "critical", relativeTo: nowL118)
+        check(catSearch.overdue.count == 1 && catSearch.today.isEmpty, "L118 categorizedTasks filters by search query")
+        try? FileManager.default.removeItem(at: tempL118URL)
+
+        // MARK: - L119 Tombstone Protection Against Resurrection
+        let tempL119URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l119-\(UUID().uuidString).json")
+        let taskStoreL119 = TaskStore(fileURL: tempL119URL)
+        while !taskStoreL119.tasks.isEmpty {
+            taskStoreL119.removeTask(taskStoreL119.tasks[0].id)
+        }
+        let itemToDel = taskStoreL119.addTask("Buy organic apples")
+        check(taskStoreL119.tasks.count == 1, "L119 task added successfully")
+        taskStoreL119.removeTask(itemToDel.id)
+        check(taskStoreL119.tasks.isEmpty, "L119 task removed and tombstoned")
+
+        // Inbound sync should NOT resurrect deleted task
+        let ingestedResurrect = taskStoreL119.batchIngestExternalReminders([
+            (rawTitle: "Buy organic apples", dueDate: nil, externalID: "rem-apple-1")
+        ])
+        check(ingestedResurrect.isEmpty, "L119 batchIngestExternalReminders rejects tombstoned title")
+        check(taskStoreL119.tasks.isEmpty, "L119 taskStore remains empty after blocked resurrection")
+
+        // Manually adding the task again clears the tombstone
+        taskStoreL119.addTask("Buy organic apples")
+        check(taskStoreL119.tasks.count == 1, "L119 re-adding task clears tombstone and adds task")
+        try? FileManager.default.removeItem(at: tempL119URL)
+
+        // MARK: - L120 Batch Ingestion Deduplication and ExternalID Backfill
+        let tempL120URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l120-\(UUID().uuidString).json")
+        let taskStoreL120 = TaskStore(fileURL: tempL120URL)
+        while !taskStoreL120.tasks.isEmpty {
+            taskStoreL120.removeTask(taskStoreL120.tasks[0].id)
+        }
+        let manualTask = taskStoreL120.addTask("Submit quarterly taxes")
+        check(manualTask.externalID == nil, "L120 manual task has nil externalID")
+
+        // External reminder arrives matching title with externalID
+        let syncBatch = taskStoreL120.batchIngestExternalReminders([
+            (rawTitle: "Submit quarterly taxes", dueDate: nil, externalID: "ek-tax-999")
+        ])
+        check(syncBatch.isEmpty, "L120 batchIngestExternalReminders deduplicates matching title")
+        check(taskStoreL120.tasks.count == 1, "L120 taskStore still has exactly 1 task")
+        check(
+            taskStoreL120.tasks.first?.externalID == "ek-tax-999",
+            "L120 externalID was successfully backfilled on title match"
+        )
+        try? FileManager.default.removeItem(at: tempL120URL)
+
+        // MARK: - L121 AtomicRemindersGate Thread-Safety Under Heavy Race
+        let gateL121 = AtomicRemindersGate()
+        let countLock = NSLock()
+        var successCount = 0
+        DispatchQueue.concurrentPerform(iterations: 100) { _ in
+            if gateL121.tryResume() {
+                countLock.lock()
+                successCount += 1
+                countLock.unlock()
+            }
+        }
+        check(successCount == 1, "L121 AtomicRemindersGate exactly one winner out of 100 concurrent races (got: \(successCount))")
+
+        // MARK: - L122 TaskStore SaveSync Round-Trip
+        let tempL122URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l122-\(UUID().uuidString).json")
+        let taskStoreL122 = TaskStore(fileURL: tempL122URL)
+        let t122 = taskStoreL122.addTask("Verify disk write")
+        taskStoreL122.saveSync()
+        check(FileManager.default.fileExists(atPath: tempL122URL.path), "L122 saveSync writes file to disk")
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        if let data = try? Data(contentsOf: tempL122URL),
+           let list = try? dec.decode([BantayTask].self, from: data) {
+            check(list.contains(where: { $0.id == t122.id }), "L122 saveSync file contains added task")
+        } else {
+            check(false, "L122 saveSync file was not decoded correctly")
+        }
+        try? FileManager.default.removeItem(at: tempL122URL)
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
 
     }
 }
+

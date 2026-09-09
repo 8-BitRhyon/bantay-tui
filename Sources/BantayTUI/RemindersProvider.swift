@@ -80,12 +80,15 @@ public final class RemindersProvider: ObservableObject {
     public func syncInboundReminders(into taskStore: TaskStore) async {
         guard NotchHUDConfig.shared.syncAppleReminders else { return }
         await refresh()
-        for item in reminders {
-            guard let title = item.title, !title.isEmpty else { continue }
-            let due = item.dueDateComponents?.date
-            let externalId = item.calendarItemIdentifier
-            taskStore.ingestExternalReminder(rawTitle: title, dueDate: due, externalID: externalId)
+        let batch: [(rawTitle: String, dueDate: Date?, externalID: String?)] = reminders.compactMap
+        { item in
+            guard let title = item.title, !title.isEmpty else { return nil }
+            return (
+                rawTitle: title, dueDate: item.dueDateComponents?.date,
+                externalID: item.calendarItemIdentifier
+            )
         }
+        taskStore.batchIngestExternalReminders(batch)
     }
 
     /// Whether Reminders access is already granted (macOS 13-safe; the 14+
@@ -141,28 +144,20 @@ public final class RemindersProvider: ObservableObject {
         let calendar = defaultList ?? store.defaultCalendarForNewReminders()
         guard let calendar else { return }
         let predicate = store.predicateForReminders(in: [calendar])
-        // EKReminder isn't Sendable; the fetch callback is @Sendable, so move
-        // through an @unchecked Sendable box (single-writer, continuation
-        // ordered) like the rest of the codebase's AppKit bridges.
-        let box = RemindersBox()
-        let guardBox = BoxBool()
+        // EKReminder isn't Sendable; the fetch callback is @Sendable.
+        // AtomicRemindersGate safely coordinates the EventKit callback and 2.0s timeout
+        // through an @unchecked Sendable locked container with a Void continuation.
+        let gate = AtomicRemindersGate()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             store.fetchReminders(matching: predicate) { items in
-                if !guardBox.value {
-                    guardBox.value = true
-                    box.items = items ?? []
-                    cont.resume()
-                }
+                gate.resume(with: items ?? [], continuation: cont)
             }
             // Timeout safety: resume after 2.0s if EventKit daemon is slow/unresponsive
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                if !guardBox.value {
-                    guardBox.value = true
-                    cont.resume()
-                }
+                gate.resume(with: [], continuation: cont)
             }
         }
-        reminders = box.items
+        reminders = gate.items
             .filter { !$0.isCompleted }
             .sorted {
                 ($0.dueDateComponents?.date ?? .distantFuture)
@@ -209,13 +204,29 @@ public final class RemindersProvider: ObservableObject {
     }
 }
 
-/// @unchecked Sendable box for crossing the EventKit callback into the
-/// continuation (EKReminder is not Sendable; single-writer + continuation
-/// ordering make this safe).
-private final class RemindersBox: @unchecked Sendable {
-    var items: [EKReminder] = []
-}
+/// Thread-safe single-resume gate coordinating [EKReminder] and preventing race conditions.
+public final class AtomicRemindersGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+    public var items: [EKReminder] = []
 
-private final class BoxBool: @unchecked Sendable {
-    var value = false
+    public init() {}
+
+    @discardableResult
+    public func tryResume() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !resumed else { return false }
+        resumed = true
+        return true
+    }
+
+    public func resume(with items: [EKReminder], continuation: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !resumed else { return }
+        resumed = true
+        self.items = items
+        continuation.resume()
+    }
 }

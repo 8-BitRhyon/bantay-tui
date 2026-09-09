@@ -227,6 +227,9 @@ final class AgentEventManager: ObservableObject {
     private var lastStandaloneScan: Date?
     /// Cached standalone detected agents between scans (prevent wiping roster between ticks).
     private var lastDetectedAgents: [DetectedAgent] = []
+    private var activeScanTask: Task<[DetectedAgent], Never>?
+    private var isRefreshingRoster = false
+    private var hasPendingRosterRefresh = false
     /// PERF-2: minimum interval between standalone `ps` scans.
     static let minScanInterval: TimeInterval = 2.0
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
@@ -783,6 +786,20 @@ extension AgentEventManager {
     }
 
     private func refreshRosterAndArmWaits() async {
+        if isRefreshingRoster {
+            hasPendingRosterRefresh = true
+            return
+        }
+        isRefreshingRoster = true
+        defer {
+            isRefreshingRoster = false
+            if hasPendingRosterRefresh {
+                hasPendingRosterRefresh = false
+                Task { @MainActor [weak self] in
+                    await self?.refreshRosterAndArmWaits()
+                }
+            }
+        }
         ensureFileWatcher()
         let herdrAgents: [HerdrAgentInfo] = await herdrAdapter.listAgents()
         let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
@@ -797,7 +814,16 @@ extension AgentEventManager {
                 minInterval: Self.minScanInterval)
         if rescan {
             lastStandaloneScan = Date()
-            lastDetectedAgents = StandaloneAgentScanner.scan()
+            if let existing = activeScanTask {
+                lastDetectedAgents = await existing.value
+            } else {
+                let task = Task.detached(priority: .userInitiated) {
+                    StandaloneAgentScanner.scan()
+                }
+                activeScanTask = task
+                lastDetectedAgents = await task.value
+                activeScanTask = nil
+            }
         }
         let currentDetected = scanStandalone ? lastDetectedAgents : []
         let agents: [HerdrAgentInfo] = await Task.detached(priority: .userInitiated) {

@@ -132,45 +132,34 @@ public struct MascotView: View {
         case .idle:
             Text("z")
                 .font(.system(size: max(8, size * 0.45), weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(BantayTheme.textTertiary)
                 .offset(x: size * 0.5, y: -size * 0.4)
                 .opacity(animate ? 0.9 : 0.3)
                 .scaleEffect(animate ? 1.1 : 0.8)
         case .working:
             Circle()
-                .fill(Color.green)
+                .fill(BantayTheme.statusWorking)
                 .frame(width: 4, height: 4)
                 .offset(x: size * 0.45, y: size * 0.35)
         case .needsAttention:
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: max(8, size * 0.5)))
-                .foregroundColor(.yellow)
+                .foregroundColor(BantayTheme.statusAttention)
                 .offset(x: size * 0.45, y: -size * 0.35)
         case .completed:
             Image(systemName: "sparkles")
                 .font(.system(size: max(8, size * 0.5)))
-                .foregroundColor(.cyan)
+                .foregroundColor(BantayTheme.statusCompleted)
                 .offset(x: size * 0.45, y: -size * 0.35)
         case .quotaLow:
             Image(systemName: "gauge.with.dots.needle.bottom.0percent")
                 .font(.system(size: max(8, size * 0.5)))
-                .foregroundColor(.orange)
+                .foregroundColor(BantayTheme.statusQuota)
                 .offset(x: size * 0.45, y: -size * 0.35)
         }
     }
 
     private var colorForState: Color {
-        switch state {
-        case .idle:
-            return .white.opacity(0.7)
-        case .working:
-            return .white
-        case .needsAttention:
-            return .yellow
-        case .completed:
-            return Color(hex: "30D158")
-        case .quotaLow:
-            return Color(hex: "FF9F0A")
-        }
+        BantayTheme.color(for: state)
     }
 }
