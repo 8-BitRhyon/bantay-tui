@@ -91,7 +91,8 @@ public struct TaskWidgetView: View {
         }
         .onAppear {
             reminders.checkAuthorizationStatus()
-            if remindersEnabled || NotchHUDConfig.shared.syncAppleReminders {
+            let enabled = remindersEnabled || NotchHUDConfig.shared.syncAppleReminders
+            if enabled && reminders.isAuthorized {
                 Task {
                     await reminders.refresh()
                 }
@@ -136,7 +137,12 @@ public struct TaskWidgetView: View {
                     remindersEnabled.toggle()
                     NotchHUDConfig.shared.syncAppleReminders = remindersEnabled
                     if remindersEnabled {
-                        Task { await reminders.refresh() }
+                        Task {
+                            if !reminders.isAuthorized {
+                                _ = await reminders.requestAccess()
+                            }
+                            await reminders.refresh()
+                        }
                     }
                 } label: {
                     Image(systemName: remindersEnabled ? "link.circle.fill" : "link.circle")

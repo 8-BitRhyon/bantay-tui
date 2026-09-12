@@ -78,7 +78,7 @@ public final class RemindersProvider: ObservableObject {
 
     /// Background inbound sync from Apple Reminders into an explicit TaskStore.
     public func syncInboundReminders(into taskStore: TaskStore) async {
-        guard NotchHUDConfig.shared.syncAppleReminders else { return }
+        guard NotchHUDConfig.shared.syncAppleReminders, isAuthorized else { return }
         await refresh()
         let batch: [(rawTitle: String, dueDate: Date?, externalID: String?)] = reminders.compactMap
         { item in
@@ -137,7 +137,15 @@ public final class RemindersProvider: ObservableObject {
 
     /// Refresh reminders from the default list, newest-sorted by due date.
     public func refresh() async {
-        guard await ensureAccess() else { return }
+        guard isAuthorized else {
+            authorized = false
+            reminders = []
+            return
+        }
+        authorized = true
+        if defaultList == nil {
+            defaultList = store?.defaultCalendarForNewReminders()
+        }
         isLoading = true
         defer { isLoading = false }
         guard let store else { return }

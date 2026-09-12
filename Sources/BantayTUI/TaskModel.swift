@@ -107,7 +107,7 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         guard let dueDate else { return .today }
 
         let calendar = Calendar.current
-        if calendar.isDateInToday(dueDate) {
+        if calendar.isDate(dueDate, inSameDayAs: now) {
             return .today
         } else if dueDate < calendar.startOfDay(for: now) {
             return .overdue

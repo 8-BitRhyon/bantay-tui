@@ -5510,7 +5510,7 @@ struct LogicCheckMain {
         }
         let nowL118 = Date()
         let overdueDate = Calendar.current.date(byAdding: .day, value: -2, to: nowL118)
-        let todayDate = Calendar.current.date(byAdding: .hour, value: 2, to: nowL118)
+        let todayDate = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: nowL118) ?? nowL118
         let laterDate = Calendar.current.date(byAdding: .day, value: 5, to: nowL118)
 
         let tOverdue = taskStoreL118.addTask("Fix critical bug", dueDate: overdueDate)

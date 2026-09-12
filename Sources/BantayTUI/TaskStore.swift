@@ -390,7 +390,7 @@ public final class TaskStore: ObservableObject {
 
         for task in tasks {
             if task.isCompleted, let completedAt = task.completedAt,
-                calendar.isDateInToday(completedAt)
+                calendar.isDate(completedAt, inSameDayAs: now)
             {
                 doneToday += 1
             }
