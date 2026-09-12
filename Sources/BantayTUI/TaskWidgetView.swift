@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Native SwiftUI view implementing the Barrie-inspired Task Management Widget.
+/// SwiftUI view for task management.
 @MainActor
 public struct TaskWidgetView: View {
     @ObservedObject var taskStore = TaskStore.shared
@@ -15,7 +15,7 @@ public struct TaskWidgetView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Search and quick task creation bar (Barrie style)
+            // Search and quick task creation bar
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11))
@@ -51,10 +51,10 @@ public struct TaskWidgetView: View {
 
             parsePreview
 
-            // Scrollable task list categorized into Barrie sections
+            // Scrollable task list
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    // Apple Reminders sync section (top, compact).
+                    // Apple Reminders sync section
                     remindersSection
 
                     let categorized = taskStore.categorizedTasks(searchQuery: newTaskTitle)
@@ -117,8 +117,7 @@ public struct TaskWidgetView: View {
         .padding(.vertical, 24)
     }
 
-    /// Apple Reminders section: one-tap sync, quick add, and live items with
-    /// complete/remove. Collapsed to a single row when disabled.
+    /// Apple Reminders section with sync and quick add.
     @ViewBuilder
     private var remindersSection: some View {
         VStack(alignment: .leading, spacing: 6) {

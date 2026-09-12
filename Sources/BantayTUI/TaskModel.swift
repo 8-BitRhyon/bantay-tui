@@ -28,7 +28,7 @@ public enum TaskPriority: String, Codable, CaseIterable, Comparable, Sendable {
     }
 }
 
-/// Categorized section grouping matching the Barrie macOS app layout.
+/// Categorized section grouping.
 public enum TaskCategory: String, Codable, CaseIterable, Sendable {
     case overdue = "OVERDUE"
     case today = "TODAY"

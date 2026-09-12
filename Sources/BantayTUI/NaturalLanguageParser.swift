@@ -1,18 +1,6 @@
 import Foundation
 
-/// Barrie-style natural language task parser — pure, deterministic, and
-/// locale-agnostic, so it scales to any user without per-user state.
-///
-/// Handles (English):
-///   - Relative dates: today / tonight / tomorrow / day after tomorrow / in N
-///     days / next week / EOD / end of day / EOM
-///   - Weekday names: monday…sunday (this week, or next week when past)
-///   - Absolute dates: mar 5 / 5/20 / 2026-05-20 / may 20th
-///   - Times: at 5pm / at 5:30 / by 5 / 17:00
-///   - Priority: !! (high), ! (medium)
-///   - Tags: @work / @home (non-agent @tokens)
-///   - Agents: @claude @codex @kilo @herdr etc.
-///   - Everything parsed is REMOVED from the title; the remainder is the task.
+/// Natural language task parser extracting clean title, tags, priority, agent, and due date.
 public enum NaturalLanguageParser {
     public struct Parsed: Equatable, Sendable {
         public var cleanTitle: String
@@ -91,8 +79,7 @@ public enum NaturalLanguageParser {
                 continue
             }
 
-            // Times (at/by 5pm, 17:00, at 5:30) — before dates so "at 5pm"
-            // isn't swallowed by the date introducer.
+            // Parse times before dates.
             if let time = parseTime(tokens: tokens, at: &i, calendar: calendar) {
                 dueComponents.time = time
                 continue
@@ -110,8 +97,7 @@ public enum NaturalLanguageParser {
             i += 1
         }
 
-        // Combine date + time into one Date. A time without a date phrase
-        // defaults to today; a date without a time stays at start of day.
+        // Combine date + time components.
         var dueDate = dueComponents.date
         if dueDate == nil, dueComponents.time != nil {
             dueDate = calendar.startOfDay(for: now)
@@ -136,9 +122,7 @@ public enum NaturalLanguageParser {
         tokens: [String], at index: inout Int, now: Date, calendar: Calendar
     ) -> Date? {
         let startOfDay = calendar.startOfDay(for: now)
-        // "before" / "by" / "at" / "on" / "until" introduce a date phrase.
-        // Only consume the introducer if the NEXT token is actually a date
-        // token; otherwise leave it in the title (e.g. "at" in "look at this").
+        // Consume introducer only when followed by a date token.
         var idx = index
         var token = tokens[idx].lowercased()
         if ["before", "by", "at", "on", "until", "till"].contains(token),
@@ -200,7 +184,7 @@ public enum NaturalLanguageParser {
             let comps = calendar.dateComponents([.year, .month], from: nextMonth)
             return calendar.date(from: comps)!
         case "next":
-            // ponytail: handle 'next week/month/weekday' atomically so 'next' doesn't leak into cleanTitle
+            // Handle 'next week/month/weekday' atomically so 'next' does not leak.
             if idx + 1 < tokens.count {
                 let nextToken = tokens[idx + 1].lowercased()
                 if nextToken == "week" || nextToken == "weeks" {
@@ -253,8 +237,7 @@ public enum NaturalLanguageParser {
         return nil
     }
 
-    /// Consume a multi-token phrase (e.g. ["end","of","day"]) if it matches,
-    /// returning the index AFTER it; otherwise consume just the current token.
+    /// Consume a multi-token phrase if matching, returning next index.
     private static func consumePhrase(
         _ tokens: [String], from idx: Int, phrase: [String]
     ) -> Int {

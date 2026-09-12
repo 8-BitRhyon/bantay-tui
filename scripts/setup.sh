@@ -205,14 +205,11 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Code-sign the app bundle with designated requirement matching the bundle ID.
-# This ensures macOS TCC (Apple Reminders, Notifications) remembers granted permissions
-# persistently across restarts and rebuilds instead of tying permissions to an
-# ephemeral raw binary cdhash.
+# Sign bundle with designated requirement so TCC permissions persist across restarts.
 echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui"
 codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
 
-# Ensure TCC requirement uses the designated identifier requirement rather than an ephemeral cdhash
+# Ensure TCC uses the designated identifier requirement.
 if command -v sqlite3 >/dev/null 2>&1; then
   TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
   if [[ -w "$TCC_DB" ]]; then

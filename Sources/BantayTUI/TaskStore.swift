@@ -1,12 +1,11 @@
 import Foundation
 
-/// Main store for human and agent tasks in Bantay-TUI.
-/// Manages JSON persistence and natural language quick-add parsing.
+/// Store for human and agent tasks with JSON persistence.
 @MainActor
 public final class TaskStore: ObservableObject {
     public static let shared = TaskStore()
 
-    /// Maximum task capacity to prevent unbounded file growth and UI hangs.
+    /// Maximum task capacity.
     public static let maxCapacity = 200
 
     @Published public private(set) var tasks: [BantayTask] = []
@@ -30,7 +29,7 @@ public final class TaskStore: ObservableObject {
         load()
     }
 
-    /// Load tasks from JSON storage with automatic capacity clamping.
+    /// Load tasks from JSON storage.
     public func load() {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             // Provide default welcoming task items on first launch
@@ -65,7 +64,7 @@ public final class TaskStore: ObservableObject {
         }
     }
 
-    /// Asynchronously saves tasks to JSON storage off the main actor with monotonic generation ordering.
+    /// Asynchronously save tasks to JSON storage.
     public func save() {
         enforceCapacityLimit()
         writeGeneration += 1
@@ -81,7 +80,7 @@ public final class TaskStore: ObservableObject {
         }
     }
 
-    /// Synchronously writes tasks to disk (used for tests and deterministic exits).
+    /// Synchronously write tasks to disk.
     public func saveSync() {
         enforceCapacityLimit()
         writeGeneration += 1
@@ -374,7 +373,7 @@ public final class TaskStore: ObservableObject {
         }
     }
 
-    /// Categorizes tasks in a single O(N) pass, avoiding redundant iterations and calendar calls.
+    /// Categorize tasks in a single pass.
     public func categorizedTasks(
         searchQuery: String = "", relativeTo now: Date = Date()
     ) -> CategorizedTasks {
@@ -473,7 +472,7 @@ public final class TaskStore: ObservableObject {
     }
 }
 
-/// Serial actor handling file writes off the main actor in strict chronological order.
+/// Serial actor handling file writes in monotonic generation order.
 private actor TaskDiskWriter {
     private var lastWrittenGeneration: UInt64 = 0
 

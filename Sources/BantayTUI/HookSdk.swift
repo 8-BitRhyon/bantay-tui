@@ -1,20 +1,8 @@
 import Foundation
 
-/// Pure mapping layer for the universal hook SDK (plan 017 W4).
-///
-/// Mirrors `ClaudeHookInstaller`'s discipline: no file I/O, non-destructive
-/// merge/remove that preserves foreign hooks, and payload mapping from
-/// tool-specific hook JSON to the canonical `AgentEventPayload` shape. The
-/// only runtime surface is the generic emitter (`scripts/hook-emit.sh`),
-/// which resolves the UDS ingest socket + token itself; config-file
-/// installers for each verified tool are thin adapters fed by these pure
-/// functions.
+/// Universal hook SDK payload mapping and config installer.
 enum HookSdk {
-    /// Agent families the SDK knows. Only `aider` and `codex` expose a
-    /// verified hook mechanism; `windsurf` and `cursor` have no stable hook
-    /// surface documented, so they fall back to the standalone scan +
-    /// transcript tailing and the W2 emit recipe — a hook is never
-    /// fabricated for them.
+    /// Supported agent tool families.
     enum AgentTool: String, CaseIterable {
         case aider, codex, windsurf, cursor, antigravity
     }
@@ -22,15 +10,10 @@ enum HookSdk {
     /// Repo-relative path to the generic emitter script.
     static let emitterPath = "scripts/hook-emit.sh"
 
-    /// Codex CLI hook events Bantay installs into `~/.codex/config.toml`
-    /// (`[hooks.<Event>]`). Verified against the installed config on this
-    /// machine: `[features] hooks = true` and a hook entry is a single
-    /// `command = ["sh", "-lc", …]` array.
+    /// Codex CLI hook events installed into ~/.codex/config.toml.
     static let codexHookEvents: [String] = ["PromptStart", "PromptFinish"]
 
-    /// True when the tool has a verified hook mechanism Bantay can install
-    /// into. aider + codex: verified. windsurf + cursor: false — no stable
-    /// hook surface documented (they rely on the standalone scan instead).
+    /// Whether the tool has a verified hook mechanism.
     static func isHookVerified(_ tool: AgentTool) -> Bool {
         switch tool {
         case .aider, .codex, .antigravity: return true
@@ -38,30 +21,17 @@ enum HookSdk {
         }
     }
 
-    /// The `source` value the canonical payload carries for a tool.
+    /// Canonical payload source name for the tool.
     static func sourceName(for tool: AgentTool) -> String { tool.rawValue }
 
-    /// The command a verified tool's hook runs to signal Bantay, or nil for
-    /// tools without a verified hook surface. Both verified tools emit
-    /// through `scripts/hook-emit.sh`, which resolves the UDS ingest socket
-    /// and token itself; `port` is reserved for a future HTTP-ingest variant
-    /// and `token` — when supplied — is embedded as `BANTAY_INGEST_TOKEN`
-    /// so the hook carries the secret explicitly.
+    /// Command a verified tool's hook executes to signal Bantay.
     static func hookCommand(for tool: AgentTool, port: Int, token: String?) -> String? {
         guard isHookVerified(tool) else { return nil }
         let envPrefix = token.map { "BANTAY_INGEST_TOKEN=\($0) " } ?? ""
         switch tool {
         case .aider:
-            // Aider's hook config-file surface is NOT verified against an
-            // installed aider (config install is P2). The command shape is
-            // the documented, testable emitter invocation a post-edit /
-            // pre-commit script would run.
             return "\(envPrefix)\(emitterPath) --source aider --type progress --title \"aider\""
         case .codex:
-            // Codex CLI hooks run with $CODEX_HOOK_EVENT set: PromptStart
-            // signals work, PromptFinish signals completion. Coarse by
-            // design — finer per-payload mapping lives in
-            // `mapToEventPayload`.
             return
                 "\(envPrefix)\(emitterPath) --source codex --type \"$([ \"$CODEX_HOOK_EVENT\" = \"PromptStart\" ] && echo progress || echo completed)\" --title \"codex\""
         case .antigravity:
@@ -111,11 +81,7 @@ enum HookSdk {
         return payload
     }
 
-    /// Merge Bantay's hooks into an existing tool config dictionary,
-    /// preserving all unrelated keys and foreign hooks. Mirrors
-    /// ClaudeHookInstaller's guard: a `hooks` value that exists but is not a
-    /// `[String: Any]` (a String, an Array, any foreign shape) is opaque and
-    /// returned unchanged. Unverified tools are never given hooks.
+    /// Merge Bantay's hooks into an existing tool config dictionary.
     static func mergeHooks(
         existing: [String: Any], tool: AgentTool, port: Int
     ) -> [String: Any] {
@@ -131,10 +97,7 @@ enum HookSdk {
         }
     }
 
-    /// Remove only Bantay-owned hooks from a tool config dictionary. Foreign
-    /// hooks that share an event are preserved, entries that become
-    /// hook-less are dropped, and an empty `hooks` key is removed entirely.
-    /// Unverified tools are returned unchanged.
+    /// Remove only Bantay-owned hooks from a tool config dictionary.
     static func removingHooks(from settings: [String: Any], tool: AgentTool) -> [String: Any] {
         guard isHookVerified(tool) else { return settings }
         switch tool {
@@ -163,9 +126,7 @@ enum HookSdk {
         }
     }
 
-    /// Pure mirror of `hook-emit.sh`'s required-args contract: `--source`,
-    /// `--type` and `--title` are each required with a value; any usage
-    /// error exits 2. Returns the exit code for the argument vector.
+    /// Validates required arguments for hook-emit.sh (--source, --type, --title).
     static func emitterExitCodeFor(args: [String]) -> Int {
         var source = false
         var type = false
@@ -224,10 +185,7 @@ enum HookSdk {
         var merged = existing
         var hooks = (existing["hooks"] as? [String: Any]) ?? [:]
         for event in codexHookEvents {
-            // config.toml allows one command per event table, so Bantay's
-            // entry is only added when the slot is unclaimed — a foreign
-            // command for the same event is preserved untouched, and a
-            // re-install never duplicates.
+            // Only add when unclaimed; preserve foreign hooks.
             guard hooks[event] == nil else { continue }
             hooks[event] = codexHookEntry(port: port)
         }
@@ -235,9 +193,7 @@ enum HookSdk {
         return merged
     }
 
-    /// One `[hooks.<Event>]` entry for config.toml: a single `command` array
-    /// running the emitter via `sh -lc` (the same wrapper Codex's own
-    /// examples use).
+    /// Hook entry running the emitter via sh -lc.
     private static func codexHookEntry(port: Int) -> [String: Any] {
         guard let command = hookCommand(for: .codex, port: port, token: nil) else {
             return [:]
@@ -245,14 +201,13 @@ enum HookSdk {
         return ["command": ["sh", "-lc", command]]
     }
 
-    /// True when a config.toml hook entry's command invokes Bantay's emitter
-    /// for codex — matched by command shape, never by foreign content.
+    /// Whether a config.toml hook entry invokes Bantay's emitter for codex.
     static func isOwnedCodexEntry(_ entry: [String: Any]) -> Bool {
         guard let commandList = entry["command"] as? [String] else { return false }
         return commandList.contains { isBantayCommand($0, tool: .codex) }
     }
 
-    /// True when a hook command string invokes Bantay's emitter for `tool`.
+    /// Whether a hook command string invokes Bantay's emitter for tool.
     static func isBantayCommand(_ command: String, tool: AgentTool) -> Bool {
         guard isHookVerified(tool) else { return false }
         return command.contains("\(emitterPath) --source \(tool.rawValue)")
@@ -260,10 +215,7 @@ enum HookSdk {
 
     // MARK: - aider hooks (documented shape; config install is P2)
 
-    /// Maps the documented aider hook payload shape (`event` + `path`) to a
-    /// canonical payload. The exact hook config-file surface is not verified
-    /// against an installed aider (P2), so this maps the shape the emitter
-    /// recipe documents.
+    /// Map documented aider hook payload to canonical payload.
     private static func mapAider(_ input: [String: Any]) -> [String: Any]? {
         guard let event = input["event"] as? String else { return nil }
         let title = (input["path"] as? String) ?? "aider"
@@ -282,9 +234,7 @@ enum HookSdk {
 
     // MARK: - canonical payload
 
-    /// The canonical AgentEventPayload shape (W2): `v` + the fields the
-    /// ingest validator decodes. Nulls are explicit so the emitted line
-    /// matches the wire example and optional fields decode identically.
+    /// Build canonical AgentEventPayload dictionary.
     private static func payload(
         source: String, type: String, title: String, message: String?
     ) -> [String: Any] {

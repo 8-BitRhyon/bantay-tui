@@ -1,13 +1,7 @@
 import EventKit
 import Foundation
 
-/// Live bridge to Apple Reminders via EventKit. Lets the task widget show and
-/// edit real Reminders (today / overdue / upcoming) instead of an isolated
-/// JSON store — the "connect to Apple tasks" ask.
-///
-/// Permission: the app needs "Reminders" access; `requestAccess` prompts once
-/// and the result is cached (and the `NSRemindersUsageDescription` Info.plist
-/// key must be set — setup.sh writes it into the bundle).
+/// Live bridge to Apple Reminders via EventKit.
 @MainActor
 public final class RemindersProvider: ObservableObject {
     public static let shared = RemindersProvider()
@@ -152,15 +146,13 @@ public final class RemindersProvider: ObservableObject {
         let calendar = defaultList ?? store.defaultCalendarForNewReminders()
         guard let calendar else { return }
         let predicate = store.predicateForReminders(in: [calendar])
-        // EKReminder isn't Sendable; the fetch callback is @Sendable.
-        // AtomicRemindersGate safely coordinates the EventKit callback and 2.0s timeout
-        // through an @unchecked Sendable locked container with a Void continuation.
+        // Coordinate EventKit fetch and timeout safely.
         let gate = AtomicRemindersGate()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             store.fetchReminders(matching: predicate) { items in
                 gate.resume(with: items ?? [], continuation: cont)
             }
-            // Timeout safety: resume after 2.0s if EventKit daemon is slow/unresponsive
+            // Timeout fallback after 2.0s.
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 gate.resume(with: [], continuation: cont)
             }
@@ -212,7 +204,7 @@ public final class RemindersProvider: ObservableObject {
     }
 }
 
-/// Thread-safe single-resume gate coordinating [EKReminder] and preventing race conditions.
+/// Thread-safe single-resume gate coordinating EKReminder results.
 public final class AtomicRemindersGate: @unchecked Sendable {
     private let lock = NSLock()
     private var resumed = false
