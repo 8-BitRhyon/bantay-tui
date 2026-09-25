@@ -206,8 +206,12 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 PLIST
 
 # Sign bundle with designated requirement so TCC permissions persist across restarts.
-echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui"
-codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
+SIGN_IDENTITY="-"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "Bantay"; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Bantay" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
+fi
+echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui (identity: $SIGN_IDENTITY)"
+codesign --force --deep --sign "$SIGN_IDENTITY" -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
 
 # Ensure TCC uses the designated identifier requirement.
 if command -v sqlite3 >/dev/null 2>&1; then

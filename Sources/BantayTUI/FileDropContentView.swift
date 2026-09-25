@@ -1,16 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// A real AppKit drag destination that SwiftUI's `.onDrop` cannot be trusted
-/// to create. SwiftUI `.onDrop` on a borderless, non-activating accessory
-/// panel silently never registers with AppKit (verified: the hosting view's
-/// `registeredDraggedTypes` is empty), so no drop ever arrives.
-///
-/// This view is the window's content view with the SwiftUI island hosted
-/// inside it. It registers `.fileURL` itself, returns `.copy` for any file
-/// drag, and on drop posts `.notchFilesDropped` so the shelf receives the
-/// URLs. The island's own handlers already expand on `.notchFileDragEntered`.
-/// File URL pasteboard types a Finder file drag carries.
+/// File URL pasteboard types recognized for Finder file drags.
 private enum FileDropTypes {
     static let all: [NSPasteboard.PasteboardType] = [
         .fileURL,
@@ -19,6 +10,7 @@ private enum FileDropTypes {
     ]
 }
 
+/// AppKit drag destination hosting SwiftUI island content.
 final class FileDropContentView<Content: View>: NSView {
     let hosting: NSHostingView<Content>
 

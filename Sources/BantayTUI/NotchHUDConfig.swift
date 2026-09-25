@@ -52,6 +52,18 @@ final class NotchHUDConfig {
     var ntfyServer: String = "https://ntfy.sh" {
         didSet { defaults.set(ntfyServer, forKey: "ntfyServer") }
     }
+    /// Callback URL used for remote phone approval buttons (e.g. Tailscale / tunnel address).
+    var ntfyCallbackURL: String = "" {
+        didSet { defaults.set(ntfyCallbackURL, forKey: "ntfyCallbackURL") }
+    }
+    /// Resolved callback URL; falls back to localhost ingest port if empty.
+    var effectiveCallbackURL: String {
+        let trimmed = ntfyCallbackURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+        }
+        return "http://127.0.0.1:\(ingestPort)"
+    }
     /// The ntfy push is only enabled when a topic is configured.
     var ntfyEnabled: Bool { !ntfyTopic.isEmpty }
     /// Gate for the transcript token/cost enumeration. Enabled by default
@@ -512,6 +524,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "ntfyServer") as? String {
             ntfyServer = v
+        }
+        if let v = defaults.object(forKey: "ntfyCallbackURL") as? String {
+            ntfyCallbackURL = v
         }
         if let v = defaults.object(forKey: "tmuxStatusEnabled") as? Bool {
             tmuxStatusEnabled = v

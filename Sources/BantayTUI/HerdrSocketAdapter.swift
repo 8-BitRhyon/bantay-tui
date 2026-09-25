@@ -176,11 +176,7 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         return []
     }
 
-    /// Sync protocol seam (PlexerAdapter) — the D2 boundary for the future
-    /// tmux/zellij adapters (plan 017), so its signature must stay put. No
-    /// app caller today; the fetch runs on a background task and the calling
-    /// thread waits on the result, so a hypothetical main-actor caller never
-    /// holds `waitUntilExit` on the main thread.
+    /// Synchronously lists panes across active Herdr sessions.
     func listPanes() -> [PaneInfo] {
         final class Box: @unchecked Sendable {
             var panes: [PaneInfo] = []
@@ -274,11 +270,7 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
             timeout: 2.0)
     }
 
-    /// `git diff --stat` preview for an agent's working directory, built on
-    /// the non-blocking `ProcessRunner` (plan 016 1c). Returns nil for a
-    /// non-repo or a clean tree (git exits nonzero / prints nothing), so the
-    /// peek overlay just hides the preview. The per-file rows are capped at
-    /// `pathLimit` with a "+N more" marker; the trailing summary line is kept.
+    /// Generates git diff preview for an agent working directory.
     func captureDiff(cwd: String, pathLimit: Int = 10) async -> String? {
         guard !cwd.isEmpty else { return nil }
         let result = await ProcessRunner.run(

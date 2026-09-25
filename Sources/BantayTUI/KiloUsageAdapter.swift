@@ -23,14 +23,7 @@ struct UsageSample: Equatable, Sendable {
     let observedAt: Double
 }
 
-/// Reads kilo's token/cost ledger directly from its SQLite DB — the source of
-/// truth behind `kilo stats`. The `session` table carries per-session
-/// aggregates (`cost`, `tokens_input/output/reasoning/cache_read/write`,
-/// `time_updated`), so:
-///   - daily cost / quota = SUM(cost) over sessions with time_updated in window
-///   - tokens-per-minute  = poll SUM(tokens_*) and diff over wall-clock time,
-///     or exact per-minute history via the `message` table's time_created.
-/// Read-only sqlite3 (WAL-safe) so kilo can keep running.
+/// Reads Kilo token and cost metrics directly from its SQLite ledger.
 enum KiloUsageAdapter {
     static let sourceName = "kilo"
 

@@ -1,9 +1,6 @@
 import Foundation
 
-/// Façade over the launchd agent that `scripts/setup.sh` installs
-/// (label `com.bantay-tui.agent`, plist in `~/Library/LaunchAgents`).
-/// The app can also install and manage the agent itself, so distributed
-/// users get working "Launch at login" without ever running a script.
+/// Launchd agent manager for auto-start at login.
 enum LaunchAgent {
     static let label = "com.bantay-tui.agent"
     static let eventsFileName = "agent-events.jsonl"
@@ -36,6 +33,11 @@ enum LaunchAgent {
     /// The per-user data directory (mirrors `scripts/setup.sh` DATA_DIR).
     static func dataDirectory(home: String = NSHomeDirectory()) -> String {
         home + "/Library/Application Support/Bantay-TUI"
+    }
+
+    /// The default events file path where agents publish events.
+    static func eventsFilePath(home: String = NSHomeDirectory()) -> String {
+        dataDirectory(home: home) + "/" + eventsFileName
     }
 
     static var isInstalled: Bool {
@@ -105,11 +107,7 @@ enum LaunchAgent {
         return FileManager.default.fileExists(atPath: eventsFile)
     }
 
-    /// Full install: data dir + events file, agent plist pointing at the
-    /// given binary, then (re)load the agent. Idempotent.
-    /// Returns false (and leaves launchd untouched) when the plist could not
-    /// be written; when it was written, reports whether the agent actually
-    /// loaded.
+    /// Configures the data directory, writes the launchd plist, and loads the agent.
     @discardableResult
     static func install(
         binaryPath: String = defaultBinaryPath,

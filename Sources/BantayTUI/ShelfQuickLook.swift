@@ -1,21 +1,14 @@
 import AppKit
 import Quartz
 
-/// QuickLook preview for a shelf file (Phase A A3). Wraps `QLPreviewPanel`
-/// so a double-click or the eye button previews the file without launching
-/// its app. One shared data source; the panel is ordered front when a new
-/// file is shown. UI singleton — all access is on the main thread, so it's
-/// marked @unchecked Sendable (satisfies both Swift 6.1 and 6.3 compilers).
+/// QuickLook preview controller for shelf items.
 final class ShelfQuickLook: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate,
     @unchecked Sendable
 {
     static let shared = ShelfQuickLook()
     private var url: URL?
 
-    /// Show QuickLook for `url`, bringing the panel to front. The panel is
-    /// driven entirely through its data source/delegate, so both must be set
-    /// before ordering front or it opens blank. Always invoked from the main
-    /// thread (view actions), so assumeIsolated is safe.
+    /// Opens QuickLook preview for the specified file URL.
     static func show(_ url: URL) {
         MainActor.assumeIsolated {
             shared.url = url

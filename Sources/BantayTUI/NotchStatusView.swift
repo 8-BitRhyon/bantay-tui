@@ -36,6 +36,14 @@ struct NotchStatusView: View {
     private var showShelf: Bool { selectedTab == .shelf }
     private var showMedia: Bool { selectedTab == .media }
     private var showNotes: Bool { selectedTab == .notes }
+
+    private enum HistoryMode: String, CaseIterable {
+        case timeline = "Timeline"
+        case spend = "Spend"
+        case quotas = "Quotas"
+        case sessions = "Sessions"
+    }
+    @State private var historyMode: HistoryMode = .timeline
     @State private var groupByWorkspace = false
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
     /// icon stays reactive; the config is the single behavioral source of
@@ -47,6 +55,8 @@ struct NotchStatusView: View {
     @State private var peekText: String = ""
     @State private var peekTask: Task<Void, Never>?
     @State private var clipboardItems: [ClipboardItem] = []
+    @State private var activeNotification: AgentEvent? = nil
+    @State private var notificationDismissTask: Task<Void, Never>? = nil
     /// Brief glow on the shelf panel when a drop lands (user feedback).
     @State private var shelfDropGlow = false
     /// The persisted, thumbnail-rendering shelf (ShelfStore owns files).
@@ -64,7 +74,7 @@ struct NotchStatusView: View {
     /// Cancels the pending hotkey-blink reset so rapid presses extend the
     /// flash rather than stacking resets.
     @State private var hotkeyBlinkResetTask: Task<Void, Never>?
-    private let adapter = HerdrSocketAdapter()
+    private let adapter: any PlexerAdapter = PlexerFactory.makeAdapter()
 
     /// Docked idle chips sit flush in the notch row; only expanded/center drop
     /// below the menu bar. Matches the BoringNotch idle look.
@@ -142,9 +152,16 @@ struct NotchStatusView: View {
             availableWidth: max(clearance - IslandMetrics.idleOverflowPad, 0))
     }
 
+    private var hasActiveNotification: Bool {
+        !isExpanded && activeNotification != nil
+    }
+
     private var islandWidth: CGFloat {
         if isExpanded {
             return IslandMetrics.expandedWidth
+        }
+        if hasActiveNotification {
+            return IslandMetrics.notificationWidth
         }
         if isCenteredIdle {
             return min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
@@ -157,6 +174,7 @@ struct NotchStatusView: View {
     /// regardless of transient event state (eliminates position jumping).
     private var islandOffsetX: CGFloat {
         guard !isExpanded else { return 0 }
+        if hasActiveNotification { return 0 }
         return IslandMetrics.dockOffset(
             side: NotchHUDConfig.shared.islandDockSide,
             notchWidth: AppDelegate.notchWidth,
@@ -203,10 +221,20 @@ struct NotchStatusView: View {
                 ).height
             }
         }
+        if hasActiveNotification {
+            return IslandMetrics.closedSize(
+                topInset: chipTopOffset,
+                notchWidth: IslandMetrics.notificationWidth,
+                hasNotification: true
+            ).height
+        }
         return IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
     }
 
     private var contentHeight: CGFloat {
+        if hasActiveNotification {
+            return IslandMetrics.notificationHeight
+        }
         if showTasks {
             return IslandMetrics.contentHeightForTasks(
                 isExpanded: isExpanded,
@@ -263,7 +291,15 @@ struct NotchStatusView: View {
         eventManager.mergeApprovals(into: visibleAgents)
     }
 
-    private var cornerRad: CGFloat { IslandMetrics.cornerRadius(expanded: isExpanded) }
+    private var cornerRad: CGFloat {
+        if isExpanded {
+            return IslandMetrics.expandedCornerRadius
+        }
+        if hasActiveNotification {
+            return IslandMetrics.notificationCornerRadius
+        }
+        return IslandMetrics.closedCornerRadius
+    }
 
     private var morphAnimation: Animation {
         switch IslandMetrics.morphStyle(reduceMotion: reduceMotion) {
@@ -274,12 +310,7 @@ struct NotchStatusView: View {
         }
     }
 
-    /// Content cross-fade for the `isExpanded` flip, coordinated with the
-    /// background morph: opacity + top-anchored scale when motion is on (the
-    /// text fades as the notch morphs, no pop), opacity-only under reduce
-    /// motion (the short linear morph drives it, so it snaps near-instantly).
-    /// Centered idle is a pure fade: the split strip is full-window-width and
-    /// scale would make it appear to sweep laterally while the pill morphs.
+    /// Content transition coordinated with the background shape morph.
     private var contentTransition: AnyTransition {
         guard IslandMetrics.contentTransition(reduceMotion: reduceMotion) == .synced else {
             return .opacity
@@ -382,11 +413,12 @@ struct NotchStatusView: View {
         .modifier(FocusEffectDisabledCompat())
         .modifier(
             ShortcutKeyPressModifier { char in
-                guard let shortcut = IslandMetrics.shortcutKey(for: char) else {
+                guard canHandleRosterShortcuts,
+                    let shortcut = IslandMetrics.shortcutKey(for: char)
+                else {
                     return false
                 }
-                handleShortcut(shortcut)
-                return true
+                return handleShortcut(shortcut)
             }
         )
         .modifier(
@@ -436,16 +468,35 @@ struct NotchStatusView: View {
         }
     }
 
+    @MainActor
+    static func isTextInputFocused(in window: NSWindow?) -> Bool {
+        guard let window = window ?? AppDelegate.window,
+            let responder = window.firstResponder
+        else {
+            return false
+        }
+        return responder is NSText || responder is NSTextField
+    }
+
+    private var canHandleRosterShortcuts: Bool {
+        isExpanded
+            && selectedTab == .agents
+            && composingPaneId == nil
+            && !Self.isTextInputFocused(in: AppDelegate.window)
+    }
+
     /// Single-key roster shortcuts (Y/N/digits) when the island is key and
     /// shortcuts are enabled. Applies to the top pending approval.
-    private func handleShortcut(_ shortcut: IslandMetrics.ApprovalShortcut) {
+    /// Returns true when an action was performed, false otherwise.
+    @discardableResult
+    private func handleShortcut(_ shortcut: IslandMetrics.ApprovalShortcut) -> Bool {
         guard NotchHUDConfig.shared.keyboardShortcuts,
-            composingPaneId == nil,
+            canHandleRosterShortcuts,
             !eventManager.isResolving(agent: approvalQueueAgents.first),
             let agent = approvalQueueAgents.first,
             let paneId = agent.paneId
         else {
-            return
+            return false
         }
         switch shortcut {
         case .approve:
@@ -462,8 +513,10 @@ struct NotchStatusView: View {
             } else {
                 eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
             }
+            return true
         case .deny:
             eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+            return true
         case .option(let number):
             if agent.approval.isMulti {
                 queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
@@ -473,6 +526,7 @@ struct NotchStatusView: View {
                     $0.approveChoice(paneId: paneId, choice: number)
                 }
             }
+            return true
         }
     }
 
@@ -481,7 +535,7 @@ struct NotchStatusView: View {
     /// focused row's primary action; Esc clears focus. Returns true when
     /// handled.
     private func handleNavigationKey(_ keyCode: UInt16) -> Bool {
-        guard composingPaneId == nil, isExpanded else { return false }
+        guard canHandleRosterShortcuts else { return false }
         let count = mergedRoster.count
         let current = focusedRow
         switch keyCode {
@@ -527,8 +581,7 @@ struct NotchStatusView: View {
         guard legacyKeyMonitor == nil else { return }
         legacyKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard event.window === AppDelegate.window,
-                isExpanded,
-                composingPaneId == nil
+                canHandleRosterShortcuts
             else {
                 return event
             }
@@ -542,8 +595,10 @@ struct NotchStatusView: View {
             else {
                 return event
             }
-            handleShortcut(shortcut)
-            return nil
+            if handleShortcut(shortcut) {
+                return nil
+            }
+            return event
         }
     }
 
@@ -554,20 +609,23 @@ struct NotchStatusView: View {
         }
     }
 
-    /// Fetch a live output tail for `paneId` off the main actor and show it in
-    /// the peek region. Debounced by `peekingPaneId` so rapid hovers don't
-    /// stack fetches; the adapter does blocking I/O, hence the detached task.
-    /// The inline cleaner is the hoisted pure `LogFormatter.cleanedTail`
-    /// (plan 016 3a), so the 6-line hover tail and the full overlay share one
-    /// tested cleaner.
+    /// Fetches a live output tail asynchronously to display in the hover peek area.
     private func fetchPeek(paneId: String) {
         guard peekingPaneId != paneId else { return }
         peekingPaneId = paneId
         peekTask?.cancel()
         peekTask = Task.detached { [adapter] in
-            let tail = await adapter.captureTail(paneId: paneId, lines: 6)
-            let cleaned = LogFormatter.cleanedTail(tail, maxLines: 6, maxLineLength: 120)
+            var raw = ""
+            if !paneId.hasPrefix("standalone:") {
+                raw = await adapter.captureTail(paneId: paneId, lines: 6)
+            }
+            var cleaned = LogFormatter.cleanedTail(raw, maxLines: 6, maxLineLength: 120)
                 .joined(separator: "\n")
+            if cleaned.isEmpty {
+                let agentName = paneId.replacingOccurrences(of: "standalone:", with: "")
+                cleaned = AgentDetector.recentTranscriptOutput(forAgent: agentName, maxLines: 6)
+                    .joined(separator: "\n")
+            }
             await MainActor.run {
                 if self.peekingPaneId == paneId {
                     self.peekText = cleaned
@@ -709,11 +767,7 @@ struct NotchStatusView: View {
             }
     }
 
-    /// Notch-hugging corner wing. The blend version (`destinationOut` inside a
-    /// mask) flakes into a stray solid square on macOS 26, so this is a pure
-    /// path silhouette: the cap sliver the square-minus-rounded-cut composite
-    /// actually produces. Verified pixel-identical to the blend's output at 4×
-    /// (213 px vs 209 px, ±antialiasing).
+    /// Path silhouette rendering the notch-hugging corner cutout wings.
     private func cornerCutout(topLeading: Bool) -> some View {
         let extent = cornerRad + IslandMetrics.contentSpacing
         let shape = Path { path in
@@ -744,6 +798,9 @@ struct NotchStatusView: View {
     private var content: some View {
         if isExpanded {
             expandedList
+                .transition(contentTransition)
+        } else if let notif = activeNotification {
+            notchNotificationCard(event: notif)
                 .transition(contentTransition)
         } else if let event = eventManager.currentEvent, let paneId = event.paneId,
             IslandMetrics.requiresApproval(event.kind.rawValue)
@@ -800,11 +857,7 @@ struct NotchStatusView: View {
         Rectangle().fill(.clear).frame(width: islandWidth, height: IslandMetrics.pillHeight)
     }
 
-    /// Centered idle strip: the pill covers the notch and the window spans
-    /// the full width, so agent details leak out to both sides — working
-    /// Centered idle/closed live strip: details split to BOTH sides of the physical
-    /// notch cutout. Active/working status renders in the LEFT wing, needs-you/failures
-    /// render in the RIGHT wing. The center camera area contains ZERO text/icons.
+    /// Live status strip splitting active agents and alerts into left and right wings.
     @ViewBuilder
     private var centeredSplitStrip: some View {
         let agents = eventManager.agents
@@ -1027,6 +1080,172 @@ struct NotchStatusView: View {
         }
     }
 
+    @ViewBuilder
+    private func notchNotificationCard(event: AgentEvent) -> some View {
+        let isApproval = event.kind == .accessRequest || event.kind == .waiting
+        let isCompleted = event.kind == .completed
+        let isFailed = event.kind == .failed
+        let paneId = event.paneId
+
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color(hex: event.kind.color).opacity(0.18))
+                    .frame(width: 36, height: 36)
+                Circle()
+                    .strokeBorder(Color(hex: event.kind.color).opacity(0.4), lineWidth: 1.5)
+                    .frame(width: 36, height: 36)
+                Image(
+                    systemName: isApproval
+                        ? "exclamationmark.triangle.fill"
+                        : (isCompleted
+                            ? "checkmark.circle.fill"
+                            : (isFailed ? "xmark.octagon.fill" : "bell.fill"))
+                )
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(Color(hex: event.kind.color))
+            }
+            .padding(.leading, 4)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(event.sourceKey.capitalized)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                    if let pane = paneId, pane.hasPrefix("standalone:") {
+                        let project = pane.split(separator: ":").last.map(String.init) ?? ""
+                        Text("· \(project)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    Spacer()
+                    Text(event.kind.label)
+                        .font(.system(size: 9, weight: .bold))
+                        .textCase(.uppercase)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(hex: event.kind.color).opacity(0.25), in: Capsule())
+                        .foregroundColor(Color(hex: event.kind.color))
+                }
+
+                Text(
+                    event.title ?? event.message
+                        ?? (isCompleted ? "Task completed successfully" : "Agent requires input")
+                )
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(2)
+                .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 4)
+
+            HStack(spacing: 6) {
+                if isApproval, let paneId {
+                    TactileRowButton(
+                        systemName: "checkmark",
+                        title: "Approve",
+                        color: Color.green.opacity(0.85),
+                        helpText: "Approve request"
+                    ) {
+                        eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                        withAnimation(morphAnimation) {
+                            activeNotification = nil
+                        }
+                    }
+                    TactileRowButton(
+                        systemName: "xmark",
+                        title: "Deny",
+                        color: Color.red.opacity(0.85),
+                        helpText: "Deny request"
+                    ) {
+                        eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+                        withAnimation(morphAnimation) {
+                            activeNotification = nil
+                        }
+                    }
+                    TactileRowButton(
+                        systemName: "arrow.up.right",
+                        color: Color.white.opacity(0.6),
+                        helpText: "Focus agent"
+                    ) {
+                        focusAgentPane(paneId)
+                    }
+                } else if isCompleted {
+                    let agent = eventManager.agents.first {
+                        $0.paneId == paneId || $0.source == event.sourceKey
+                    }
+                    TactileRowButton(
+                        systemName: "safari",
+                        title: "View Diff",
+                        color: Color.blue.opacity(0.85),
+                        helpText: "Open session viewer in browser"
+                    ) {
+                        let slug =
+                            agent?.cwd.map {
+                                URL(fileURLWithPath: $0).lastPathComponent
+                            } ?? event.sourceKey
+                        RichSessionViewer.openInBrowser(
+                            agentName: event.sourceKey,
+                            projectSlug: slug,
+                            cwd: agent?.cwd,
+                            isWorking: false,
+                            sessionPath: agent?.sessionPath
+                        )
+                    }
+                    TactileRowButton(
+                        systemName: "xmark",
+                        color: Color.white.opacity(0.5),
+                        helpText: "Dismiss notification"
+                    ) {
+                        withAnimation(morphAnimation) {
+                            activeNotification = nil
+                        }
+                    }
+                } else if isFailed {
+                    if let paneId {
+                        TactileRowButton(
+                            systemName: "arrow.up.right",
+                            title: "Focus",
+                            color: Color.orange.opacity(0.85),
+                            helpText: "Focus agent"
+                        ) {
+                            focusAgentPane(paneId)
+                        }
+                    }
+                    TactileRowButton(
+                        systemName: "xmark",
+                        color: Color.white.opacity(0.5),
+                        helpText: "Dismiss notification"
+                    ) {
+                        withAnimation(morphAnimation) {
+                            activeNotification = nil
+                        }
+                    }
+                } else {
+                    TactileRowButton(
+                        systemName: "xmark",
+                        color: Color.white.opacity(0.5),
+                        helpText: "Dismiss notification"
+                    ) {
+                        withAnimation(morphAnimation) {
+                            activeNotification = nil
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(width: IslandMetrics.notificationWidth, height: IslandMetrics.notificationHeight)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let paneId {
+                focusAgentPane(paneId)
+            }
+        }
+    }
+
     private func approvalPill(event: AgentEvent, paneId: String) -> some View {
         let variance = event.effectiveVariance
         let choices = event.choices ?? []
@@ -1056,7 +1275,7 @@ struct NotchStatusView: View {
             approvalActionButton(
                 systemName: "arrow.up.right", color: .white.opacity(0.6), help: "Focus pane"
             ) {
-                adapter.paneFocus(paneId: paneId)
+                focusAgentPane(paneId)
             }
         }
         .frame(width: islandWidth, height: IslandMetrics.pillHeight)
@@ -1174,7 +1393,12 @@ struct NotchStatusView: View {
         systemName: String, color: Color, help: String, disabled: Bool = false,
         label: String? = nil, action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        Button(action: {
+            #if os(macOS)
+                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            action()
+        }) {
             Image(systemName: systemName)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(disabled ? color.opacity(0.3) : color)
@@ -1191,7 +1415,12 @@ struct NotchStatusView: View {
         label: Text, color: Color, help: String, disabled: Bool = false,
         accessibilityLabel: String? = nil, action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        Button(action: {
+            #if os(macOS)
+                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            action()
+        }) {
             label
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .monospacedDigit()
@@ -1210,18 +1439,12 @@ struct NotchStatusView: View {
     /// 3a). One overlay at a time; the controller cancels any in-flight fetch
     /// when the overlay is dismissed.
     private func peekButton(agent: AgentSnapshot) -> some View {
-        Button {
+        TactileRowButton(
+            systemName: "eye",
+            helpText: "View live output + git diff"
+        ) {
             PeekPanelController.shared.show(agent: agent, adapter: adapter)
-        } label: {
-            Image(systemName: "eye")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .help("View live output + git diff")
-        .accessibilityLabel("View live output for \(agent.source)")
     }
 
     private var expandedList: some View {
@@ -1229,6 +1452,12 @@ struct NotchStatusView: View {
             kinds: visibleAgents.map(\.kind))
         return VStack(spacing: 0) {
             headerBar(counts: counts)
+
+            if let digest = AwayDigestStore.shared.currentDigest {
+                AwayDigestCardView(digest: digest) {
+                    AwayDigestStore.shared.dismiss()
+                }
+            }
 
             if NotchHUDConfig.shared.showShelfTab {
                 shelfTabBar
@@ -1310,11 +1539,7 @@ struct NotchStatusView: View {
         }
     }
 
-    /// Roster scroll area: natural row height from the rendered roster
-    /// (muted sources excluded), capped so header/tabs always stay visible
-    /// inside the island (scrolls when 6+ rows overflow). The roster includes
-    /// blocked agents as inline rows, so their height is counted in
-    /// `agentCount` — no separate queue section to subtract.
+    /// Calculates scroll viewport height for the agent roster.
     private var rosterScrollHeight: CGFloat {
         let chrome =
             IslandMetrics.headerHeight
@@ -1537,6 +1762,55 @@ struct NotchStatusView: View {
     @ObservedObject private var historyStore = SessionHistoryStore.shared
 
     private var historyContent: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                ForEach(HistoryMode.allCases, id: \.self) { mode in
+                    Button(action: {
+                        #if os(macOS)
+                            NSHapticFeedbackManager.defaultPerformer.perform(
+                                .generic, performanceTime: .now)
+                        #endif
+                        withAnimation(BantayTheme.springSnappy) {
+                            historyMode = mode
+                        }
+                    }) {
+                        Text(mode.rawValue)
+                            .font(.system(size: 9.5, weight: historyMode == mode ? .bold : .medium))
+                            .foregroundColor(
+                                historyMode == mode
+                                    ? BantayTheme.textPrimary
+                                    : BantayTheme.textTertiary
+                            )
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(
+                                historyMode == mode
+                                    ? BantayTheme.cardSelected
+                                    : Color.clear
+                            )
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 4)
+
+            switch historyMode {
+            case .timeline:
+                MultiAgentTimelineView()
+            case .spend:
+                SpendHistoryView()
+            case .quotas:
+                ProviderQuotaView()
+            case .sessions:
+                sessionsListView
+            }
+        }
+    }
+
+    private var sessionsListView: some View {
         VStack(spacing: 0) {
             if historyStore.sessions.isEmpty {
                 VStack(spacing: 6) {
@@ -1874,20 +2148,27 @@ struct NotchStatusView: View {
             ? BantayTheme.statusFailed
             : (percentInt <= 50 ? BantayTheme.statusQuota : BantayTheme.statusCompleted)
 
-        return HStack(spacing: BantayTheme.space4) {
-            Circle().fill(color).frame(width: 4, height: 4)
-            Text("Q:\(percentInt)%")
-                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                .lineLimit(1)
-                .monospacedDigit()
-                .foregroundColor(color)
+        return Button {
+            expandTo(true)
+            selectedTab = .history
+            historyMode = .quotas
+        } label: {
+            HStack(spacing: BantayTheme.space4) {
+                Circle().fill(color).frame(width: 4, height: 4)
+                Text("Q:\(percentInt)%")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .monospacedDigit()
+                    .foregroundColor(color)
+            }
+            .padding(.horizontal, BantayTheme.space6)
+            .padding(.vertical, BantayTheme.space2)
+            .background(color.opacity(0.14), in: Capsule())
+            .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
+            .fixedSize(horizontal: true, vertical: true)
         }
-        .padding(.horizontal, BantayTheme.space6)
-        .padding(.vertical, BantayTheme.space2)
-        .background(color.opacity(0.14), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
-        .fixedSize(horizontal: true, vertical: true)
-        .help("Live Provider Quota: \(minQuota?.provider ?? "AI") \(percentInt)% remaining")
+        .buttonStyle(.plain)
+        .help("Live Provider Quotas: Click to view details (\(percentInt)% remaining)")
         .accessibilityLabel("Quota remaining \(percentInt) percent")
     }
 
@@ -2286,14 +2567,11 @@ struct NotchStatusView: View {
     }
 
     private func agentRow(agent: AgentSnapshot) -> some View {
-        let composing = composingPaneId == agent.paneId
+        let agentKey = agent.paneId ?? "standalone:\(agent.source)"
+        let composing = composingPaneId == agentKey
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                // Item 2: pulsing dot for working agents. The pulse modifier is on
-                // the dot itself (a same-color overlay composites to constant
-                // color and is invisible), and only .progress/.started pulse —
-                // blocked rows shouldn't read as "busy". `enabled` carries the
-                // reduce-motion + kind gate so the modifier type-checks fast.
+                // Pulsing status dot for working agents.
                 Circle().fill(Color(hex: agent.kind.color)).frame(width: 6, height: 6)
                     .modifier(
                         PulsingDotModifier(
@@ -2435,42 +2713,49 @@ struct NotchStatusView: View {
                     .onTapGesture { beginComposing(agent) }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(0)
-                    if let paneId = agent.paneId {
-                        if agent.kind == .accessRequest || agent.kind == .waiting {
+                    if agent.kind == .accessRequest || agent.kind == .waiting {
+                        if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
                             // Approval controls stay visible — those need attention.
                             inlineApprovalControls(agent: agent)
                                 .layoutPriority(1)
+                        } else {
+                            Button(action: { focusAgent(agent) }) {
+                                Image(systemName: "terminal.fill").font(.system(size: 9))
+                                    .foregroundColor(.white.opacity(0.7))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Focus \(agent.source) to answer prompt")
+                            .accessibilityLabel("Focus \(agent.source)")
+                            .layoutPriority(1)
                         }
-                        // Focus/stop/peek are revealed on row hover to keep rows
-                        // calm (BoringNotch HoverButton pattern). Always
-                        // reachable: hover or tab already shows the row bg.
-                        let rowHovered = hoveredRow == agent.id
-                        Button(action: { focusAgentPane(paneId) }) {
-                            Image(systemName: "arrow.up.right").font(.system(size: 9))
-                                .foregroundColor(.white.opacity(0.6))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Focus pane")
-                        .accessibilityLabel("Focus \(agent.source)")
-                        .layoutPriority(1)
-                        .opacity(rowHovered ? 1 : 0)
-                        // Item 3: asymmetric hover timing.
-                        .animation(
-                            rowHovered
-                                ? .easeOut(duration: 0.12)
-                                : .easeOut(duration: 0.06),
-                            value: rowHovered)
-                        Button(action: {
+                    }
+                    // Focus/stop/peek are revealed on row hover to keep rows
+                    // calm (BoringNotch HoverButton pattern). Always
+                    // reachable: hover or tab already shows the row bg.
+                    let rowHovered = hoveredRow == agent.id
+                    TactileRowButton(
+                        systemName: "arrow.up.right",
+                        helpText: "Focus \(agent.source)"
+                    ) {
+                        focusAgent(agent)
+                    }
+                    .layoutPriority(1)
+                    .opacity(rowHovered ? 1 : 0)
+                    .animation(
+                        rowHovered
+                            ? .easeOut(duration: 0.12)
+                            : .easeOut(duration: 0.06),
+                        value: rowHovered)
+                    if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
+                        TactileRowButton(
+                            systemName: "stop.fill",
+                            color: .red,
+                            helpText: "Stop \(agent.source)"
+                        ) {
                             eventManager.performAction(paneId: paneId) {
                                 $0.stop(paneId: paneId)
                             }
-                        }) {
-                            Image(systemName: "stop.fill").font(.system(size: 9))
-                                .foregroundColor(.red.opacity(0.8))
                         }
-                        .buttonStyle(.plain)
-                        .help("Stop (Ctrl-C)")
-                        .accessibilityLabel("Stop \(agent.source)")
                         .layoutPriority(1)
                         .opacity(rowHovered ? 1 : 0)
                         .animation(
@@ -2478,31 +2763,35 @@ struct NotchStatusView: View {
                                 ? .easeOut(duration: 0.12)
                                 : .easeOut(duration: 0.06),
                             value: rowHovered)
-                        peekButton(agent: agent)
-                            .layoutPriority(1)
-                            .opacity(rowHovered ? 1 : 0)
-                            .animation(
-                                rowHovered
-                                    ? .easeOut(duration: 0.12)
-                                    : .easeOut(duration: 0.06),
-                                value: rowHovered)
-                    } else if agent.kind == .accessRequest || agent.kind == .waiting {
-                        // Standalone agent (opencode/Claude outside herdr): there
-                        // is no pane to send keys to, so an Approve/Deny would be
-                        // a silent phantom. The honest action is to raise the
-                        // terminal where the prompt is waiting.
-                        Button(action: {
-                            _ = TerminalFocusser.focus(
-                                preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
-                        }) {
-                            Image(systemName: "terminal.fill").font(.system(size: 9))
-                                .foregroundColor(.white.opacity(0.7))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open terminal — answer there (no herdr pane)")
-                        .accessibilityLabel("Open terminal for \(agent.source)")
-                        .layoutPriority(1)
                     }
+                    peekButton(agent: agent)
+                        .layoutPriority(1)
+                        .opacity(rowHovered ? 1 : 0)
+                        .animation(
+                            rowHovered
+                                ? .easeOut(duration: 0.12)
+                                : .easeOut(duration: 0.06),
+                            value: rowHovered)
+                    TactileRowButton(
+                        systemName: "safari",
+                        helpText: "Open session in browser (Chrome / Dia)"
+                    ) {
+                        let slug = agent.projectContext?.project ?? agent.source
+                        RichSessionViewer.openInBrowser(
+                            agentName: agent.source,
+                            projectSlug: slug,
+                            cwd: agent.cwd,
+                            isWorking: agent.kind == .progress || agent.kind == .started,
+                            sessionPath: agent.sessionPath
+                        )
+                    }
+                    .layoutPriority(1)
+                    .opacity(rowHovered ? 1 : 0)
+                    .animation(
+                        rowHovered
+                            ? .easeOut(duration: 0.12)
+                            : .easeOut(duration: 0.06),
+                        value: rowHovered)
                 }
             }
             .padding(.horizontal, 16)
@@ -2516,9 +2805,7 @@ struct NotchStatusView: View {
             hoveredRow = hovering ? agent.id : nil
         }
         .contextMenu {
-            if let paneId = agent.paneId {
-                Button("Focus Pane") { focusAgentPane(paneId) }
-            }
+            Button("Focus \(agent.source.capitalized)") { focusAgent(agent) }
             if let title = agent.title {
                 Button("Copy Title") { copyToClipboard(title) }
             }
@@ -2586,12 +2873,35 @@ struct NotchStatusView: View {
         NSWorkspace.shared.activateFileViewerSelecting([target])
     }
 
-    /// Route the focus button through `PaneFocusRouter` (plan 017 WI-3)
-    /// when the active multiplexer is tmux/zellij AND the current adapter is
-    /// that same kind: select the pane inside the mux, then raise the
-    /// terminal app. herdr (raw pane-id passthrough) and every mismatch
-    /// keep the adapter's own focus behavior unchanged.
+    /// Focus an agent: routes to multiplexer pane when managed, or raises the standalone app/terminal.
+    private func focusAgent(_ agent: AgentSnapshot) {
+        if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
+            let kind = PlexerDetection.detect(env: ProcessInfo.processInfo.environment)
+            if kind == adapter.kind, kind == .tmux || kind == .zellij {
+                focusAgentPane(paneId)
+                return
+            }
+        }
+        focusStandaloneAgent(agent.source, cwd: agent.cwd)
+    }
+
+    /// Raise the standalone application window (e.g. Antigravity IDE, Cursor) or terminal.
+    private func focusStandaloneAgent(_ source: String, cwd: String? = nil) {
+        _ = TerminalFocusser.focusStandalone(source: source, cwd: cwd)
+    }
+
+    /// Focuses an agent pane via multiplexer routing or terminal app activation.
     private func focusAgentPane(_ paneId: String) {
+        if paneId.hasPrefix("standalone:") {
+            let stripped = paneId.replacingOccurrences(of: "standalone:", with: "")
+            let comps = stripped.split(separator: ":")
+            let source = String(comps.first ?? "")
+            let agent = eventManager.agents.first {
+                ($0.paneId ?? "standalone:\($0.source)") == paneId
+            }
+            focusStandaloneAgent(source, cwd: agent?.cwd)
+            return
+        }
         let kind = PlexerDetection.detect(env: ProcessInfo.processInfo.environment)
         guard kind == adapter.kind, kind == .tmux || kind == .zellij else {
             adapter.focusPane(paneId: paneId)
@@ -2714,6 +3024,35 @@ struct NotchStatusView: View {
         updateIslandVisibility()
         showDetail = false
         if let event = eventManager.currentEvent {
+            if event.kind == .accessRequest || event.kind == .waiting
+                || event.kind == .completed || event.kind == .failed
+            {
+                withAnimation(morphAnimation) {
+                    activeNotification = event
+                }
+                notificationDismissTask?.cancel()
+                if event.kind == .completed || event.kind == .failed {
+                    notificationDismissTask = Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(5))
+                        guard !Task.isCancelled else { return }
+                        withAnimation(morphAnimation) {
+                            if activeNotification?.id == event.id {
+                                activeNotification = nil
+                            }
+                        }
+                    }
+                }
+            } else {
+                let isWaitingApproval =
+                    activeNotification?.kind == .accessRequest
+                    || activeNotification?.kind == .waiting
+                if !isWaitingApproval {
+                    withAnimation(morphAnimation) {
+                        activeNotification = nil
+                    }
+                }
+            }
+
             if !reduceMotion {
                 withAnimation(.easeInOut(duration: 0.15)) { pulse = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -2723,11 +3062,7 @@ struct NotchStatusView: View {
             if event.playSound && eventManager.shouldPlaySound(for: event) {
                 playSound(for: event)
             }
-            // Approvals landing while the island is hidden (snoozed / startup)
-            // must never vanish silently — Notification Center fallback.
-            // Effective visibility follows the same policy that drives
-            // show/hide, so a snoozed or startup-hidden island counts as
-            // hidden even if the window has not finished dismissing.
+            // Dispatch notification if approval arrives while the island is hidden or snoozed.
             let config = NotchHUDConfig.shared
             let islandVisible = IslandMetrics.VisibilityPolicy.shouldShow(
                 islandEnabled: config.islandEnabled,
@@ -2737,6 +3072,9 @@ struct NotchStatusView: View {
                 hasWork: eventManager.currentEvent != nil || !eventManager.agents.isEmpty,
                 showWhenIdle: config.showIslandWhenIdle,
                 forced: AppDelegate.isForcedVisible)
+            let agent = eventManager.agents.first {
+                $0.paneId == event.paneId || $0.source == event.sourceKey
+            }
             if IslandMetrics.shouldPostNotification(
                 islandVisible: islandVisible,
                 notifyWhenHidden: config.notifyWhenHidden,
@@ -2747,10 +3085,18 @@ struct NotchStatusView: View {
                     source: event.sourceKey,
                     paneId: event.paneId,
                     title: event.title ?? event.message,
-                    choices: event.choices)
+                    choices: event.choices,
+                    cwd: agent?.cwd,
+                    sessionPath: agent?.sessionPath)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 withAnimation(.easeInOut(duration: 0.3)) { showDetail = true }
+            }
+        } else {
+            if activeNotification?.kind == .accessRequest || activeNotification?.kind == .waiting {
+                withAnimation(morphAnimation) {
+                    activeNotification = nil
+                }
             }
         }
     }
@@ -2800,16 +3146,18 @@ struct NotchStatusView: View {
             expandTo(false)
         }
         if let composingPaneId,
-            !eventManager.agents.contains(where: { $0.paneId == composingPaneId })
+            !eventManager.agents.contains(where: {
+                ($0.paneId ?? "standalone:\($0.source)") == composingPaneId
+            })
         {
             cancelComposing()
         }
     }
 
     private func beginComposing(_ agent: AgentSnapshot) {
-        guard agent.paneId != nil else { return }
-        composingPaneId = agent.paneId
-        AppDelegate.composingPaneId = agent.paneId
+        let paneId = agent.paneId ?? "standalone:\(agent.source)"
+        composingPaneId = paneId
+        AppDelegate.composingPaneId = paneId
         promptText = ""
         DispatchQueue.main.async { promptFocused = true }
     }
@@ -2817,13 +3165,24 @@ struct NotchStatusView: View {
     private func submitPrompt() {
         let text = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let paneId = composingPaneId, !text.isEmpty {
+            let targetAgent = eventManager.agents.first {
+                ($0.paneId ?? "standalone:\($0.source)") == paneId
+                    || $0.paneId == paneId
+                    || $0.source == paneId
+            }
             if paneId.hasPrefix("standalone:") {
-                let agentName = String(paneId.dropFirst(11))
-                StandaloneAgentDispatcher.dispatchPrompt(agentName: agentName, text: text)
+                let agentName = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+                StandaloneAgentDispatcher.dispatchPrompt(
+                    agentName: agentName, text: text, cwd: targetAgent?.cwd, autoSend: true
+                )
+            } else if OpenCodeActionWriter.isOpenCodePane(paneId) {
+                StandaloneAgentDispatcher.dispatchPrompt(
+                    agentName: "opencode", text: text, cwd: targetAgent?.cwd, autoSend: true
+                )
             } else {
-                Task.detached { [adapter] in
-                    await adapter.agentPrompt(paneId: paneId, text: text)
-                }
+                let activeAdapter = eventManager.activeAdapter
+                activeAdapter.sendLine(paneId: paneId, text: text)
+                activeAdapter.focusPane(paneId: paneId)
             }
         }
         cancelComposing()
@@ -2949,5 +3308,70 @@ private struct AgentRowAccessibility: ViewModifier {
                     }
                 }
             }
+    }
+}
+
+/// Spring-driven press animation style for tactile feedback.
+private struct TactilePressStyle: ButtonStyle {
+    @Binding var isPressed: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { pressed in
+                withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
+                    isPressed = pressed
+                }
+            }
+    }
+}
+
+/// Tactile button for row actions featuring haptic feedback and micro-press physics.
+private struct TactileRowButton: View {
+    let systemName: String
+    var title: String? = nil
+    var color: Color = .white
+    var helpText: String = ""
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: {
+            #if os(macOS)
+                NSHapticFeedbackManager.defaultPerformer.perform(
+                    .generic, performanceTime: .now)
+            #endif
+            action()
+        }) {
+            HStack(spacing: 3) {
+                Image(systemName: systemName)
+                    .font(.system(size: 9, weight: .semibold))
+                if let title {
+                    Text(title)
+                        .font(.system(size: 9, weight: .medium))
+                }
+            }
+            .foregroundColor(isHovered ? .white : color.opacity(0.75))
+            .padding(.horizontal, title != nil ? 6 : 5)
+            .padding(.vertical, 3.5)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isHovered ? Color.white.opacity(0.18) : Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(
+                        isHovered ? Color.white.opacity(0.25) : Color.white.opacity(0.08),
+                        lineWidth: 0.8
+                    )
+            )
+            .scaleEffect(isPressed ? 0.92 : 1.0)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(TactilePressStyle(isPressed: $isPressed))
+        .onHover { isHovered = $0 }
+        .help(helpText)
+        .accessibilityLabel(helpText)
     }
 }

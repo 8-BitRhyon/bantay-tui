@@ -14,10 +14,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 UI_ONLY=(
+  AwayDigestCardView.swift
   DynamicIslandApp.swift
+  MultiAgentTimelineView.swift
   NotchStatusView.swift
   PeekPanel.swift
+  ProviderQuotaView.swift
   SettingsView.swift
+  SpendHistoryView.swift
   TaskWidgetView.swift
 )
 

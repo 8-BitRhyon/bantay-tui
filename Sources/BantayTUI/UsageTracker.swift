@@ -204,10 +204,7 @@ enum UsageParser {
         }
     }
 
-    /// ISO-8601 timestamp carried by transcript lines. Claude Code and Codex
-    /// both emit a top-level `"timestamp"` per JSONL line; a few Claude Code
-    /// lines nest it under `message.timestamp`. Returns nil when absent or
-    /// unparseable.
+    /// Parses ISO-8601 timestamps from transcript lines.
     static func parseTimestamp(_ line: String) -> Date? {
         guard let data = line.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -271,14 +268,7 @@ enum UsageTracker {
         return min(max(costUSD / budgetUSD, 0), 1)
     }
 
-    /// Tokens/min across the transcript lines inside `window` ending at `now`.
-    /// Absolute timestamps only (DST/midnight-safe). Each line's own token
-    /// count is its incremental contribution — the same shape `parseAll`
-    /// aggregates — so the rate is (sum of in-window tokens) ÷ elapsed time
-    /// between the first and last in-window line. Returns nil when the window
-    /// is 0/negative, no line carries a parseable timestamp, or fewer than
-    /// two distinct timestamps fall in the window (no division by zero).
-    /// Negative token deltas clamp to 0 (clock skew between lines).
+    /// Calculates tokens per minute across transcript lines within the specified window.
     static func rate(lines: [String], now: Date, window: TimeInterval) -> UsageRate {
         guard window > 0 else { return UsageRate(tokensPerMinute: nil, lastSeen: nil) }
         let windowStart = now.addingTimeInterval(-window)
@@ -313,8 +303,11 @@ enum UsageTracker {
         return .normal
     }
 
-    /// Compact token count: "1.2k", "3.4m".
+    /// Compact token count: "1.2k", "3.4m", "5.6b".
     static func compactTokens(_ count: Int) -> String {
+        if count >= 1_000_000_000 {
+            return String(format: "%.1fb", Double(count) / 1_000_000_000)
+        }
         if count >= 1_000_000 {
             return String(format: "%.1fm", Double(count) / 1_000_000)
         }
@@ -329,13 +322,7 @@ enum UsageTracker {
         latestUsageAndRate(home: home, names: names, now: Date(), window: 60).usage
     }
 
-    /// Usage plus the tokens/min rate over the newest transcripts, read in a
-    /// single pass per transcript root.
-    /// NOTE (M9): the fallback cost estimate ($3/M in + $15/M out) is a
-    /// display aid, not accounting — and a session present under two roots of
-    /// one family (e.g. .claude/projects + .claude/transcripts) is counted
-    /// twice. Acceptable for a spend gauge; a precise figure needs per-session
-    /// dedupe keyed by session id.
+    /// Reads usage and token burn rate over recent transcripts in a single pass.
     static func latestUsageAndRate(
         home: String, names: [String], now: Date, window: TimeInterval
     ) -> (usage: UsageSnapshot, rate: UsageRate) {
@@ -392,7 +379,7 @@ enum UsageTracker {
         let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
         try? handle.seek(toOffset: start)
         let data = handle.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8) ?? ""
+        let text = String(decoding: data, as: UTF8.self)
         return text.split(whereSeparator: \.isNewline).map(String.init)
     }
 

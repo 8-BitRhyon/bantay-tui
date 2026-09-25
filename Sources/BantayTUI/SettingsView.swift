@@ -80,6 +80,7 @@ struct SettingsView: View {
     @State private var notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
     @State private var ntfyTopic = NotchHUDConfig.shared.ntfyTopic
     @State private var ntfyServer = NotchHUDConfig.shared.ntfyServer
+    @State private var ntfyCallbackURL = NotchHUDConfig.shared.ntfyCallbackURL
     @State private var tmuxStatusEnabled = NotchHUDConfig.shared.tmuxStatusEnabled
     @State private var attentionFilter = NotchHUDConfig.shared.attentionFilterEnabled
     @State private var volumePreviewTask: Task<Void, Never>?
@@ -328,11 +329,7 @@ struct SettingsView: View {
         .background(BantayTheme.deepBackground)
         .onAppear { refreshFromConfig() }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWillOpen)) { _ in
-            // Defer the state refresh: `.settingsWillOpen` is posted while the
-            // window is being ordered front (view update in progress), and
-            // mutating @State synchronously during that update throws an ObjC
-            // exception ("Modifying state during view update") that crashes
-            // the app. Hop to the next runloop turn instead.
+            // Defer state refresh to avoid modifying state during view update.
             DispatchQueue.main.async { refreshFromConfig() }
         }
     }
@@ -827,6 +824,12 @@ struct SettingsView: View {
                         .help("Default https://ntfy.sh — override for self-hosted.")
                         .onChange(of: ntfyServer) { newValue in
                             NotchHUDConfig.shared.ntfyServer = newValue
+                        }
+                    TextField("Callback URL", text: $ntfyCallbackURL)
+                        .textFieldStyle(.roundedBorder)
+                        .help("Public/Tailscale URL for approvals (e.g. http://my-mac:41817).")
+                        .onChange(of: ntfyCallbackURL) { newValue in
+                            NotchHUDConfig.shared.ntfyCallbackURL = newValue
                         }
                     Text(
                         ntfyTopic.isEmpty

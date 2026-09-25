@@ -1,14 +1,8 @@
 import Foundation
 
-/// Pure Claude Code hook-config logic: settings.json merging, hook command
-/// generation, and payload mapping from Claude's hook JSON to Bantay's event
-/// payload shape. Kept free of file I/O so the harness can test it.
+/// Pure Claude Code hook configuration logic and payload mapping.
 enum ClaudeHookInstaller {
-    /// The hook command that streams the hook's stdin JSON to Bantay's local
-    /// ingest server. `curl` ships with macOS. When a `token` is supplied it
-    /// is appended as the `?token=` query param, which the ingest server
-    /// requires; token-less form is retained so legacy/foreign detection stays
-    /// stable and old installs remain removable.
+    /// Builds the curl command that streams Claude hook stdin to Bantay's ingest server.
     static func hookCommand(port: Int, token: String? = nil) -> String {
         if let token {
             return
@@ -17,13 +11,7 @@ enum ClaudeHookInstaller {
         return "curl -s -X POST --data-binary @- http://127.0.0.1:\(port)/events"
     }
 
-    /// The Claude settings.json `hooks` section Bantay installs. We touch
-    /// approval + stop + notification events and preserve everything else.
-    /// `PermissionPrompt` is kept as a legacy alias for older Claude Code;
-    /// `PermissionRequest` is the current event name. `Notification` fires
-    /// with matchers `agent_needs_input`/`agent_completed` — native "needs
-    /// you" and "done" signals that need no screen detection. `StopFailure`
-    /// carries typed failure reasons (rate_limit, auth, billing, …).
+    /// Generates the Claude settings.json `hooks` dictionary for Bantay events.
     static func hooksSection(port: Int, token: String? = nil) -> [String: Any] {
         let command = hookCommand(port: port, token: token)
         let eventEntry: [[String: Any]] = [
@@ -53,14 +41,7 @@ enum ClaudeHookInstaller {
         ]
     }
 
-    /// True when a hook's command has the Bantay command SHAPE: a `curl`
-    /// invocation that pipes the hook's stdin to the local ingest server on
-    /// any port. The port is matched as port-agnostic digits so old installs
-    /// stay removable after `ingestPort` changes. A foreign command that merely
-    /// mentions a localhost URL (e.g. `myagent --url http://127.0.0.1:8080/events`)
-    /// is not matched and is never deleted. A Bantay command wrapped in a
-    /// launcher (e.g. `sh -c 'curl ...'`) is also not matched — it survives
-    /// removal untouched, never corrupted.
+    /// Determines whether a hook command matches Bantay's current curl pattern.
     static func isBantayHook(_ hook: [String: Any]) -> Bool {
         guard let command = hook["command"] as? String else { return false }
         let pattern =
@@ -68,12 +49,7 @@ enum ClaudeHookInstaller {
         return command.range(of: pattern, options: .regularExpression) != nil
     }
 
-    /// Legacy matcher for hooks installed by older Bantay builds whose curl
-    /// invocation did not use `--data-binary @-` (e.g. `-d @-` or `--data
-    /// @-`). `removingBantayHooks` must still remove them, but the matcher
-    /// keeps the safety bar of the current shape: a `curl` command whose
-    /// argument is stdin (`@-`) targeting the localhost ingest path. A foreign
-    /// command that merely mentions a localhost URL still never matches.
+    /// Matches hooks installed by older Bantay versions for backwards compatibility.
     static func isLegacyBantayHook(_ hook: [String: Any]) -> Bool {
         guard let command = hook["command"] as? String else { return false }
         let pattern =
@@ -81,29 +57,18 @@ enum ClaudeHookInstaller {
         return command.range(of: pattern, options: .regularExpression) != nil
     }
 
-    /// True when an entry's hooks include at least one Bantay hook (current or
-    /// legacy shape). Used for merge de-dup and removal so old-format installs
-    /// stay removable.
+    /// True when an entry's hooks include at least one Bantay hook.
     static func isBantayEntry(_ entry: [String: Any]) -> Bool {
         guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return false }
         return entryHooks.contains(where: { isBantayHook($0) || isLegacyBantayHook($0) })
     }
 
-    /// True when a single hook command is Bantay-owned in either the current or
-    /// the legacy shape.
+    /// True when a single hook command is Bantay-owned.
     static func isOwnedBantayHook(_ hook: [String: Any]) -> Bool {
         isBantayHook(hook) || isLegacyBantayHook(hook)
     }
 
-    /// Merge the Bantay hooks into an existing settings dictionary, preserving
-    /// all unrelated keys. Existing entries for the same events are kept and
-    /// Bantay's entries appended after any stale Bantay entries are removed,
-    /// so foreign hooks (herdr, user config) are never overwritten and
-    /// re-installs do not duplicate. A `hooks` value that exists but is not a
-    /// `[String: Any]` (a String, an Array, or any other foreign shape) is
-    /// opaque and returned unchanged — never fabricated or replaced. A
-    /// non-conforming value for a single event is preserved untouched too,
-    /// even at the cost of skipping that event's Bantay hook.
+    /// Merges Bantay hooks into an existing settings dictionary, preserving foreign hooks.
     static func mergedSettings(
         existing: [String: Any], port: Int, token: String? = nil
     ) -> [String: Any] {
@@ -132,11 +97,7 @@ enum ClaudeHookInstaller {
         return merged
     }
 
-    /// Remove only the Bantay-owned hooks from a settings dictionary.
-    /// Hooks are identified by command shape (`http://127.0.0.1:<port>/events`)
-    /// and filtered individually, so a foreign hook that shares an entry with
-    /// a Bantay hook survives. Entries that become hook-less are dropped and
-    /// an empty `hooks` key is removed entirely.
+    /// Removes Bantay-owned hooks from a settings dictionary.
     static func removingBantayHooks(from settings: [String: Any]) -> [String: Any] {
         guard var hooks = settings["hooks"] as? [String: Any] else { return settings }
         var changed = false
@@ -250,18 +211,12 @@ enum ClaudeHookInstaller {
     }
 }
 
-/// Decides whether the I/O layer may write `~/.claude/settings.json` after a
-/// read. Writing over a file that exists but failed to parse would destroy the
-/// user's Claude Code configuration (a truncated write, a permission hiccup,
-/// or foreign JSON5/comment-laden content all produce `parsed == false`), so
-/// the caller must `abort` — never write — in that case.
+/// Validates safety before persisting modified Claude settings.json files.
 enum ClaudeHookWriteDecision {
     case write([String: Any])
     case abort
 
-    /// `abort` whenever `fileExists && !parsed`; otherwise `write(merged)`.
-    /// The decision is independent of install vs removal intent: writing over
-    /// a file that exists but could not be parsed is never safe.
+    /// Aborts write if the file exists but failed to parse safely.
     static func decide(
         fileExists: Bool, parsed: Bool, merged: [String: Any]
     ) -> ClaudeHookWriteDecision {

@@ -1,12 +1,7 @@
 import Foundation
 
-/// Headless engine implementing Kun Chen's Backpass text-gradient memory philosophy.
-/// "You don't write AGENTS.md. You train it with gradient descent."
-///
-/// Backpass inspects multi-agent session interaction traces, computes text deltas
-/// between agent assumptions and human corrections, and enforces a strict
-/// **2-session evidence gate** before proposing directives for `AGENTS.md`.
-public enum BackpassEngine {
+/// Implements Backpass text-gradient memory compression.
+enum BackpassEngine {
 
     /// A single interaction turn extracted from an agent session transcript.
     public struct SessionInteraction: Equatable, Sendable, Identifiable {

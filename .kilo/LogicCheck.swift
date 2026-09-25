@@ -5510,7 +5510,8 @@ struct LogicCheckMain {
         }
         let nowL118 = Date()
         let overdueDate = Calendar.current.date(byAdding: .day, value: -2, to: nowL118)
-        let todayDate = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: nowL118) ?? nowL118
+        let todayDate =
+            Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: nowL118) ?? nowL118
         let laterDate = Calendar.current.date(byAdding: .day, value: 5, to: nowL118)
 
         let tOverdue = taskStoreL118.addTask("Fix critical bug", dueDate: overdueDate)
@@ -5520,14 +5521,24 @@ struct LogicCheckMain {
         taskStoreL118.toggleCompleted(tCompleted.id)
 
         let catAll = taskStoreL118.categorizedTasks(searchQuery: "", relativeTo: nowL118)
-        check(catAll.overdue.contains(where: { $0.id == tOverdue.id }), "L118 categorizedTasks identifies overdue task")
-        check(catAll.today.contains(where: { $0.id == tToday.id }), "L118 categorizedTasks identifies today task")
-        check(catAll.later.contains(where: { $0.id == tLater.id }), "L118 categorizedTasks identifies later task")
-        check(catAll.completed.contains(where: { $0.id == tCompleted.id }), "L118 categorizedTasks identifies completed task")
+        check(
+            catAll.overdue.contains(where: { $0.id == tOverdue.id }),
+            "L118 categorizedTasks identifies overdue task")
+        check(
+            catAll.today.contains(where: { $0.id == tToday.id }),
+            "L118 categorizedTasks identifies today task")
+        check(
+            catAll.later.contains(where: { $0.id == tLater.id }),
+            "L118 categorizedTasks identifies later task")
+        check(
+            catAll.completed.contains(where: { $0.id == tCompleted.id }),
+            "L118 categorizedTasks identifies completed task")
         check(catAll.doneTodayCount >= 1, "L118 categorizedTasks counts doneTodayCount")
 
         let catSearch = taskStoreL118.categorizedTasks(searchQuery: "critical", relativeTo: nowL118)
-        check(catSearch.overdue.count == 1 && catSearch.today.isEmpty, "L118 categorizedTasks filters by search query")
+        check(
+            catSearch.overdue.count == 1 && catSearch.today.isEmpty,
+            "L118 categorizedTasks filters by search query")
         try? FileManager.default.removeItem(at: tempL118URL)
 
         // MARK: - L119 Tombstone Protection Against Resurrection
@@ -5546,8 +5557,10 @@ struct LogicCheckMain {
         let ingestedResurrect = taskStoreL119.batchIngestExternalReminders([
             (rawTitle: "Buy organic apples", dueDate: nil, externalID: "rem-apple-1")
         ])
-        check(ingestedResurrect.isEmpty, "L119 batchIngestExternalReminders rejects tombstoned title")
-        check(taskStoreL119.tasks.isEmpty, "L119 taskStore remains empty after blocked resurrection")
+        check(
+            ingestedResurrect.isEmpty, "L119 batchIngestExternalReminders rejects tombstoned title")
+        check(
+            taskStoreL119.tasks.isEmpty, "L119 taskStore remains empty after blocked resurrection")
 
         // Manually adding the task again clears the tombstone
         taskStoreL119.addTask("Buy organic apples")
@@ -5587,7 +5600,10 @@ struct LogicCheckMain {
                 countLock.unlock()
             }
         }
-        check(successCount == 1, "L121 AtomicRemindersGate exactly one winner out of 100 concurrent races (got: \(successCount))")
+        check(
+            successCount == 1,
+            "L121 AtomicRemindersGate exactly one winner out of 100 concurrent races (got: \(successCount))"
+        )
 
         // MARK: - L122 TaskStore SaveSync Round-Trip
         let tempL122URL = FileManager.default.temporaryDirectory
@@ -5595,20 +5611,1796 @@ struct LogicCheckMain {
         let taskStoreL122 = TaskStore(fileURL: tempL122URL)
         let t122 = taskStoreL122.addTask("Verify disk write")
         taskStoreL122.saveSync()
-        check(FileManager.default.fileExists(atPath: tempL122URL.path), "L122 saveSync writes file to disk")
+        check(
+            FileManager.default.fileExists(atPath: tempL122URL.path),
+            "L122 saveSync writes file to disk")
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         if let data = try? Data(contentsOf: tempL122URL),
-           let list = try? dec.decode([BantayTask].self, from: data) {
-            check(list.contains(where: { $0.id == t122.id }), "L122 saveSync file contains added task")
+            let list = try? dec.decode([BantayTask].self, from: data)
+        {
+            check(
+                list.contains(where: { $0.id == t122.id }), "L122 saveSync file contains added task"
+            )
         } else {
             check(false, "L122 saveSync file was not decoded correctly")
         }
         try? FileManager.default.removeItem(at: tempL122URL)
 
+        // MARK: - L123 Antigravity Transcript & Standalone Agent Parsing
+        let agyStep10230 =
+            "{\"step_index\":10230,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-09-10T08:38:20Z\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"\\\"codesign --verify --deep --strict \\\\\\\"$HOME/Library/Application Support/Bantay-TUI/Bantay-TUI.app\\\\\\\"\\\"\",\"Cwd\":\"\\\"/Users/rhyon/Downloads/Self Curated CS Curriculum/Projects/bantay-tui\\\"\",\"WaitMsBeforeAsync\":\"5000\",\"toolAction\":\"\\\"Verifying bundle codesign\\\"\",\"toolSummary\":\"\\\"Verify strict codesign\\\"\"}}]}"
+        let agyReadable = AgentDetector.readableLine(agyStep10230)
+        check(
+            agyReadable == "Verify strict codesign",
+            "L123 Antigravity step 10230 parses tool summary (got: \(String(describing: agyReadable)))"
+        )
+        let agyCwd = AgentDetector.extractCwd(agyStep10230)
+        check(
+            agyCwd == "/Users/rhyon/Downloads/Self Curated CS Curriculum/Projects/bantay-tui",
+            "L123 Antigravity extracts cwd correctly")
+
+        let agyThinking = "{\"thinking\":\"**Analyzing Command Sequence**\\n\\nDetails...\"}"
+        check(
+            AgentDetector.readableLine(agyThinking) == "Analyzing Command Sequence",
+            "L123 thinking strips markdown asterisks")
+
+        let agyUserInput =
+            "{\"type\":\"USER_INPUT\",\"source\":\"USER\",\"content\":\"Ensure these work.\"}"
+        check(
+            AgentDetector.readableLine(agyUserInput) == "Ensure these work.",
+            "L123 user input prompt extracted")
+
+        let agyToolFallback =
+            "{\"tool_calls\":[{\"name\":\"view_file\",\"args\":{\"AbsolutePath\":\"/path/to/README.md\"}}]}"
+        check(
+            AgentDetector.readableLine(agyToolFallback) == "Viewing README.md",
+            "L123 tool name fallback extracted (got: \(String(describing: AgentDetector.readableLine(agyToolFallback))))"
+        )
+
+        let detectedAgy = DetectedAgent(
+            pid: 9999, name: "antigravity", activity: "Verify strict codesign", isWorking: true,
+            cwd: "/path/to/repo")
+        let mergedAgy = AgentEventManager(capture: false).mergeStandalone(
+            into: [], detected: [detectedAgy])
+        check(mergedAgy.first?.cwd == "/path/to/repo", "L123 mergeStandalone carries detected cwd")
+
+        // MARK: - L124 Multi-tool calls, OpenAI string arguments, and rich tool fallbacks
+        let multiToolLine =
+            "{\"tool_calls\":[{\"name\":\"view_file\",\"args\":{\"AbsolutePath\":\"/src/App.swift\"}},{\"name\":\"replace_file_content\",\"args\":{\"TargetFile\":\"/src/App.swift\"}}]}"
+        let multiReadable = AgentDetector.readableLine(multiToolLine)
+        check(
+            multiReadable == "Viewing App.swift, Editing App.swift",
+            "L124 multi-tool calls joined with comma (got: \(String(describing: multiReadable)))")
+
+        let openAILine =
+            "{\"tool_calls\":[{\"name\":\"custom_tool\",\"arguments\":\"{\\\"toolSummary\\\":\\\"Compile release bundle\\\"}\"}]}"
+        check(
+            AgentDetector.readableLine(openAILine) == "Compile release bundle",
+            "L124 OpenAI stringified arguments parses tool summary")
+
+        let runCmdLine =
+            "{\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"swift build -c release\"}}]}"
+        check(
+            AgentDetector.readableLine(runCmdLine) == "Running swift",
+            "L124 run_command fallback extracts binary name")
+
+        let grepLine =
+            "{\"tool_calls\":[{\"name\":\"grep_search\",\"args\":{\"Query\":\"focusAgent\"}}]}"
+        check(
+            AgentDetector.readableLine(grepLine) == "Searching: focusAgent",
+            "L124 grep_search fallback extracts query")
+
+        let customToolLine = "{\"tool_calls\":[{\"name\":\"analyze_code_quality\",\"args\":{}}]}"
+        check(
+            AgentDetector.readableLine(customToolLine) == "Analyze Code Quality",
+            "L124 unknown tool humanized")
+
+        let emptyToolCalls = "{\"tool_calls\":[],\"content\":\"Ready for command\"}"
+        check(
+            AgentDetector.readableLine(emptyToolCalls) == "Ready for command",
+            "L124 empty tool calls falls through to content")
+
+        // MARK: - L125 Quotation & Whitespace Sanitization
+        check(
+            AgentDetector.cleanUnquoted("'hello world'") == "hello world",
+            "L125 single quotes stripped")
+        check(AgentDetector.cleanUnquoted("`npm test`") == "npm test", "L125 backticks stripped")
+        check(
+            AgentDetector.cleanUnquoted("\"\"\"nested\"\"\"") == "nested",
+            "L125 deeply nested quotes stripped")
+        check(
+            AgentDetector.cleanUnquoted("\"'wrapped'\"") == "wrapped",
+            "L125 mixed nested quotes stripped")
+        check(
+            AgentDetector.cleanUnquoted("  \"  spaces  \"  ") == "spaces",
+            "L125 whitespace trimmed inside quotes")
+        check(AgentDetector.cleanUnquoted("\"\"") == nil, "L125 empty quotes returns nil")
+        check(AgentDetector.cleanUnquoted("''") == nil, "L125 empty single quotes returns nil")
+        check(AgentDetector.cleanUnquoted("   ") == nil, "L125 whitespace string returns nil")
+        check(AgentDetector.cleanUnquoted(nil) == nil, "L125 nil returns nil")
+
+        // MARK: - L126 CWD Extraction with Spaces, Escaped Quotes, and Tool Calls
+        let cwdTop = "{\"cwd\":\"/Users/rhyon/My Projects/bantay-tui\"}"
+        check(
+            AgentDetector.extractCwd(cwdTop) == "/Users/rhyon/My Projects/bantay-tui",
+            "L126 top-level cwd with spaces extracted")
+
+        let cwdCap = "{\"Cwd\":\"/tmp/repo\"}"
+        check(AgentDetector.extractCwd(cwdCap) == "/tmp/repo", "L126 top-level Cwd extracted")
+
+        let cwdTool =
+            "{\"tool_calls\":[{\"name\":\"bash\",\"args\":{\"Cwd\":\"\\\"/Users/rhyon/repo\\\"\"}}]}"
+        check(
+            AgentDetector.extractCwd(cwdTool) == "/Users/rhyon/repo",
+            "L126 tool call Cwd with quotes extracted")
+
+        let cwdOpenAI =
+            "{\"tool_calls\":[{\"name\":\"bash\",\"arguments\":\"{\\\"Cwd\\\":\\\"/Users/rhyon/openai-repo\\\"}\"}]}"
+        check(
+            AgentDetector.extractCwd(cwdOpenAI) == "/Users/rhyon/openai-repo",
+            "L126 tool call stringified arguments Cwd extracted")
+
+        let noCwd = "{\"type\":\"USER_INPUT\",\"content\":\"Hello\"}"
+        check(AgentDetector.extractCwd(noCwd) == nil, "L126 line without Cwd returns nil")
+        check(
+            AgentDetector.extractCwd("not json") == nil, "L126 malformed line returns nil for cwd")
+
+        // MARK: - L127 Protocol Checkpoints, Internal Warnings, and File Dumps
+        let checkpointLine = "{\"type\":\"CHECKPOINT\",\"state\":\"commit-a1b2c\"}"
+        check(AgentDetector.readableLine(checkpointLine) == nil, "L127 CHECKPOINT returns nil")
+
+        let ephemeralLine = "{\"type\":\"EPHEMERAL_MESSAGE\",\"payload\":\"heartbeat\"}"
+        check(
+            AgentDetector.readableLine(ephemeralLine) == nil, "L127 EPHEMERAL_MESSAGE returns nil")
+
+        let taskStateLine = "{\"type\":\"TASK_STATE\",\"status\":\"pending\"}"
+        check(AgentDetector.readableLine(taskStateLine) == nil, "L127 TASK_STATE returns nil")
+
+        let systemLine = "{\"source\":\"SYSTEM\",\"content\":\"System notification\"}"
+        check(AgentDetector.readableLine(systemLine) == nil, "L127 source SYSTEM returns nil")
+
+        let dumpLine =
+            "{\"content\":\"Created At: 2026-09-12T01:00:00Z\\nFile Path: /tmp/file.swift\"}"
+        check(AgentDetector.readableLine(dumpLine) == nil, "L127 tool output dump returns nil")
+
+        let exitLine = "session.turn.close"
+        check(
+            AgentDetector.readableLine(exitLine) == "Idle", "L127 session.turn.close returns Idle")
+        let loopExit = "exiting loop"
+        check(AgentDetector.readableLine(loopExit) == "Idle", "L127 exiting loop returns Idle")
+
+        check(!AgentDetector.isWorkingActivity("Idle"), "L127 Idle is not working")
+        check(!AgentDetector.isWorkingActivity("Completed"), "L127 Completed is not working")
+        check(
+            AgentDetector.isWorkingActivity("Running swift build"),
+            "L127 Running swift build is working")
+
+        // MARK: - L128 Reverse Transcript Scanning & Trailing Noise Filtering
+        let tempDirL128 = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l128-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDirL128, withIntermediateDirectories: true)
+        let transcriptL128 = tempDirL128.appendingPathComponent("session.jsonl")
+        let linesL128 = [
+            "{\"Cwd\":\"/Users/rhyon/bantay-project\"}",
+            "{\"tool_calls\":[{\"name\":\"replace_file_content\",\"args\":{\"TargetFile\":\"Sources/App.swift\"}}]}",
+            "{\"type\":\"CHECKPOINT\",\"state\":\"done\"}",
+            "{\"content\":\"Created At: 2026-09-12\\nFile Path: /tmp/log\"}",
+        ].joined(separator: "\n")
+        try? linesL128.write(to: transcriptL128, atomically: true, encoding: .utf8)
+
+        if let infoL128 = AgentDetector.latestActivityInfo(root: tempDirL128.path) {
+            check(
+                infoL128.activity == "Editing App.swift",
+                "L128 latestActivityInfo reverse scans past checkpoints (got: \(infoL128.activity))"
+            )
+            check(
+                infoL128.cwd == "/Users/rhyon/bantay-project",
+                "L128 latestActivityInfo finds cwd from earlier line (got: \(String(describing: infoL128.cwd)))"
+            )
+            check(infoL128.isRecent == true, "L128 newly written transcript is recent")
+        } else {
+            check(false, "L128 latestActivityInfo failed to scan mock transcript directory")
+        }
+        try? FileManager.default.removeItem(at: tempDirL128)
+
+        // MARK: - L129 recentTranscriptOutput Multi-Turn Formatting & Clamping
+        let tempDirL129 = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-l129-\(UUID().uuidString)")
+        let agyLogDir =
+            tempDirL129
+            .appendingPathComponent(
+                ".gemini/antigravity-ide/brain/test-conv/.system_generated/logs")
+        try? FileManager.default.createDirectory(at: agyLogDir, withIntermediateDirectories: true)
+        let transcriptL129 = agyLogDir.appendingPathComponent("transcript.jsonl")
+        let linesL129 = [
+            "{\"type\":\"USER_INPUT\",\"content\":\"Fix the memory leak\"}",
+            "{\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"toolSummary\":\"Run tests\"}}]}",
+            "{\"tool_calls\":[{\"name\":\"view_file\",\"arguments\":\"{\\\"toolSummary\\\":\\\"Inspect memory map\\\"}\"}]}",
+            "{\"tool_calls\":[{\"name\":\"replace_file_content\",\"args\":{\"TargetFile\":\"/src/leak.c\"}}]}",
+            "{\"thinking\":\"Analyzing retain cycle in node graph...\"}",
+            "{\"content\":\"Identified retain cycle in closure.\"}",
+            "{\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Closure capture list fixed.\"}]}}",
+            "{\"type\":\"CHECKPOINT\",\"state\":\"saved\"}",
+            "{\"content\":\"Created At: 2026-09-12\\nFile Path: /src/leak.c\"}",
+        ].joined(separator: "\n")
+        try? linesL129.write(to: transcriptL129, atomically: true, encoding: .utf8)
+
+        let outputL129 = AgentDetector.recentTranscriptOutput(
+            forAgent: "antigravity", maxLines: 5, home: tempDirL129.path)
+        check(!outputL129.isEmpty, "L129 recentTranscriptOutput finds and parses transcript")
+        check(
+            outputL129.count <= 5,
+            "L129 output is clamped to maxLines (got count: \(outputL129.count))")
+        check(
+            !outputL129.contains(where: { $0.contains("CHECKPOINT") }),
+            "L129 output excludes CHECKPOINT")
+        check(
+            !outputL129.contains(where: { $0.contains("Created At:") }),
+            "L129 output excludes file dumps")
+        check(
+            outputL129.contains(where: {
+                $0.hasPrefix("● ") || $0.hasPrefix("💭 ") || $0.hasPrefix("→ ")
+            }), "L129 output contains formatted turn icons")
+
+        let nonExistentOutput = AgentDetector.recentTranscriptOutput(
+            forAgent: "nonexistent", maxLines: 5, home: tempDirL129.path)
+        check(nonExistentOutput.isEmpty, "L129 nonexistent agent returns empty array")
+        try? FileManager.default.removeItem(at: tempDirL129)
+
+        // MARK: - L130 Standalone Agent Roster Merge & Virtual Pane Identification
+        let agentA = DetectedAgent(
+            pid: 1001, name: "antigravity", activity: "Editing App.swift", isWorking: true,
+            cwd: "/my/repo")
+        let agentB = DetectedAgent(
+            pid: 1002, name: "cursor", activity: "Idle", isWorking: false, cwd: nil)
+        let herdrWithA = [
+            HerdrAgentInfo(
+                agent: "antigravity", agentStatus: "working", paneId: "1-1",
+                workspaceId: "1", terminalTitle: "compile", cwd: nil,
+                agentSession: nil
+            )
+        ]
+        let mergedWithHerdr = AgentEventManager(capture: false).mergeStandalone(
+            into: herdrWithA, detected: [agentA, agentB])
+        check(
+            mergedWithHerdr.count == 2,
+            "L130 merge preserves herdr agent and adds new standalone agent (got: \(mergedWithHerdr.count))"
+        )
+        check(mergedWithHerdr[0].paneId == "1-1", "L130 herdr agent retains paneId")
+        check(mergedWithHerdr[1].paneId == nil, "L130 standalone agent has nil paneId")
+        check(
+            mergedWithHerdr[1].agentStatus == "idle", "L130 idle standalone agent has idle status")
+
+        let virtualPane = "standalone:antigravity:1001"
+        check(virtualPane.hasPrefix("standalone:"), "L130 virtual pane prefix detected")
+        let isolatedSource = virtualPane.components(separatedBy: ":")[1]
+        check(isolatedSource == "antigravity", "L130 virtual pane extracts agent source")
+
+        // MARK: - L131 PlexerFactory Detection & Dynamic Adapter Creation
+        let tmuxAdapter = PlexerFactory.makeAdapter(
+            env: ["TMUX": "1"],
+            herdrSocketExists: false,
+            tmuxSocketExists: true,
+            herdrBinaryExists: false
+        )
+        check(
+            tmuxAdapter.kind == .tmux, "L131 PlexerFactory creates TmuxAdapter when TMUX detected")
+
+        let zellijAdapter = PlexerFactory.makeAdapter(
+            env: ["ZELLIJ": "1"],
+            herdrSocketExists: false,
+            tmuxSocketExists: false,
+            herdrBinaryExists: false
+        )
+        check(
+            zellijAdapter.kind == .zellij,
+            "L131 PlexerFactory creates ZellijAdapter when ZELLIJ detected")
+
+        let herdrAdapter = PlexerFactory.makeAdapter(
+            env: ["HERDR_ENV": "1"],
+            herdrSocketExists: true,
+            tmuxSocketExists: false,
+            herdrBinaryExists: true
+        )
+        check(
+            herdrAdapter.kind == .herdr,
+            "L131 PlexerFactory creates HerdrSocketAdapter when HERDR detected")
+
+        let fallbackAdapter = PlexerFactory.makeAdapter(
+            env: [:],
+            herdrSocketExists: false,
+            tmuxSocketExists: false,
+            herdrBinaryExists: false
+        )
+        check(
+            fallbackAdapter.kind == .herdr,
+            "L131 PlexerFactory falls back to HerdrSocketAdapter by default")
+
+        // MARK: - L132 Full-Screen Transition Policy Verification
+        check(
+            IslandMetrics.FullScreenPolicy.shouldShow(inFullScreen: true, showInFullScreen: true),
+            "L132 shouldShow is true in fullscreen when showInFullScreen is true"
+        )
+        check(
+            !IslandMetrics.FullScreenPolicy.shouldShow(inFullScreen: true, showInFullScreen: false),
+            "L132 shouldShow is false in fullscreen when showInFullScreen is false"
+        )
+        check(
+            IslandMetrics.FullScreenPolicy.shouldShow(inFullScreen: false, showInFullScreen: false),
+            "L132 shouldShow is true when exiting fullscreen (inFullScreen: false) even if showInFullScreen is false"
+        )
+        check(
+            IslandMetrics.FullScreenPolicy.shouldShow(inFullScreen: false, showInFullScreen: true),
+            "L132 shouldShow is true when not in fullscreen"
+        )
+
+        // MARK: - L133 Safe Boundary UTF-8 Decoding
+        let emoji = "💭 Thinking..."
+        let fullData = Data(emoji.utf8)
+        let splitIndex = 2
+        let truncatedData = fullData.subdata(in: splitIndex..<fullData.count)
+        let safeDecoded = String(decoding: truncatedData, as: UTF8.self)
+        check(
+            !safeDecoded.isEmpty,
+            "L133 safe UTF-8 decoding survives boundary split without becoming nil/empty")
+        check(
+            safeDecoded.contains("Thinking..."),
+            "L133 safe UTF-8 decoding preserves valid ASCII remainder")
+
+        // MARK: - L134 ChoiceExtractor Duplicate Option ID Reset
+        let successivePrompts = [
+            "1. Run tests",
+            "2. Review diff",
+            "1. Continue",
+            "2. Cancel",
+        ]
+        let choicesL134 = ChoiceExtractor.extractChoices(fromLines: successivePrompts)
+        check(
+            choicesL134.count == 2,
+            "L134 ChoiceExtractor resets on second prompt starting at 1 (got: \(choicesL134.count))"
+        )
+        check(
+            choicesL134.first?.label == "Continue",
+            "L134 ChoiceExtractor retains latest prompt choices (got: \(choicesL134.first?.label ?? ""))"
+        )
+        let choiceIDs = choicesL134.map(\.id)
+        check(
+            Set(choiceIDs).count == choiceIDs.count,
+            "L134 ChoiceExtractor option IDs are unique without duplicates")
+
+        // MARK: - L135 Extended Agent Process Classification
+        check(
+            AgentDetector.canonicalName(forProcess: "windsurf") == "windsurf",
+            "L135 windsurf mapped")
+        check(
+            AgentDetector.canonicalName(forProcess: "cascade") == "windsurf",
+            "L135 cascade mapped to windsurf")
+        check(
+            AgentDetector.canonicalName(forProcess: "goose-cli") == "goose",
+            "L135 goose-cli mapped to goose")
+        check(AgentDetector.canonicalName(forProcess: "aider") == "aider", "L135 aider mapped")
+        check(AgentDetector.canonicalName(forProcess: "cline") == "cline", "L135 cline mapped")
+        check(
+            AgentDetector.canonicalName(forProcess: "roo-code") == "roo-code",
+            "L135 roo-code mapped")
+        check(
+            AgentDetector.canonicalName(forProcess: "cody-agent") == "cody",
+            "L135 cody-agent mapped to cody")
+        check(
+            AgentDetector.canonicalName(forProcess: "openhands") == "openhands",
+            "L135 openhands mapped")
+        check(
+            AgentDetector.canonicalName(forProcess: "continue") == "continue",
+            "L135 continue mapped")
+
+        // MARK: - L136 Extended Agent Command Classification
+        check(
+            AgentDetector.canonicalNameFromCommand("/usr/local/bin/windsurf --workspace /repo")
+                == "windsurf",
+            "L136 windsurf command token mapped"
+        )
+        check(
+            AgentDetector.canonicalNameFromCommand("python3 -m aider --model gpt-4") == "aider",
+            "L136 aider command token mapped"
+        )
+        check(
+            AgentDetector.canonicalNameFromCommand("node /ext/roo-code/out/main.js") == "roo-code",
+            "L136 roo-code command token mapped"
+        )
+        check(
+            AgentDetector.canonicalNameFromCommand("goose run --instruction 'fix'") == "goose",
+            "L136 goose command token mapped"
+        )
+        check(
+            AgentDetector.canonicalNameFromCommand("openhands --headless") == "openhands",
+            "L136 openhands command token mapped"
+        )
+
+        // MARK: - L137 Extended Agent Transcript Search Paths
+        let homeTest = "/Users/testuser"
+        let windsurfPaths = AgentDetector.transcriptSearchPaths(home: homeTest, name: "windsurf")
+        check(
+            !windsurfPaths.isEmpty && windsurfPaths[0].contains(".codeium/windsurf"),
+            "L137 windsurf transcript paths found")
+
+        let goosePaths = AgentDetector.transcriptSearchPaths(home: homeTest, name: "goose")
+        check(
+            !goosePaths.isEmpty && goosePaths.contains(where: { $0.contains(".goose") }),
+            "L137 goose transcript paths found")
+
+        let aiderPaths = AgentDetector.transcriptSearchPaths(home: homeTest, name: "aider")
+        check(
+            !aiderPaths.isEmpty && aiderPaths.contains(where: { $0.contains(".aider") }),
+            "L137 aider transcript paths found")
+
+        let clinePaths = AgentDetector.transcriptSearchPaths(home: homeTest, name: "cline")
+        check(
+            !clinePaths.isEmpty
+                && clinePaths.contains(where: { $0.contains("saoudrizwan.claude-dev") }),
+            "L137 cline transcript paths found")
+
+        let rooPaths = AgentDetector.transcriptSearchPaths(home: homeTest, name: "roo-code")
+        check(
+            !rooPaths.isEmpty && rooPaths.contains(where: { $0.contains("roo-cline") }),
+            "L137 roo-code transcript paths found")
+
+        // MARK: - L138 Terminal Registry Kitty, Cursor, Windsurf, Zed
+        let activeKitty = TerminalRegistry.runningTerminal(runningBundleIDs: [
+            "net.kovidgoyal.kitty"
+        ])
+        check(activeKitty == "net.kovidgoyal.kitty", "L138 runningTerminal identifies Kitty")
+
+        let activeCursor = TerminalRegistry.runningTerminal(runningBundleIDs: [
+            "com.todesktop.230313mzl4w4u92"
+        ])
+        check(
+            activeCursor == "com.todesktop.230313mzl4w4u92",
+            "L138 runningTerminal identifies Cursor")
+
+        let activeWindsurf = TerminalRegistry.runningTerminal(runningBundleIDs: [
+            "com.exafunction.windsurf"
+        ])
+        check(
+            activeWindsurf == "com.exafunction.windsurf", "L138 runningTerminal identifies Windsurf"
+        )
+
+        let activeZed = TerminalRegistry.runningTerminal(runningBundleIDs: ["dev.zed.Zed"])
+        check(activeZed == "dev.zed.Zed", "L138 runningTerminal identifies Zed")
+
+        // MARK: - L139 BantayMCPServer JSON-RPC Protocol & Tool Calls
+        let mcpTempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lc-mcp-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: mcpTempDir, withIntermediateDirectories: true)
+        let mcpEventsFile = mcpTempDir.appendingPathComponent("events.jsonl").path
+
+        // 1. initialize handshake
+        let initRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
+        if let initResponse = BantayMCPServer.processMessage(
+            initRequest, eventsPath: mcpEventsFile),
+            let initData = initResponse.data(using: .utf8),
+            let initObj = try? JSONSerialization.jsonObject(with: initData) as? [String: Any],
+            let result = initObj["result"] as? [String: Any]
+        {
+            check(
+                initObj["jsonrpc"] as? String == "2.0",
+                "L139 MCP initialize responds with jsonrpc 2.0")
+            check(initObj["id"] as? Int == 1, "L139 MCP initialize preserves request ID")
+            check(
+                (result["serverInfo"] as? [String: Any])?["name"] as? String == "bantay",
+                "L139 MCP serverInfo name is bantay")
+        } else {
+            check(false, "L139 MCP initialize handshake failed")
+        }
+
+        // 2. ping
+        let pingRequest = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}"
+        let pingResponse = BantayMCPServer.processMessage(pingRequest, eventsPath: mcpEventsFile)
+        check(
+            pingResponse != nil && pingResponse!.contains("\"result\":{}"),
+            "L139 MCP ping returns empty result")
+
+        // 3. tools/list
+        let listRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}"
+        if let listResponse = BantayMCPServer.processMessage(
+            listRequest, eventsPath: mcpEventsFile),
+            let listData = listResponse.data(using: .utf8),
+            let listObj = try? JSONSerialization.jsonObject(with: listData) as? [String: Any],
+            let result = listObj["result"] as? [String: Any],
+            let tools = result["tools"] as? [[String: Any]]
+        {
+            let toolNames = tools.compactMap { $0["name"] as? String }
+            check(
+                toolNames.contains("bantay_set_status"),
+                "L139 tools/list includes bantay_set_status")
+            check(
+                toolNames.contains("bantay_request_approval"),
+                "L139 tools/list includes bantay_request_approval")
+            check(toolNames.contains("bantay_log"), "L139 tools/list includes bantay_log")
+        } else {
+            check(false, "L139 MCP tools/list failed")
+        }
+
+        // 4. tools/call bantay_set_status
+        let callStatusReq = """
+            {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"bantay_set_status","arguments":{"agent":"goose","status":"thinking","message":"Refactoring module"}}}
+            """
+        let callStatusRes = BantayMCPServer.processMessage(callStatusReq, eventsPath: mcpEventsFile)
+        check(
+            callStatusRes != nil && callStatusRes!.contains("Status updated to thinking"),
+            "L139 bantay_set_status tool call succeeded")
+
+        // 5. tools/call bantay_request_approval with choices
+        let callApprovalReq = """
+            {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"bantay_request_approval","arguments":{"agent":"windsurf","title":"Apply migration?","options":["Yes","No","Review"]}}}
+            """
+        let callApprovalRes = BantayMCPServer.processMessage(
+            callApprovalReq, eventsPath: mcpEventsFile)
+        check(
+            callApprovalRes != nil && callApprovalRes!.contains("Approval requested"),
+            "L139 bantay_request_approval tool call succeeded")
+
+        // 6. Verify written events in mock file
+        let writtenEvents = (try? String(contentsOfFile: mcpEventsFile, encoding: .utf8)) ?? ""
+        check(
+            writtenEvents.contains("\"source\":\"goose\""),
+            "L139 mock events file received goose status event")
+        check(
+            writtenEvents.contains("\"type\":\"progress\""), "L139 thinking mapped to progress type"
+        )
+        check(
+            writtenEvents.contains("\"source\":\"windsurf\""),
+            "L139 mock events file received windsurf approval event")
+        check(
+            writtenEvents.contains("\"variance\":\"choices\""),
+            "L139 approval with options sets choices variance")
+
+        // 7. Error handling: invalid JSON and unknown method
+        let invalidJsonRes = BantayMCPServer.processMessage("{bad json}", eventsPath: mcpEventsFile)
+        check(
+            invalidJsonRes != nil && invalidJsonRes!.contains("-32700"),
+            "L139 invalid JSON returns -32700 parse error")
+
+        let unknownMethodRes = BantayMCPServer.processMessage(
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"unknown/foo\"}", eventsPath: mcpEventsFile)
+        check(
+            unknownMethodRes != nil && unknownMethodRes!.contains("-32601"),
+            "L139 unknown method returns -32601 error")
+
+        try? FileManager.default.removeItem(at: mcpTempDir)
+
+        // MARK: - L140 MCP Notifications Return Nil
+        let notifInit = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"
+        check(
+            BantayMCPServer.processMessage(notifInit) == nil,
+            "L140 MCP initialized notification returns nil")
+
+        // MARK: - L141 Multi-Session Antigravity Discovery & Scoped PaneIDs
+        // 1. Enhanced extractCwd checks DirectoryPath, SearchPath, and Active Document headers
+        let dirPathLine =
+            "{\"tool_calls\":[{\"name\":\"list_dir\",\"args\":{\"DirectoryPath\":\"/Users/test/proj\"}}]}"
+        check(
+            AgentDetector.extractCwd(dirPathLine) == "/Users/test/proj",
+            "L141 extractCwd parses DirectoryPath")
+
+        let searchPathLine =
+            "{\"tool_calls\":[{\"name\":\"grep_search\",\"args\":{\"SearchPath\":\"/Users/test/proj/src\"}}]}"
+        check(
+            AgentDetector.extractCwd(searchPathLine) == "/Users/test/proj/src",
+            "L141 extractCwd parses SearchPath")
+
+        let docHeaderLine =
+            "{\"type\":\"USER_INPUT\",\"content\":\"Active Document: /Users/test/proj/src/App.swift\"}"
+        check(
+            AgentDetector.extractCwd(docHeaderLine) == "/Users/test/proj/src",
+            "L141 extractCwd parses Active Document header")
+
+        // 2. Multi-session discovery with activeSessionsInfo
+        let brainMockDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "bantay-test-brain-\(UUID().uuidString)")
+        let session1Dir = brainMockDir.appendingPathComponent("session-portfolio")
+        let session2Dir = brainMockDir.appendingPathComponent("session-bantaytui")
+        try? FileManager.default.createDirectory(at: session1Dir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: session2Dir, withIntermediateDirectories: true)
+
+        let transcript1 = session1Dir.appendingPathComponent("transcript.jsonl")
+        let transcript2 = session2Dir.appendingPathComponent("transcript.jsonl")
+
+        let lineS1 =
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"Created navbar\",\"tool_calls\":[{\"name\":\"write_to_file\",\"args\":{\"Cwd\":\"/Users/test/Portfolio\"},\"toolSummary\":\"Update Navbar\"}]}"
+        let lineS2 =
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"Fixed detection\",\"tool_calls\":[{\"name\":\"edit\",\"args\":{\"Cwd\":\"/Users/test/bantay-tui\"},\"toolSummary\":\"Fix Detection\"}]}"
+
+        try? lineS1.write(to: transcript1, atomically: true, encoding: .utf8)
+        try? lineS2.write(to: transcript2, atomically: true, encoding: .utf8)
+
+        let sessions = AgentDetector.activeSessionsInfo(
+            root: brainMockDir.path, recentThreshold: 300)
+        check(
+            sessions.count == 2,
+            "L141 activeSessionsInfo discovers both concurrent sessions (got \(sessions.count))")
+
+        let cwds = Set(sessions.compactMap(\.cwd))
+        check(
+            cwds.contains("/Users/test/Portfolio"),
+            "L141 activeSessionsInfo captured session 1 cwd")
+        check(
+            cwds.contains("/Users/test/bantay-tui"),
+            "L141 activeSessionsInfo captured session 2 cwd")
+
+        let activities = Set(sessions.map(\.activity))
+        check(
+            activities.contains("Update Navbar"),
+            "L141 activeSessionsInfo captured session 1 activity")
+        check(
+            activities.contains("Fix Detection"),
+            "L141 activeSessionsInfo captured session 2 activity")
+
+        // 3. StandaloneAgentScanner detects both sessions from a single Antigravity process
+        let agySample = ProcessSample(
+            pid: 777,
+            name: "Antigravity",
+            command: "/Applications/Antigravity.app/Contents/MacOS/Antigravity",
+            environmentLines: []
+        )
+        let mockHome = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "bantay-mock-home-\(UUID().uuidString)")
+        let geminiBrain = mockHome.appendingPathComponent(".gemini/antigravity-ide/brain")
+        try? FileManager.default.createDirectory(at: geminiBrain, withIntermediateDirectories: true)
+        let gS1 = geminiBrain.appendingPathComponent("uuid-1")
+        let gS2 = geminiBrain.appendingPathComponent("uuid-2")
+        try? FileManager.default.createDirectory(at: gS1, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: gS2, withIntermediateDirectories: true)
+        try? lineS1.write(
+            to: gS1.appendingPathComponent("transcript.jsonl"), atomically: true, encoding: .utf8)
+        try? lineS2.write(
+            to: gS2.appendingPathComponent("transcript.jsonl"), atomically: true, encoding: .utf8)
+
+        let agyDetected = StandaloneAgentScanner.detect(samples: [agySample], home: mockHome.path)
+        check(
+            agyDetected.count == 2,
+            "L141 StandaloneAgentScanner surfaces 2 detected agents for 2 windows (got \(agyDetected.count))"
+        )
+
+        // 4. Scoped paneId preventing collisions
+        let info1 = HerdrAgentInfo(
+            agent: "antigravity",
+            agentStatus: "working",
+            paneId: "standalone:antigravity:Portfolio",
+            workspaceId: nil,
+            terminalTitle: "Update Navbar",
+            cwd: "/Users/test/Portfolio",
+            agentSession: nil
+        )
+        let info2 = HerdrAgentInfo(
+            agent: "antigravity",
+            agentStatus: "working",
+            paneId: "standalone:antigravity:bantay-tui",
+            workspaceId: nil,
+            terminalTitle: "Fix Detection",
+            cwd: "/Users/test/bantay-tui",
+            agentSession: nil
+        )
+        var seenL141: [String: AgentEventKind] = [:]
+        let updateResult = AgentEventManager.update(
+            from: [info1, info2], lastSeenKinds: &seenL141, current: nil)
+        check(
+            updateResult.roster.count == 2,
+            "L141 roster retains both Antigravity window sessions (got \(updateResult.roster.count))"
+        )
+        check(
+            updateResult.events.count == 2,
+            "L141 update emits events for both window sessions without collision")
+        check(
+            updateResult.roster[0].id != updateResult.roster[1].id,
+            "L141 roster items have distinct IDs")
+
+        // 5. RichSessionViewer HTML generation
+        let turns = RichSessionViewer.parseTranscript(lines: [
+            "{\"type\":\"USER_INPUT\",\"content\":\"Refactor navigation\"}",
+            lineS1,
+        ])
+        check(
+            turns.count == 2,
+            "L141 RichSessionViewer parsed transcript turns (got \(turns.count))")
+        check(turns[0].kind == .userPrompt, "L141 first turn is userPrompt")
+        check(turns[1].kind == .toolCall, "L141 second turn is toolCall")
+
+        let gitMock = RichSessionViewer.GitContext(
+            status: " M Sources/App.swift",
+            diffStat: " Sources/App.swift | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
+            unifiedDiff: "@@ -1,3 +1,3 @@\n-old code\n+new code",
+            branch: "feature/nav"
+        )
+        let html = RichSessionViewer.generateHtml(
+            agentName: "antigravity",
+            projectSlug: "Portfolio",
+            cwd: "/Users/test/Portfolio",
+            isWorking: true,
+            turns: turns,
+            git: gitMock
+        )
+        check(html.contains("<!DOCTYPE html>"), "L141 HTML contains DOCTYPE")
+        check(html.contains("Portfolio"), "L141 HTML contains project slug")
+        check(html.contains("Refactor navigation"), "L141 HTML contains user prompt")
+        check(html.contains("Update Navbar"), "L141 HTML contains tool summary")
+        check(html.contains("diff-add"), "L141 HTML contains highlighted diff additions")
+
+        // L142. Plan 019 A4 — Notifications that act: Actionable notifications & in-notch popover
+        // 1. IslandMetrics notification card dimensions and height calculation
+        check(
+            IslandMetrics.notificationHeight == 82,
+            "L142 IslandMetrics notificationHeight is 82"
+        )
+        check(
+            IslandMetrics.notificationWidth == 432,
+            "L142 IslandMetrics notificationWidth is 432"
+        )
+        check(
+            IslandMetrics.notificationCornerRadius == 20,
+            "L142 IslandMetrics notificationCornerRadius is 20"
+        )
+        check(
+            IslandMetrics.contentHeight(
+                isExpanded: false, topInset: 32, agentCount: 0, hasNotification: true
+            ) == 82,
+            "L142 contentHeight with hasNotification true returns notificationHeight"
+        )
+        check(
+            IslandMetrics.contentHeight(
+                isExpanded: false, topInset: 32, agentCount: 0, hasNotification: false
+            ) == IslandMetrics.pillHeight,
+            "L142 contentHeight without notification and closed returns pillHeight"
+        )
+        let closedNotificationSize = IslandMetrics.closedSize(
+            topInset: 32, notchWidth: 200, hasNotification: true
+        )
+        check(
+            closedNotificationSize.height == 32 + IslandMetrics.notificationHeight
+                && closedNotificationSize.width == IslandMetrics.notificationWidth,
+            "L142 closedSize with hasNotification true matches notification dimensions"
+        )
+        let standardClosedSize = IslandMetrics.closedSize(
+            topInset: 32, notchWidth: 200, hasNotification: false
+        )
+        check(
+            standardClosedSize.height == 32 + IslandMetrics.pillHeight,
+            "L142 closedSize without notification matches topInset + pillHeight"
+        )
+
+        // 2. ApprovalNotificationController action and category constants
+        check(
+            ApprovalNotificationController.approveActionID == "BANTAY_APPROVE",
+            "L142 approveActionID is BANTAY_APPROVE"
+        )
+        check(
+            ApprovalNotificationController.denyActionID == "BANTAY_DENY",
+            "L142 denyActionID is BANTAY_DENY"
+        )
+        check(
+            ApprovalNotificationController.viewSessionActionID == "BANTAY_VIEW_SESSION",
+            "L142 viewSessionActionID is BANTAY_VIEW_SESSION"
+        )
+        check(
+            ApprovalNotificationController.focusActionID == "BANTAY_FOCUS",
+            "L142 focusActionID is BANTAY_FOCUS"
+        )
+        check(
+            ApprovalNotificationController.dismissActionID == "BANTAY_DISMISS",
+            "L142 dismissActionID is BANTAY_DISMISS"
+        )
+        check(
+            ApprovalNotificationController.categoryID == "BANTAY_APPROVAL",
+            "L142 categoryID is BANTAY_APPROVAL"
+        )
+        check(
+            ApprovalNotificationController.choiceCategoryID == "BANTAY_APPROVAL_CHOICE",
+            "L142 choiceCategoryID is BANTAY_APPROVAL_CHOICE"
+        )
+        check(
+            ApprovalNotificationController.completedCategoryID == "BANTAY_COMPLETED",
+            "L142 completedCategoryID is BANTAY_COMPLETED"
+        )
+        check(
+            ApprovalNotificationController.failedCategoryID == "BANTAY_FAILED",
+            "L142 failureCategoryID is BANTAY_FAILED"
+        )
+
+        // 3. AgentAlertNotifier & approvalBody message formatting
+        let completedBody = AgentAlertNotifier.messageBody(
+            source: "claude", kind: .completed, title: nil
+        )
+        check(
+            completedBody == "claude finished",
+            "L142 AgentAlertNotifier messageBody for completed is 'claude finished'"
+        )
+        let failedBody = AgentAlertNotifier.messageBody(
+            source: "codex", kind: .failed, title: nil
+        )
+        check(
+            failedBody == "codex failed",
+            "L142 AgentAlertNotifier messageBody for failed is 'codex failed'"
+        )
+        let customCompletedBody = AgentAlertNotifier.messageBody(
+            source: "claude", kind: .completed, title: "Build succeeded"
+        )
+        check(
+            customCompletedBody == "claude finished: Build succeeded",
+            "L142 AgentAlertNotifier messageBody uses custom title when provided"
+        )
+        let approvalReqBody = AgentAlertNotifier.messageBody(
+            source: "claude", kind: .accessRequest, title: "Run tests?"
+        )
+        check(
+            approvalReqBody == "claude needs your approval: Run tests?",
+            "L142 AgentAlertNotifier messageBody formats approval prompt"
+        )
+
+        // 4. IslandMetrics.shouldPostNotification policy
+        check(
+            IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false,
+                kind: .accessRequest),
+            "L142 shouldPostNotification true for accessRequest when hidden"
+        )
+        check(
+            IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false,
+                kind: .waiting),
+            "L142 shouldPostNotification true for waiting when hidden"
+        )
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false,
+                kind: .completed),
+            "L142 shouldPostNotification false for completed"
+        )
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: false, notifyWhenHidden: true, displayLocked: false,
+                kind: .progress),
+            "L142 shouldPostNotification false for progress noise"
+        )
+        check(
+            !IslandMetrics.shouldPostNotification(
+                islandVisible: true, notifyWhenHidden: true, displayLocked: false,
+                kind: .accessRequest),
+            "L142 shouldPostNotification false when island already visible and unlocked"
+        )
+
+        MainActor.assumeIsolated {
+            let choiceText = ApprovalNotificationController.shared.approvalBody(
+                title: "Confirm delete", choices: ["Yes", "No"]
+            )
+            check(
+                choiceText.contains("1. Yes") && choiceText.contains("2. No"),
+                "L142 ApprovalNotificationController formats choice lines"
+            )
+        }
+
+        // MARK: - L143. Plan 019 A5 & A6 — Menu-bar roster, hotkeys & OpenCode structured adapter
+
+        // 1. Hotkey mapping policy
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 16, modifiers: [.option]) == .approveTop,
+            "L143 hotkeyAction maps Option+Y (16) to approveTop"
+        )
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 45, modifiers: [.option]) == .denyTop,
+            "L143 hotkeyAction maps Option+N (45) to denyTop"
+        )
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 16, modifiers: [.option, .shift]) == nil,
+            "L143 hotkeyAction rejects Option+Shift+Y"
+        )
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 45, modifiers: [.option, .command]) == nil,
+            "L143 hotkeyAction rejects Option+Cmd+N"
+        )
+        check(
+            IslandMetrics.hotkeyAction(keyCode: 99, modifiers: [.option]) == nil,
+            "L143 hotkeyAction rejects unknown keyCode"
+        )
+
+        // 2. OpenCode action writer predicates and project keys
+        check(
+            OpenCodeActionWriter.isOpenCodePane("opencode:frontend"),
+            "L143 isOpenCodePane matches opencode prefix"
+        )
+        check(
+            !OpenCodeActionWriter.isOpenCodePane("standalone:claude"),
+            "L143 isOpenCodePane rejects standalone prefix"
+        )
+        check(
+            !OpenCodeActionWriter.isOpenCodePane("tmux:1"),
+            "L143 isOpenCodePane rejects tmux pane"
+        )
+        check(
+            OpenCodeActionWriter.projectKey(for: "opencode:mobile-app") == "mobile-app",
+            "L143 projectKey strips prefix"
+        )
+
+        // 3. OpenCode decision serialization with choice index
+        let testProject = "test-decision-\(UUID().uuidString)"
+        let testPaneId = "opencode:\(testProject)"
+        let wrote = OpenCodeActionWriter.writeDecision(
+            paneId: testPaneId, approve: true, choiceIndex: 2
+        )
+        check(wrote, "L143 writeDecision succeeds for valid opencode pane")
+
+        let decisionDir = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Bantay-TUI/opencode-decisions", isDirectory: true)
+        let decisionFile = decisionDir.appendingPathComponent("\(testProject).json")
+
+        if let data = try? Data(contentsOf: decisionFile),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            check(
+                (obj["response"] as? Bool) == true,
+                "L143 writeDecision response is true"
+            )
+            check(
+                (obj["choice"] as? Int) == 2,
+                "L143 writeDecision choice index is 2"
+            )
+            check(
+                obj["ts"] is Double,
+                "L143 writeDecision includes timestamp"
+            )
+            try? FileManager.default.removeItem(at: decisionFile)
+        } else {
+            check(false, "L143 writeDecision output file readable and valid JSON")
+        }
+
+        let nonOpenCodeWrote = OpenCodeActionWriter.writeDecision(
+            paneId: "standalone:foo", approve: true
+        )
+        check(!nonOpenCodeWrote, "L143 writeDecision returns false for non-opencode pane")
+
+        // 4. AgentDetector transcript search paths include ~/.local/share/opencode
+        let opencodePaths = AgentDetector.transcriptSearchPaths(
+            home: "/mock/user", name: "opencode"
+        )
+        check(
+            opencodePaths.contains("/mock/user/.local/share/opencode"),
+            "L143 opencode transcript search paths include ~/.local/share/opencode"
+        )
+        check(
+            opencodePaths.contains("/mock/user/.opencode"),
+            "L143 opencode transcript search paths include ~/.opencode"
+        )
+
+        // MARK: - L144. Plan 019 B1 — ntfy approve-back & prompt execution fix
+
+        // 1. Standalone agent name cleaning
+        check(
+            StandaloneAgentDispatcher.cleanAgentName(
+                from: "standalone:antigravity:bantay-tui") == "antigravity",
+            "L144 cleanAgentName strips standalone: and project slug"
+        )
+        check(
+            StandaloneAgentDispatcher.cleanAgentName(from: "standalone:claude") == "claude",
+            "L144 cleanAgentName strips standalone: prefix"
+        )
+        check(
+            StandaloneAgentDispatcher.cleanAgentName(from: "opencode:frontend") == "opencode",
+            "L144 cleanAgentName strips opencode: prefix"
+        )
+
+        // 2. ntfyActions header builder
+        let simpleActions = AgentAlertNotifier.ntfyActions(
+            paneId: "dev:1", choices: nil, callbackBase: "http://my-mac:41817/",
+            token: "sec_token"
+        )
+        check(
+            simpleActions?.contains("label=Approve") == true,
+            "L144 ntfyActions includes Approve button"
+        )
+        check(
+            simpleActions?.contains("label=Deny") == true,
+            "L144 ntfyActions includes Deny button"
+        )
+        check(
+            simpleActions?.contains("pane=dev%3A1") == true,
+            "L144 ntfyActions percent-encodes pane ID"
+        )
+        check(
+            simpleActions?.contains("clear=true") == true,
+            "L144 ntfyActions specifies clear=true"
+        )
+        check(
+            AgentAlertNotifier.ntfyActions(
+                paneId: nil, choices: nil, callbackBase: "http://x", token: "t") == nil,
+            "L144 ntfyActions returns nil for nil pane"
+        )
+
+        let choiceActions = AgentAlertNotifier.ntfyActions(
+            paneId: "dev:1", choices: ["Run tests", "Skip"],
+            callbackBase: "http://my-mac:41817", token: "sec_token"
+        )
+        check(
+            choiceActions?.contains("Choice 1: Run tests") == true,
+            "L144 ntfyActions formats choice 1"
+        )
+        check(
+            choiceActions?.contains("Choice 2: Skip") == true,
+            "L144 ntfyActions formats choice 2"
+        )
+        check(
+            choiceActions?.contains("choice=1") == true,
+            "L144 ntfyActions passes choice parameter"
+        )
+
+        // 3. Rich status body with multi-agent roster
+        let testSnap1 = AgentSnapshot(
+            id: "snap_1", source: "claude", kind: .accessRequest,
+            title: "Run tests?", message: nil, paneId: "dev:1",
+            workspaceId: "w1", cwd: "/Users/me/bantay",
+            variance: .yesNo, choices: nil, startedAt: nil,
+            projectContext: ProjectContext(
+                project: "bantay", branch: "main", isGit: true, diffStat: "+2 -1")
+        )
+        let testSnap2 = AgentSnapshot(
+            id: "snap_2", source: "codex", kind: .progress,
+            title: "Editing file.swift", message: nil, paneId: "dev:2",
+            workspaceId: "w1", cwd: "/Users/me/api",
+            variance: nil, choices: nil, startedAt: nil,
+            projectContext: ProjectContext(
+                project: "api", branch: "feat", isGit: true, diffStat: nil)
+        )
+        let richBody = AgentAlertNotifier.messageBody(
+            source: "claude", kind: .accessRequest, title: "Run tests?",
+            roster: [testSnap1, testSnap2]
+        )
+        check(
+            richBody.contains("claude needs your approval: Run tests?"),
+            "L144 richBody contains headline"
+        )
+        check(
+            richBody.contains("Active agents (2):"),
+            "L144 richBody carries active agents header"
+        )
+        check(
+            richBody.contains("• claude (bantay · main): 🟡"),
+            "L144 richBody formats agent 1 with yellow glyph and branch"
+        )
+        check(
+            richBody.contains("• codex (api · feat): 🟢"),
+            "L144 richBody formats agent 2 with green glyph and branch"
+        )
+
+        // 4. IngestHTTP action parsing
+        let approveReqData = Data(
+            ("POST /approve?token=tok&pane=dev:1 HTTP/1.1\r\n"
+                + "Content-Length: 0\r\n\r\n").utf8
+        )
+        guard let parsedApproveReq = IngestHTTP.request(from: approveReqData) else {
+            check(false, "L144 approve request parses")
+            fatalError()
+        }
+        check(
+            IngestHTTP.action(from: parsedApproveReq) == .approve(paneId: "dev:1"),
+            "L144 IngestHTTP.action parses /approve"
+        )
+
+        let denyReqData = Data(
+            ("POST /action?token=tok&action=deny&pane=w1:p2 HTTP/1.1\r\n"
+                + "Content-Length: 0\r\n\r\n").utf8
+        )
+        guard let parsedDenyReq = IngestHTTP.request(from: denyReqData) else {
+            check(false, "L144 deny request parses")
+            fatalError()
+        }
+        check(
+            IngestHTTP.action(from: parsedDenyReq) == .deny(paneId: "w1:p2"),
+            "L144 IngestHTTP.action parses /action?action=deny"
+        )
+
+        let choiceReqData = Data(
+            ("POST /choice?token=tok&pane=dev:3&choice=2 HTTP/1.1\r\n"
+                + "Content-Length: 0\r\n\r\n").utf8
+        )
+        guard let parsedChoiceReq = IngestHTTP.request(from: choiceReqData) else {
+            check(false, "L144 choice request parses")
+            fatalError()
+        }
+        check(
+            IngestHTTP.action(from: parsedChoiceReq) == .choice(paneId: "dev:3", index: 2),
+            "L144 IngestHTTP.action parses /choice with choice index"
+        )
+
+        let jsonActionBody = "{\"action\":\"approve\",\"pane_id\":\"opencode:proj\"}"
+        let jsonActionData = Data(
+            ("POST /events?token=tok HTTP/1.1\r\n"
+                + "Content-Length: \(jsonActionBody.utf8.count)\r\n\r\n\(jsonActionBody)").utf8
+        )
+        guard let parsedJSONReq = IngestHTTP.request(from: jsonActionData) else {
+            check(false, "L144 JSON action request parses")
+            fatalError()
+        }
+        check(
+            IngestHTTP.action(from: parsedJSONReq) == .approve(paneId: "opencode:proj"),
+            "L144 IngestHTTP.action parses JSON action body"
+        )
+
+        let normalEventBody = "{\"type\":\"progress\"}"
+        let normalEventData = Data(
+            ("POST /events?token=tok HTTP/1.1\r\n"
+                + "Content-Length: \(normalEventBody.utf8.count)\r\n\r\n\(normalEventBody)").utf8
+        )
+        guard let parsedNormalReq = IngestHTTP.request(from: normalEventData) else {
+            check(false, "L144 normal event request parses")
+            fatalError()
+        }
+        check(
+            IngestHTTP.action(from: parsedNormalReq) == nil,
+            "L144 IngestHTTP.action returns nil for normal event payload"
+        )
+
+        // 5. Config effective callback URL
+        config.ntfyCallbackURL = "http://my-tunnel.net:41817/"
+        check(
+            config.effectiveCallbackURL == "http://my-tunnel.net:41817",
+            "L144 effectiveCallbackURL strips trailing slash"
+        )
+        config.ntfyCallbackURL = ""
+        check(
+            config.effectiveCallbackURL.hasPrefix("http://127.0.0.1:"),
+            "L144 effectiveCallbackURL falls back to localhost ingest port"
+        )
+
+        // L145. Plan 019 B4, C1, C2 — Away Digest, Multi-Agent Timeline, Spend History
+        let awayStore = AwayDigestStore()
+        let awayT0 = Date(timeIntervalSince1970: 1_700_000_000)
+        awayStore.beginAway(now: awayT0, baselineCost: 1.50, baselineTokens: 50000)
+        check(awayStore.isAway, "L145 AwayDigestStore enters away state")
+
+        let comp1 = RecentCompletion(
+            id: "c1", source: "claude", kind: .completed, title: "Refactor parser",
+            createdAt: awayT0.addingTimeInterval(300), duration: 25.0
+        )
+        let comp2 = RecentCompletion(
+            id: "c2", source: "codex", kind: .completed, title: "Run unit tests",
+            createdAt: awayT0.addingTimeInterval(500), duration: 10.0
+        )
+        awayStore.recordCompletion(comp1)
+        awayStore.recordCompletion(comp2)
+        awayStore.recordFailure(agent: "windsurf", reason: "Connection timeout")
+        awayStore.recordApprovalAnswered()
+
+        let awayT1 = awayT0.addingTimeInterval(600)  // 10 minutes later
+        awayStore.endAway(
+            now: awayT1,
+            currentCost: 1.85,
+            currentTokens: 58500,
+            pendingApprovals: 1
+        )
+        check(!awayStore.isAway, "L145 AwayDigestStore exits away state")
+        guard let digest = awayStore.currentDigest else {
+            check(false, "L145 AwayDigestStore compiled active digest")
+            fatalError()
+        }
+        check(digest.completedTasks.count == 2, "L145 digest has 2 completed tasks")
+        check(digest.failedTasks.count == 1, "L145 digest has 1 failed task")
+        check(digest.approvalsAnswered == 1, "L145 digest has 1 approval answered")
+        check(digest.approvalsPending == 1, "L145 digest has 1 approval pending")
+        check(abs(digest.costUSD - 0.35) < 0.001, "L145 digest cost delta is $0.35")
+        check(digest.tokensBurned == 8500, "L145 digest tokens delta is 8500")
+        check(digest.formattedDuration == "10m", "L145 digest formatted duration is 10m")
+        check(digest.fastestAgent?.agent == "codex", "L145 fastest agent is codex")
+        check(digest.fastestAgent?.duration == 10.0, "L145 fastest agent duration is 10s")
+        check(digest.slowestAgent?.agent == "claude", "L145 slowest agent is claude")
+        check(digest.summaryLines.count >= 4, "L145 digest summaryLines has expected bullet points")
+
+        let digestMsg = IngestHTTP.digestResponse(digest: digest, todayCost: 1.85)
+        check(
+            digestMsg.contains("🌙 Away Digest (10m):"),
+            "L145 digestResponse formats active digest header"
+        )
+        check(
+            digestMsg.contains("2 completed (claude, codex)"),
+            "L145 digestResponse includes completions"
+        )
+
+        let fallbackMsg = IngestHTTP.digestResponse(digest: nil, todayCost: 2.40)
+        check(
+            fallbackMsg.contains("Today's spend: $2.40"),
+            "L145 digestResponse formats fallback status"
+        )
+
+        awayStore.dismiss()
+        check(awayStore.currentDigest == nil, "L145 dismiss resets active digest")
+
+        // 2. MultiAgentTimelineStore
+        let timelineStore = MultiAgentTimelineStore()
+        timelineStore.recordEvent(
+            agentName: "claude", project: "bantay", kind: .progress,
+            title: "Analyzing repository", tool: "ripgrep", now: awayT0
+        )
+        check(timelineStore.segments.count == 1, "L145 timeline records progress event")
+        check(timelineStore.segments[0].endTime == nil, "L145 ongoing segment has nil endTime")
+
+        timelineStore.recordEvent(
+            agentName: "claude", project: "bantay", kind: .accessRequest,
+            title: "Approve bash command?", now: awayT0.addingTimeInterval(30)
+        )
+        check(
+            timelineStore.segments.count == 2,
+            "L145 timeline appends new segment on state change"
+        )
+        check(
+            timelineStore.segments[0].endTime == awayT0.addingTimeInterval(30),
+            "L145 prior segment is closed at transition time"
+        )
+
+        timelineStore.recordEvent(
+            agentName: "codex", project: "api", kind: .completed,
+            title: "Lint passed", now: awayT0.addingTimeInterval(45)
+        )
+        check(timelineStore.segments.count == 3, "L145 timeline records second agent event")
+        check(
+            timelineStore.recordedAgents() == ["claude", "codex"],
+            "L145 recordedAgents returns unique sorted agents"
+        )
+
+        let claudeOnly = timelineStore.filteredSegments(agent: "claude")
+        check(claudeOnly.count == 2, "L145 filteredSegments filters by agent name")
+        let codexOnly = timelineStore.filteredSegments(agent: "codex")
+        check(codexOnly.count == 1, "L145 filteredSegments finds codex segments")
+
+        // 3. SpendHistoryStore
+        let tempSpendURL = brainMockDir.appendingPathComponent("spend-test.json")
+        let spendStore = SpendHistoryStore(customFileURL: tempSpendURL)
+        let sampleDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let dateKey = SpendHistoryStore.dateKey(for: sampleDate)
+        check(!dateKey.isEmpty, "L145 dateKey is valid formatted string")
+
+        let snap1 = UsageSnapshot(
+            inputTokens: 10000, outputTokens: 2000, reasoningTokens: 500,
+            cacheReadTokens: 1000, cacheWriteTokens: 500, costUSD: 0.45,
+            costBySource: ["claude": 0.35, "codex": 0.10]
+        )
+        spendStore.recordUsage(snapshot: snap1, peakTPM: 1200.0, date: sampleDate)
+        let dailyRec = spendStore.dailyRecords[dateKey]
+        check(dailyRec != nil, "L145 recordUsage inserts daily record")
+        check(dailyRec?.totalCostUSD == 0.45, "L145 daily record cost is $0.45")
+        check(
+            dailyRec?.totalTokens == snap1.totalTokens,
+            "L145 daily record totalTokens matches snapshot"
+        )
+        check(dailyRec?.costByAgent["claude"] == 0.35, "L145 daily record tracks per-agent cost")
+        check(dailyRec?.peakBurnRateTPM == 1200.0, "L145 daily record tracks peak TPM")
+
+        let recent7 = spendStore.recentDays(count: 7, now: sampleDate)
+        check(recent7.count == 7, "L145 recentDays returns 7 entries")
+        check(recent7.last?.dateKey == dateKey, "L145 last entry in recentDays is sample day")
+
+        let runRate = spendStore.projectedRunRate(budget: 10.0, now: sampleDate)
+        check(runRate.projectedDayUSD >= 0.45, "L145 projectedRunRate projects day spend")
+        check(runRate.fractionOfBudget > 0, "L145 projectedRunRate calculates budget fraction")
+
+        // L146. Rigorous Adversarial, Stress, Race Condition, and UX Sinkhole Battery
+        MainActor.assumeIsolated {
+            // 1. Race Conditions & Stress Testing: 20 agents firing 400 rapid interleaved events
+            let stressTimeline = MultiAgentTimelineStore()
+            let agentPool = (0..<20).map { "agent_\($0)" }
+            let baseDate = Date()
+            for i in 0..<400 {
+                let agent = agentPool[i % agentPool.count]
+                let kind: AgentEventKind
+                if i % 5 == 0 {
+                    kind = .completed
+                } else if i % 5 == 1 {
+                    kind = .accessRequest
+                } else {
+                    kind = .progress
+                }
+                let eventTime = baseDate.addingTimeInterval(Double(i))
+                stressTimeline.recordEvent(
+                    agentName: agent,
+                    project: "proj_\(i % 3)",
+                    kind: kind,
+                    title: "Action \(i)",
+                    tool: (i % 2 == 0) ? "Bash" : nil,
+                    now: eventTime
+                )
+            }
+            check(
+                stressTimeline.segments.count <= 200,
+                "L146 stressTimeline bounds segments to 200 rolling items"
+            )
+            check(
+                stressTimeline.recordedAgents().count == 20,
+                "L146 stressTimeline tracks all 20 active agents"
+            )
+            check(
+                stressTimeline.segments.first?.title == "Action 200",
+                "L146 oldest segments pruned correctly"
+            )
+            check(
+                stressTimeline.segments.last?.title == "Action 399",
+                "L146 newest segment retained"
+            )
+
+            // 2. Clock Skew & Inverted Timestamps
+            let skewTimeline = MultiAgentTimelineStore()
+            let t0 = Date()
+            let tPast = t0.addingTimeInterval(-120)  // 2 minutes in the past
+            skewTimeline.recordEvent(
+                agentName: "skewAgent", kind: .progress, title: "Step 1", now: t0)
+            skewTimeline.recordEvent(
+                agentName: "skewAgent", kind: .completed, title: "Done", now: tPast)
+            let skewSeg = skewTimeline.segments.first
+            check(
+                skewSeg?.duration == 0,
+                "L146 clock skew clamped duration to >= 0 without negative time"
+            )
+            check(
+                (skewSeg?.endTime ?? t0) >= (skewSeg?.startTime ?? t0),
+                "L146 endTime cannot precede startTime"
+            )
+
+            // 3. Rapid Absence / Sleep Debounce (<30s)
+            let awayDebounce = AwayDigestStore()
+            awayDebounce.beginAway(now: t0, baselineCost: 1.0, baselineTokens: 1000)
+            awayDebounce.endAway(
+                now: t0.addingTimeInterval(15), currentCost: 1.0, currentTokens: 1000,
+                pendingApprovals: 0
+            )
+            check(
+                awayDebounce.currentDigest == nil,
+                "L146 rapid absence (<30s) yields nil digest (no false alarm)"
+            )
+
+            // 4. Away absence with negative duration (system clock rollback)
+            let awayClockRollback = AwayDigestStore()
+            awayClockRollback.beginAway(now: t0, baselineCost: 1.0, baselineTokens: 1000)
+            awayClockRollback.endAway(
+                now: t0.addingTimeInterval(-500), currentCost: 1.0, currentTokens: 1000,
+                pendingApprovals: 0
+            )
+            check(
+                awayClockRollback.currentDigest == nil,
+                "L146 clock rollback away duration clamped safely"
+            )
+
+            // 5. Corrupted / Malformed JSON on disk for SpendHistoryStore
+            let corruptTmpDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-corrupt-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(
+                at: corruptTmpDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: corruptTmpDir) }
+
+            // 5a. Truncated JSON
+            let truncatedFile = corruptTmpDir.appendingPathComponent("truncated.json")
+            try? Data("{\"2026-09-15\": {\"totalCostUSD\": 1.".utf8).write(to: truncatedFile)
+            let truncatedStore = SpendHistoryStore(customFileURL: truncatedFile)
+            check(
+                truncatedStore.dailyRecords.isEmpty,
+                "L146 truncated JSON on disk handled gracefully without crash"
+            )
+
+            // 5b. Binary Garbage
+            let binaryGarbageFile = corruptTmpDir.appendingPathComponent("garbage.bin")
+            try? Data([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF]).write(to: binaryGarbageFile)
+            let garbageStore = SpendHistoryStore(customFileURL: binaryGarbageFile)
+            check(
+                garbageStore.dailyRecords.isEmpty,
+                "L146 binary garbage file on disk handled gracefully without crash"
+            )
+
+            // 5c. Overwriting corrupted file with valid record
+            garbageStore.recordUsage(
+                snapshot: UsageSnapshot(
+                    inputTokens: 1000, outputTokens: 500, reasoningTokens: 0,
+                    cacheReadTokens: 0, cacheWriteTokens: 0, costUSD: 0.88,
+                    costBySource: [:]))
+            let reloadedStore = SpendHistoryStore(customFileURL: binaryGarbageFile)
+            check(
+                reloadedStore.dailyRecords[SpendHistoryStore.dateKey()]?.totalCostUSD == 0.88,
+                "L146 corrupted file safely overwritten with valid atomic JSON"
+            )
+
+            // 6. Mathematical Boundaries & Division-by-Zero Protection
+            let zeroSpendStore = SpendHistoryStore(
+                customFileURL: corruptTmpDir.appendingPathComponent("zero.json"))
+            check(
+                zeroSpendStore.recentDays(count: 0).isEmpty,
+                "L146 recentDays with count 0 returns empty list"
+            )
+            check(
+                zeroSpendStore.recentDays(count: -5).isEmpty,
+                "L146 recentDays with negative count returns empty list without fatalError"
+            )
+
+            // Boundary: midnight 00:00:00
+            let cal = Calendar.current
+            var midnightComponents = cal.dateComponents([.year, .month, .day], from: Date())
+            midnightComponents.hour = 0
+            midnightComponents.minute = 0
+            midnightComponents.second = 0
+            let midnightDate = cal.date(from: midnightComponents) ?? Date()
+            let midnightRunRate = zeroSpendStore.projectedRunRate(
+                budget: 10.0, now: midnightDate)
+            check(
+                !midnightRunRate.projectedDayUSD.isNaN
+                    && !midnightRunRate.projectedDayUSD.isInfinite,
+                "L146 projectedRunRate at midnight avoids div-by-zero"
+            )
+
+            // Boundary: budget = 0 or negative
+            let zeroBudgetRunRate = zeroSpendStore.projectedRunRate(budget: 0.0, now: Date())
+            check(
+                zeroBudgetRunRate.fractionOfBudget == 0.0,
+                "L146 projectedRunRate with 0 budget returns 0 fraction without NaN"
+            )
+            let negativeBudgetRunRate = zeroSpendStore.projectedRunRate(budget: -10.0, now: Date())
+            check(
+                negativeBudgetRunRate.fractionOfBudget == 0.0,
+                "L146 projectedRunRate with negative budget returns 0 fraction"
+            )
+
+            // 7. IngestHTTP Adversarial Payloads
+            // Malformed query param
+            let malformedReq = IngestHTTP.Request(
+                method: "POST",
+                target: "/choice?pane=p1&choice=not_an_int",
+                token: nil,
+                body: Data()
+            )
+            check(
+                IngestHTTP.action(from: malformedReq) == nil,
+                "L146 non-numeric choice param returns nil action"
+            )
+
+            // Negative choice index
+            let negChoiceReq = IngestHTTP.Request(
+                method: "POST",
+                target: "/choice?pane=p1&choice=-2",
+                token: nil,
+                body: Data()
+            )
+            if case .choice(let p, let idx) = IngestHTTP.action(from: negChoiceReq) {
+                check(p == "p1" && idx == -2, "L146 negative choice parsed safely")
+            } else {
+                check(false, "L146 negative choice parsed safely")
+            }
+
+            // Invalid JSON body types (e.g. integer action)
+            let badJsonReq = IngestHTTP.Request(
+                method: "POST",
+                target: "/action",
+                token: nil,
+                body: Data("{\"action\": 9999, \"pane\": \"p1\"}".utf8)
+            )
+            check(
+                IngestHTTP.action(from: badJsonReq) == nil,
+                "L146 invalid JSON body types return nil action"
+            )
+
+            // Huge payload body (1MB)
+            let hugePayload = String(repeating: "A", count: 1_000_000)
+            let hugeReq = IngestHTTP.Request(
+                method: "POST",
+                target: "/action",
+                token: nil,
+                body: Data(hugePayload.utf8)
+            )
+            check(
+                IngestHTTP.action(from: hugeReq) == nil,
+                "L146 1MB malformed payload handled gracefully without crash"
+            )
+
+            // Path traversal injection attempt
+            let traversalReq = IngestHTTP.Request(
+                method: "POST",
+                target: "/approve?pane=../../../etc/passwd",
+                token: nil,
+                body: Data()
+            )
+            if case .approve(let paneId) = IngestHTTP.action(from: traversalReq) {
+                check(
+                    paneId == "../../../etc/passwd",
+                    "L146 path traversal string preserved as literal identifier"
+                )
+            } else {
+                check(false, "L146 path traversal parsed as string")
+            }
+
+            // 8. UX Sinkhole Prevention: Empty State Fallbacks & Giant Values
+            let emptyDigest = AwayDigest(
+                startedAt: t0,
+                endedAt: t0.addingTimeInterval(300),
+                awayDuration: 300,
+                completedTasks: [],
+                failedTasks: [],
+                approvalsAnswered: 0,
+                approvalsPending: 0,
+                tokensBurned: 0,
+                costUSD: 0.0
+            )
+            check(
+                emptyDigest.summaryLines == ["Background tasks remained quiet"],
+                "L146 empty digest provides friendly fallback bullet preventing ghost card"
+            )
+
+            // UsageTracker giant token count
+            check(
+                UsageTracker.compactTokens(1_500_000_000) == "1.5b",
+                "L146 UsageTracker formats billion tokens as 1.5b"
+            )
+            check(
+                UsageTracker.compactTokens(42_000_000_000) == "42.0b",
+                "L146 UsageTracker formats 42 billion tokens as 42.0b"
+            )
+
+            // MultiAgentTimelineStore empty lookups
+            let emptyTimeline = MultiAgentTimelineStore()
+            check(
+                emptyTimeline.filteredSegments(agent: "nonexistent").isEmpty,
+                "L146 filteredSegments on nonexistent agent returns empty list"
+            )
+            check(
+                emptyTimeline.recordedAgents().isEmpty,
+                "L146 recordedAgents on empty store returns empty list"
+            )
+
+            // L147. Prompt Execution & Dispatch Robustness:
+            // Standalone agent name sanitization, composer matching without paneId,
+            // and dynamic multiplexer/standalone dispatch routing.
+            check(
+                StandaloneAgentDispatcher.cleanAgentName(
+                    from: "standalone:antigravity:bantay-tui") == "antigravity",
+                "L147 cleanAgentName strips project context suffix for antigravity"
+            )
+            check(
+                StandaloneAgentDispatcher.cleanAgentName(
+                    from: "standalone:claude:proj") == "claude",
+                "L147 cleanAgentName strips project context suffix for claude"
+            )
+            check(
+                StandaloneAgentDispatcher.cleanAgentName(
+                    from: "standalone:codex") == "codex",
+                "L147 cleanAgentName preserves simple standalone name"
+            )
+            check(
+                StandaloneAgentDispatcher.cleanAgentName(
+                    from: "opencode:session") == "opencode",
+                "L147 cleanAgentName handles opencode prefix"
+            )
+            check(
+                StandaloneAgentDispatcher.cleanAgentName(
+                    from: "tmux-pane-1") == "tmux-pane-1",
+                "L147 cleanAgentName preserves raw pane identifier unchanged"
+            )
+
+            // Standalone agent composer identity matching without paneId
+            let standaloneAgent = AgentSnapshot(
+                id: "snap_l147",
+                source: "antigravity",
+                kind: .progress,
+                title: "Antigravity Active Task",
+                message: nil,
+                paneId: nil,
+                workspaceId: nil,
+                cwd: "/Users/someone/bantay-tui",
+                variance: nil,
+                choices: nil,
+                startedAt: Date(),
+                projectContext: nil
+            )
+            let agentKey = standaloneAgent.paneId ?? "standalone:\(standaloneAgent.source)"
+            check(
+                agentKey == "standalone:antigravity",
+                "L147 standalone agent without paneId generates canonical composer key"
+            )
+            let activeComposingPane = "standalone:antigravity"
+            check(
+                activeComposingPane == agentKey,
+                "L147 composer matches standalone agent row when paneId is nil"
+            )
+            let agentList = [standaloneAgent]
+            let shouldRetainComposing = agentList.contains {
+                ($0.paneId ?? "standalone:\($0.source)") == activeComposingPane
+            }
+            check(
+                shouldRetainComposing,
+                "L147 reconcile retains composing state for active standalone agent"
+            )
+
+            // TaskDispatcher alias normalization & budget verification
+            check(
+                TaskDispatcher.canonicalAgentAlias("agy") == "antigravity"
+                    && TaskDispatcher.canonicalAgentAlias("antigravity-ide") == "antigravity"
+                    && TaskDispatcher.canonicalAgentAlias("claude-agent") == "claude"
+                    && TaskDispatcher.canonicalAgentAlias("codex-cli") == "codex"
+                    && TaskDispatcher.canonicalAgentAlias("kilocode") == "kilo",
+                "L147 canonicalAgentAlias normalizes agent aliases correctly"
+            )
+            check(
+                TaskDispatcher.isDispatchAllowed(cost: 10.0, budget: 5.0, enforceLimit: false),
+                "L147 isDispatchAllowed allows execution when limit enforcement is disabled"
+            )
+            check(
+                !TaskDispatcher.isDispatchAllowed(cost: 10.0, budget: 5.0, enforceLimit: true),
+                "L147 isDispatchAllowed blocks execution when cost exceeds budget"
+            )
+            check(
+                TaskDispatcher.isDispatchAllowed(cost: 2.0, budget: 5.0, enforceLimit: true),
+                "L147 isDispatchAllowed permits execution when within budget"
+            )
+
+            // TaskDispatcher dynamic routing
+            let antigravityTask = BantayTask(
+                title: "Inspect agent dispatch",
+                assignedAgent: "antigravity"
+            )
+            let targetPane = TaskDispatcher.shared.dispatch(task: antigravityTask)
+            check(
+                targetPane == "app:antigravity",
+                "L147 dispatch routes antigravity task to app:antigravity target"
+            )
+            let claudeTask = BantayTask(
+                title: "Fix bug in terminal",
+                assignedAgent: "claude"
+            )
+            let claudeTarget = TaskDispatcher.shared.dispatch(task: claudeTask)
+            check(
+                claudeTarget == "standalone:claude",
+                "L147 dispatch routes terminal agent to standalone:claude target"
+            )
+
+            // L148: Multi-provider quotas, search paths, and GUI dispatch routing
+            let mockHomeStr = "/tmp/mock-quota-home"
+            let cursorPaths = AgentDetector.transcriptSearchPaths(home: mockHomeStr, name: "cursor")
+            let codexPaths = AgentDetector.transcriptSearchPaths(home: mockHomeStr, name: "codex")
+            let cloudCodePaths = AgentDetector.transcriptSearchPaths(
+                home: mockHomeStr, name: "cloudcode")
+            check(
+                cursorPaths.contains(mockHomeStr + "/.cursor-agent")
+                    && cursorPaths.contains(mockHomeStr + "/.cursor"),
+                "L148 AgentDetector covers cursor transcript paths"
+            )
+            check(
+                codexPaths.contains(mockHomeStr + "/.codex/sessions")
+                    && codexPaths.contains(mockHomeStr + "/.codex/transcripts"),
+                "L148 AgentDetector covers codex session and transcript paths"
+            )
+            check(
+                cloudCodePaths.contains(mockHomeStr + "/.cloudcode")
+                    && cloudCodePaths.contains(mockHomeStr + "/.config/cloud-code"),
+                "L148 AgentDetector covers cloudcode config and session paths"
+            )
+            check(
+                AgentDetector.canonicalName(forProcess: "cursor") == "cursor"
+                    && AgentDetector.canonicalName(forProcess: "codex") == "codex"
+                    && AgentDetector.canonicalName(forProcess: "cloudcode") == "cloudcode",
+                "L148 AgentDetector canonicalizes cursor, codex, and cloudcode processes"
+            )
+
+            // L148 TaskDispatcher routing for GUI proprietary applications
+            check(
+                TaskDispatcher.canonicalAgentAlias("cursor-agent") == "cursor"
+                    && TaskDispatcher.canonicalAgentAlias("cloud-code") == "cloudcode"
+                    && TaskDispatcher.canonicalAgentAlias("windsurf-ide") == "windsurf"
+                    && TaskDispatcher.canonicalAgentAlias("github-copilot") == "copilot",
+                "L148 canonicalAgentAlias maps cursor, cloudcode, windsurf, and copilot aliases"
+            )
+            let cursorDispatch = TaskDispatcher.shared.dispatch(
+                task: BantayTask(title: "Cursor review", assignedAgent: "cursor")
+            )
+            let codexDispatch = TaskDispatcher.shared.dispatch(
+                task: BantayTask(title: "Codex run", assignedAgent: "codex")
+            )
+            let cloudCodeDispatch = TaskDispatcher.shared.dispatch(
+                task: BantayTask(title: "CloudCode build", assignedAgent: "cloudcode")
+            )
+            check(
+                cursorDispatch == "app:cursor"
+                    && codexDispatch == "app:codex"
+                    && cloudCodeDispatch == "app:cloudcode",
+                "L148 TaskDispatcher dispatches cursor, codex, and cloudcode to GUI app targets"
+            )
+
+            // L148 Live multi-provider quota probing for all 7 providers
+            let liveQuotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: [
+                    "cursor", "claude", "codex", "cloudcode",
+                    "antigravity", "windsurf", "kilo",
+                ],
+                costUSD: 2.50,
+                budgetUSD: 10.0,
+                burnRateTPM: 1200.0
+            )
+            check(
+                liveQuotas.count >= 7,
+                "L148 probeLiveQuotas returns all 7 provider entries (got \(liveQuotas.count))"
+            )
+            let cursorQuota = liveQuotas.first { $0.id == "cursor" }
+            let claudeQuota = liveQuotas.first { $0.id == "claude" }
+            let codexQuota = liveQuotas.first { $0.id == "codex" }
+            let cloudCodeQuota = liveQuotas.first { $0.id == "cloudcode" }
+            let agyQuota = liveQuotas.first { $0.id == "antigravity" }
+            let windsurfQuota = liveQuotas.first { $0.id == "windsurf" }
+            let kiloQuota = liveQuotas.first { $0.id == "kilo" }
+
+            check(
+                cursorQuota != nil && cursorQuota?.totalDisplay.contains("Fast") == true,
+                "L148 cursor quota tracks Fast requests pool"
+            )
+            check(
+                claudeQuota != nil && claudeQuota?.resetHint.contains("5h") == true,
+                "L148 claude quota tracks 5h rolling window"
+            )
+            check(
+                codexQuota != nil && codexQuota?.usedDisplay.contains("$") == true,
+                "L148 codex quota tracks credit and rate limit usage"
+            )
+            check(
+                cloudCodeQuota != nil && cloudCodeQuota?.totalDisplay.contains("RPD") == true,
+                "L148 cloudcode quota tracks RPD quota"
+            )
+            check(
+                agyQuota != nil && agyQuota?.resetHint == "Session Budget",
+                "L148 antigravity quota tracks local session budget"
+            )
+            check(
+                windsurfQuota != nil && windsurfQuota?.totalDisplay == "500 Prompts",
+                "L148 windsurf quota tracks cascade prompt limits"
+            )
+            check(
+                kiloQuota != nil && kiloQuota?.tier == "Pay-as-you-go",
+                "L148 kilo quota tracks prepaid pay-as-you-go tier"
+            )
+
+            // L148 Quota warning & critical thresholds
+            let warnQuota = ProviderQuota(provider: "Cursor", remainingPercent: 18.0)
+            let critQuota = ProviderQuota(provider: "OpenAI Codex", remainingPercent: 3.5)
+            check(
+                warnQuota.isWarning && !warnQuota.isCritical,
+                "L148 isWarning detects remaining quota <= 20%"
+            )
+            check(
+                critQuota.isWarning && critQuota.isCritical,
+                "L148 isCritical detects remaining quota <= 5%"
+            )
+
+            // L148 Over-budget spend clamping
+            let overBudgetQuotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["claude", "antigravity"],
+                costUSD: 50.0,
+                budgetUSD: 10.0,
+                burnRateTPM: 300.0
+            )
+            let claudeOver = overBudgetQuotas.first { $0.id == "claude" }
+            check(
+                claudeOver != nil && claudeOver?.remainingPercent == 0.0,
+                "L148 overBudgetSpend clamps remaining percentage to 0.0"
+            )
+
+            // L148 Burn rate thresholds and forecasting
+            check(
+                QuotaAxiTracker.isHighBurnRate(tokensPerMin: 3000.0)
+                    && !QuotaAxiTracker.isHighBurnRate(tokensPerMin: 1000.0),
+                "L148 isHighBurnRate detects threshold above 2500 TPM"
+            )
+            let activeRunway = QuotaAxiTracker.forecastHoursRemaining(
+                tokensPerMin: 500.0, remainingPercent: 50.0
+            )
+            let idleRunway = QuotaAxiTracker.forecastHoursRemaining(
+                tokensPerMin: 10.0, remainingPercent: 50.0
+            )
+            check(
+                activeRunway != nil && idleRunway == nil,
+                "L148 forecastHoursRemaining yields runway for active rate and nil for idle"
+            )
+        }
+
+        try? FileManager.default.removeItem(at: brainMockDir)
+        try? FileManager.default.removeItem(at: mockHome)
+
         print(failures == 0 ? "ALL PASS" : "\(failures) FAILURES")
         exit(failures == 0 ? 0 : 1)
-
     }
 }
-

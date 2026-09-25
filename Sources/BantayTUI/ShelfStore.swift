@@ -29,16 +29,7 @@ enum ShelfKeepDuration: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// The shelf: persisted, owns copies of dropped files, expires by retention,
-/// and renders QuickLook thumbnails. Mirrors NotchDrop's TrayDrop semantics —
-/// a drop here is *safe* (the file is copied into Bantay's data dir and
-/// survives the source file moving or the app restarting).
-///
-/// - Persistence: items persisted as JSON in UserDefaults; files copied into
-///   `~/Library/Application Support/Bantay-TUI/shelf/<uuid>/<name>`.
-/// - Retention: `cleanExpired()` removes items past `keepDuration` (config).
-/// - Thumbnails: generated lazily via NSWorkspace icon (fast) then upgraded
-///   to a QuickLook thumbnail when available.
+/// Persists and manages dropped shelf files with QuickLook previews.
 @MainActor
 final class ShelfStore: ObservableObject {
     static let shared = ShelfStore()

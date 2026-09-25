@@ -7,8 +7,6 @@ import Foundation
 public final class TaskDispatcher: ObservableObject {
     public static let shared = TaskDispatcher()
 
-    private let adapter = HerdrSocketAdapter()
-
     private init() {}
 
     /// Whether task dispatch is currently allowed under the active budget policy.
@@ -22,7 +20,6 @@ public final class TaskDispatcher: ObservableObject {
         return cost < safeBudget
     }
 
-    /// Dispatches a task to its assigned agent and returns the linked pane/target ID if successful.
     /// Dispatches a task to its assigned agent and returns the linked pane/target ID if successful.
     @discardableResult
     public func dispatch(task: BantayTask) -> String? {
@@ -45,12 +42,13 @@ public final class TaskDispatcher: ObservableObject {
 
         // 1. If task already had a linked pane, verify that it is still alive in the active roster
         if let previousPane = task.linkedPaneID, !previousPane.isEmpty {
-            let isStillLive = activeAgents.contains { $0.paneId == previousPane }
-            if isStillLive {
-                adapter.sendLine(paneId: previousPane, text: promptText)
-                if NotchHUDConfig.shared.focusTerminalOnDispatch {
-                    adapter.focusPane(paneId: previousPane)
-                }
+            if let liveAgent = activeAgents.first(where: { $0.paneId == previousPane }) {
+                dispatchToPane(
+                    paneId: previousPane,
+                    agentName: agentName,
+                    promptText: promptText,
+                    cwd: liveAgent.cwd
+                )
                 return previousPane
             }
             // Previous pane died/closed; fall through to resolve a live target
@@ -64,20 +62,53 @@ public final class TaskDispatcher: ObservableObject {
         let targetPaneID: String?
         if let paneId = matchingSnapshot?.paneId, !paneId.isEmpty {
             targetPaneID = paneId
-            adapter.sendLine(paneId: paneId, text: promptText)
-            if NotchHUDConfig.shared.focusTerminalOnDispatch {
-                adapter.focusPane(paneId: paneId)
-            }
-        } else if agentName == "antigravity" || agentName == "codex" || agentName == "cursor" {
+            dispatchToPane(
+                paneId: paneId,
+                agentName: agentName,
+                promptText: promptText,
+                cwd: matchingSnapshot?.cwd
+            )
+        } else if agentName == "antigravity" || agentName == "codex" || agentName == "cursor"
+            || agentName == "cloudcode" || agentName == "windsurf"
+        {
             targetPaneID = "app:\(agentName)"
-            StandaloneAgentDispatcher.dispatchPrompt(agentName: agentName, text: promptText)
+            StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: agentName, text: promptText, cwd: matchingSnapshot?.cwd, autoSend: true
+            )
         } else {
             // Fallback to standalone dispatcher for plain terminals
             targetPaneID = "standalone:\(agentName)"
-            StandaloneAgentDispatcher.dispatchPrompt(agentName: agentName, text: promptText)
+            StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: agentName, text: promptText, cwd: matchingSnapshot?.cwd, autoSend: true
+            )
         }
 
         return targetPaneID
+    }
+
+    /// Dispatches prompt text to a designated pane, routing through active multiplexer or desktop agent.
+    func dispatchToPane(
+        paneId: String,
+        agentName: String,
+        promptText: String,
+        cwd: String?
+    ) {
+        if paneId.hasPrefix("standalone:") {
+            let clean = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+            StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: clean, text: promptText, cwd: cwd, autoSend: true
+            )
+        } else if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: "opencode", text: promptText, cwd: cwd, autoSend: true
+            )
+        } else {
+            let activeAdapter = AgentEventManager.shared.activeAdapter
+            activeAdapter.sendLine(paneId: paneId, text: promptText)
+            if NotchHUDConfig.shared.focusTerminalOnDispatch {
+                activeAdapter.focusPane(paneId: paneId)
+            }
+        }
     }
 
     /// Normalizes agent aliases to canonical internal identifiers.
@@ -92,6 +123,14 @@ public final class TaskDispatcher: ObservableObject {
             return "antigravity"
         case "cursor", "cursor-agent", "cursor-cli":
             return "cursor"
+        case "cloudcode", "cloud-code", "google-cloud-code":
+            return "cloudcode"
+        case "windsurf", "cascade", "windsurf-agent", "windsurf-ide":
+            return "windsurf"
+        case "copilot", "github-copilot":
+            return "copilot"
+        case "gemini", "gemini-cli":
+            return "gemini"
         case "pi", "pi-agent":
             return "pi"
         case "herdr", "herdr-cli":

@@ -1,24 +1,6 @@
 import Foundation
 
-/// `PlexerAdapter` for the zellij terminal multiplexer (plan 017 WI-2).
-///
-/// Session listing goes through `zellij ls --short` (one session name per
-/// line); pane listing through `zellij --session <name> action list-panes
-/// --json`; capture through `zellij --session <name> action dump-screen
-/// --pane-id <pane>`; focus/keys through the `zellij action` verbs below.
-///
-/// **Version assumption: zellij >= 0.40** — 0.40 reorganized `zellij action`
-/// into subcommands (`dump-screen`, `focus-pane-id`, `send-keys`,
-/// `write-chars`, `list-panes`). Verb spellings below were verified against
-/// the current zellij docs and the CLI source at `main` (2026-08); an
-/// unknown verb fails with exit != 0 and empty stdout, which surfaces as
-/// empty results rather than a fabricated pane list.
-///
-/// **Pane identity**: zellij pane ids are session-scoped (`terminal_N`) and
-/// die with their session. The protocol's single `paneId` string composes
-/// them as `"<session>|<pane>"`; `|` is safe because zellij session names
-/// are socket-path components and are not validated to exclude `:`, which
-/// rules out tmux's `session:window.pane` separator.
+/// PlexerAdapter implementation for the Zellij terminal multiplexer.
 struct ZellijAdapter: Sendable, PlexerAdapter {
     private let zellijBinPath: String
 
@@ -74,12 +56,7 @@ struct ZellijAdapter: Sendable, PlexerAdapter {
         ["ls", "--short"]
     }
 
-    /// Parses `zellij ls` output (text or JSON) into session names. Text
-    /// variants keep the first whitespace-delimited token of each line
-    /// (`--short` names, `--no-formatting` "name [Created X ago] [suffix]",
-    /// and the default ANSI-styled output after stripping escape codes).
-    /// Unhandled output (empty stdout on an unknown verb/flag, malformed
-    /// JSON) yields empty results.
+    /// Parses `zellij ls` output (plain text or JSON) into session names.
     nonisolated static func parseSessions(_ output: String) -> [String] {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
@@ -302,10 +279,7 @@ struct ZellijAdapter: Sendable, PlexerAdapter {
         return panes
     }
 
-    /// Sync protocol seam (PlexerAdapter) — the D2 boundary. Mirrors
-    /// `HerdrSocketAdapter.listPanes`: the fetch runs on a background task
-    /// and the calling thread waits on the result, so a main-actor caller
-    /// never holds `waitUntilExit` on the main thread.
+    /// Synchronously lists panes across active Zellij sessions.
     func listPanes() -> [PaneInfo] {
         final class Box: @unchecked Sendable {
             var panes: [PaneInfo] = []
@@ -369,10 +343,18 @@ struct ZellijAdapter: Sendable, PlexerAdapter {
     }
 
     func approve(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+            return
+        }
         sendKeys(paneId: paneId, keys: ["y", "enter"])
     }
 
     func deny(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
+            return
+        }
         sendKeys(paneId: paneId, keys: ["n", "enter"])
     }
 

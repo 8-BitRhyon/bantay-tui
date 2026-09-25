@@ -10,12 +10,25 @@ struct DetectedAgent: Equatable, Sendable {
     let activity: String?
     /// Whether the agent was modified recently enough to be actively running work.
     let isWorking: Bool
+    /// Active working directory if discovered from transcripts/processes.
+    let cwd: String?
+    /// Root path of the agent's conversation/session directory on disk.
+    let sessionPath: String?
 
-    init(pid: Int, name: String, activity: String?, isWorking: Bool = false) {
+    init(
+        pid: Int,
+        name: String,
+        activity: String?,
+        isWorking: Bool = false,
+        cwd: String? = nil,
+        sessionPath: String? = nil
+    ) {
         self.pid = pid
         self.name = name
         self.activity = activity
         self.isWorking = isWorking
+        self.cwd = cwd
+        self.sessionPath = sessionPath
     }
 }
 
@@ -34,10 +47,19 @@ enum AgentDetector {
                 homePath + "/.claude/transcripts",
                 homePath + "/.claude/history",
             ]
-        case "codex":
+        case "codex", "codex-cli", "codex-exec":
             return [
                 homePath + "/.codex/sessions",
                 homePath + "/.codex/transcripts",
+                homePath + "/.codex/history",
+                homePath + "/.codex",
+                homePath + "/.config/codex",
+            ]
+        case "cloudcode", "cloud-code", "google-cloud-code":
+            return [
+                homePath + "/.cloudcode",
+                homePath + "/.config/cloud-code",
+                homePath + "/.google-cloud-code",
             ]
         case "gemini", "gemini-cli":
             return [
@@ -51,8 +73,14 @@ enum AgentDetector {
                 homePath + "/.gemini/antigravity-ide",
                 homePath + "/.gemini",
             ]
-        case "cursor", "cursor-agent":
-            return [homePath + "/.cursor-agent"]
+        case "cursor", "cursor-agent", "cursor-cli":
+            return [
+                homePath + "/.cursor-agent",
+                homePath + "/.cursor",
+                homePath + "/Library/Application Support/Cursor/User/workspaceStorage",
+                homePath + "/Library/Application Support/Cursor/User/globalStorage",
+                homePath + "/Library/Application Support/Cursor/logs",
+            ]
         case "kilo", "kilocode":
             return [
                 homePath + "/.local/share/kilo/log",
@@ -69,16 +97,56 @@ enum AgentDetector {
             ]
         case "pi":
             return [
-                // Pi auto-saves every session as append-only JSONL under
-                // ~/.pi/agent/sessions, one file per cwd tree. The parent
-                // ~/.pi/agent dir holds settings/auth/trust files that aren't
-                // transcripts, so sessions is the single authoritative root.
+                // Pi sessions are saved under ~/.pi/agent/sessions.
                 homePath + "/.pi/agent/sessions"
             ]
         case "herdr":
             return [
                 homePath + "/.config/herdr",
                 homePath + "/.local/state/herdr",
+            ]
+        case "windsurf", "cascade":
+            return [
+                homePath + "/.codeium/windsurf/memories",
+                homePath + "/.codeium/windsurf",
+            ]
+        case "goose":
+            return [
+                homePath + "/.local/share/goose/sessions",
+                homePath + "/.goose/sessions",
+                homePath + "/.config/goose",
+            ]
+        case "aider":
+            return [
+                homePath + "/.aider",
+                homePath + "/.aider.chat.history.md",
+            ]
+        case "cline":
+            return [
+                homePath
+                    + "/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks",
+                homePath + "/.cline",
+            ]
+        case "roo-code", "roocode":
+            return [
+                homePath
+                    + "/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks",
+                homePath + "/.roo-code",
+            ]
+        case "openhands":
+            return [
+                homePath + "/.openhands/conversations",
+                homePath + "/.openhands",
+            ]
+        case "opencode":
+            return [
+                homePath + "/.opencode",
+                homePath + "/.local/share/opencode",
+            ]
+        case "continue":
+            return [
+                homePath + "/.continue/sessions",
+                homePath + "/.continue",
             ]
         default:
             return []
@@ -103,6 +171,8 @@ enum AgentDetector {
         switch lower {
         case "claude", "claude-code", "claude-agent", "claude-ai":
             return "claude"
+        case "cloudcode", "cloud-code", "google-cloud-code":
+            return "cloudcode"
         case "codex", "codex-cli", "codex-exec":
             return "codex"
         case "gemini", "gemini-cli":
@@ -129,16 +199,28 @@ enum AgentDetector {
             return "kimi"
         case "hermes":
             return "hermes"
+        case "windsurf", "windsurf-agent", "cascade", "cascade-cli":
+            return "windsurf"
+        case "goose", "goose-cli", "goose-agent":
+            return "goose"
+        case "aider", "aider-chat":
+            return "aider"
+        case "cline", "cline-cli":
+            return "cline"
+        case "roo-code", "roo-cline", "roocode":
+            return "roo-code"
+        case "cody", "cody-agent":
+            return "cody"
+        case "openhands", "openhands-cli":
+            return "openhands"
+        case "continue", "continue-cli":
+            return "continue"
         default:
             return nil
         }
     }
 
-    /// Fallback classification by inspecting command line arguments when the
-    /// process name is generic (node, python, npx, bash). Word-boundary
-    /// matching on known agent tokens, and never matches helper/browser
-    /// processes (Cursor Helper (GPU), Renderer, Extension Host) so those
-    /// don't become phantom agents.
+    /// Classifies agent name from command line arguments.
     static func canonicalNameFromCommand(_ command: String) -> String? {
         let lower = command.lowercased()
         // Skip obvious helper/browser subprocesses, extension servers, and daemons first.
@@ -164,11 +246,23 @@ enum AgentDetector {
             ("herdr", "herdr"),
             ("claude", "claude"),
             ("codex", "codex"),
+            ("cloudcode", "cloudcode"),
+            ("cloud-code", "cloudcode"),
+            ("google-cloud-code", "cloudcode"),
             ("gemini", "gemini"),
             ("cursor", "cursor"),
             ("opencode", "opencode"),
             ("aider", "aider"),
             ("pi", "pi"),
+            ("windsurf", "windsurf"),
+            ("cascade", "windsurf"),
+            ("goose", "goose"),
+            ("cline", "cline"),
+            ("roo-code", "roo-code"),
+            ("roocode", "roo-code"),
+            ("cody", "cody"),
+            ("openhands", "openhands"),
+            ("continue", "continue"),
         ]
         // Lookalike suffixes that are NOT the agent CLI (e.g. claude-searchd,
         // kilo-daemon, herdr-fs-watch) must not match.
@@ -212,24 +306,100 @@ enum AgentDetector {
 
     /// Latest non-empty activity line from any transcript under `root`.
     /// Returns a trimmed, single-line snippet.
+    /// Strip enclosing quotes and whitespace from transcript argument strings.
+    static func cleanUnquoted(_ text: String?) -> String? {
+        guard var str = text?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty else {
+            return nil
+        }
+        while (str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2)
+            || (str.hasPrefix("'") && str.hasSuffix("'") && str.count >= 2)
+            || (str.hasPrefix("`") && str.hasSuffix("`") && str.count >= 2)
+        {
+            str.removeFirst()
+            str.removeLast()
+            str = str.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return str.isEmpty ? nil : str
+    }
+
+    /// Extract active workspace directory from transcript line if present.
+    static func extractCwd(_ line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        if let cwd = cleanUnquoted(obj["cwd"] as? String ?? obj["Cwd"] as? String) {
+            return cwd
+        }
+        if let toolCalls = obj["tool_calls"] as? [[String: Any]] {
+            for tc in toolCalls {
+                var args = (tc["args"] as? [String: Any]) ?? (tc["parameters"] as? [String: Any])
+                if args == nil,
+                    let rawArgs = (tc["arguments"] as? String) ?? (tc["args"] as? String),
+                    let argsData = rawArgs.data(using: .utf8),
+                    let parsed = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
+                {
+                    args = parsed
+                }
+                if let cwd = cleanUnquoted(args?["Cwd"] as? String ?? args?["cwd"] as? String) {
+                    return cwd
+                }
+                if let dir = cleanUnquoted(
+                    args?["DirectoryPath"] as? String ?? args?["SearchPath"] as? String)
+                {
+                    return dir
+                }
+            }
+        }
+        if let content = obj["content"] as? String {
+            if let match = content.range(of: "Active Document: ") {
+                let after = content[match.upperBound...]
+                let docPath =
+                    after.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+                if let cleanDoc = cleanUnquoted(docPath), cleanDoc.hasPrefix("/") {
+                    let parent = URL(fileURLWithPath: cleanDoc).deletingLastPathComponent().path
+                    if !parent.isEmpty && parent != "/" {
+                        return parent
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Latest activity line from any transcript under `root`.
+    /// Returns a trimmed, single-line snippet.
     static func latestActivity(root: String, maxBytes: Int = 4000) -> String? {
         latestActivityInfo(root: root, maxBytes: maxBytes)?.activity
     }
 
-    /// Latest activity line and recency check from any transcript under `root`.
-    static func latestActivityInfo(
-        root: String, maxBytes: Int = 4000, recentThreshold: TimeInterval = 180
-    ) -> (activity: String, isRecent: Bool)? {
+    /// Structured session snapshot representing an active or recent agent conversation.
+    struct ActiveSession: Equatable, Sendable {
+        let sessionPath: String
+        let activity: String
+        let isRecent: Bool
+        let isWorking: Bool
+        let cwd: String?
+        let date: Date
+    }
+
+    /// Discovers all active agent sessions under `root` modified recently.
+    /// Groups transcripts by their top-level conversation directory (e.g. Antigravity brain UUID,
+    /// Claude project hash, or Goose session folder) so multi-window sessions are not collapsed.
+    static func activeSessionsInfo(
+        root: String, maxBytes: Int = 32768, recentThreshold: TimeInterval = 600
+    ) -> [ActiveSession] {
+        let canonicalRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath()
+        let rootComps = canonicalRoot.pathComponents
         guard
             let enumerator = FileManager.default.enumerator(
-                at: URL(fileURLWithPath: root, isDirectory: true),
+                at: canonicalRoot,
                 includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
                 options: []
             )
         else {
-            return nil
+            return []
         }
-        var best: (url: URL, date: Date)?
+        var sessionFiles: [String: (url: URL, date: Date)] = [:]
         for case let url as URL in enumerator {
             let path = url.path
             if path.contains("/.git/") || path.contains("/node_modules/")
@@ -238,8 +408,10 @@ enum AgentDetector {
                 enumerator.skipDescendants()
                 continue
             }
-            let relPath = String(path.dropFirst(root.count))
-            let relComponents = relPath.split(separator: "/")
+            let canonicalFile = url.resolvingSymlinksInPath()
+            let fileComps = canonicalFile.pathComponents
+            guard fileComps.count > rootComps.count else { continue }
+            let relComponents = Array(fileComps[rootComps.count...])
             let hasHiddenSubdir = relComponents.dropLast().contains { comp in
                 comp.hasPrefix(".") && comp != ".system_generated"
             }
@@ -259,24 +431,88 @@ enum AgentDetector {
                 continue
             }
             let date = values.contentModificationDate ?? .distantPast
-            if best == nil || date > best!.date {
-                best = (url, date)
+            let sessionKey: String
+            if relComponents.count > 1, let firstComp = relComponents.first {
+                sessionKey = canonicalRoot.appendingPathComponent(firstComp).path
+            } else {
+                sessionKey = canonicalFile.path
+            }
+
+            if let existing = sessionFiles[sessionKey] {
+                if date > existing.date {
+                    sessionFiles[sessionKey] = (url, date)
+                }
+            } else {
+                sessionFiles[sessionKey] = (url, date)
             }
         }
-        guard let best else { return nil }
-        guard let handle = try? FileHandle(forReadingFrom: best.url) else { return nil }
-        defer { try? handle.close() }
-        let end = (try? handle.seekToEnd()) ?? 0
-        let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
-        try? handle.seek(toOffset: start)
-        let data = handle.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8) ?? ""
-        let lines = text.split(whereSeparator: \.isNewline)
-        let isRecent = Date().timeIntervalSince(best.date) <= recentThreshold
-        for line in lines.reversed() {
-            if let readable = Self.readableLine(String(line)) {
-                return (readable, isRecent)
+
+        guard !sessionFiles.isEmpty else { return [] }
+        let now = Date()
+        var activeEntries = sessionFiles.filter {
+            now.timeIntervalSince($0.value.date) <= recentThreshold
+        }
+        if activeEntries.isEmpty {
+            if let newest = sessionFiles.max(by: { $0.value.date < $1.value.date }) {
+                activeEntries = [newest.key: newest.value]
             }
+        }
+
+        var results: [ActiveSession] = []
+        for (sessionPath, fileInfo) in activeEntries {
+            guard let handle = try? FileHandle(forReadingFrom: fileInfo.url) else { continue }
+            defer { try? handle.close() }
+            let end = (try? handle.seekToEnd()) ?? 0
+            let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
+            try? handle.seek(toOffset: start)
+            let data = handle.readDataToEndOfFile()
+            let text = String(decoding: data, as: UTF8.self)
+            let lines = text.split(whereSeparator: \.isNewline)
+            let isRecent = now.timeIntervalSince(fileInfo.date) <= recentThreshold
+            var foundActivity: String? = nil
+            var fallbackActivity: String? = nil
+            var foundCwd: String? = nil
+            for line in lines.reversed() {
+                let lineStr = String(line)
+                if foundCwd == nil {
+                    foundCwd = Self.extractCwd(lineStr)
+                }
+                if let readable = Self.readableLine(lineStr) {
+                    if !readable.hasPrefix("{") {
+                        if foundActivity == nil {
+                            foundActivity = readable
+                        }
+                    } else if fallbackActivity == nil {
+                        fallbackActivity = readable
+                    }
+                }
+                if foundActivity != nil && foundCwd != nil {
+                    break
+                }
+            }
+            guard let activity = foundActivity ?? fallbackActivity else { continue }
+            results.append(
+                ActiveSession(
+                    sessionPath: sessionPath,
+                    activity: activity,
+                    isRecent: isRecent,
+                    isWorking: isRecent && Self.isWorkingActivity(activity),
+                    cwd: foundCwd,
+                    date: fileInfo.date
+                )
+            )
+        }
+        return results.sorted(by: { $0.date > $1.date })
+    }
+
+    /// Latest activity line, recency check, and detected cwd from any transcript under `root`.
+    static func latestActivityInfo(
+        root: String, maxBytes: Int = 4000, recentThreshold: TimeInterval = 180
+    ) -> (activity: String, isRecent: Bool, cwd: String?)? {
+        if let session = activeSessionsInfo(
+            root: root, maxBytes: maxBytes, recentThreshold: recentThreshold
+        ).first {
+            return (session.activity, session.isRecent, session.cwd)
         }
         return nil
     }
@@ -323,17 +559,73 @@ enum AgentDetector {
             // Prioritize concise tool summaries over full filenames or monologue
             if let toolCalls = obj["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
                 let summaries = toolCalls.compactMap { tc -> String? in
-                    let summary =
-                        (tc["toolSummary"] as? String)
-                        ?? (tc["toolAction"] as? String)
-                    if let summary, !summary.isEmpty {
-                        return summary
+                    var args =
+                        (tc["args"] as? [String: Any]) ?? (tc["parameters"] as? [String: Any])
+                    if args == nil,
+                        let rawArgs = (tc["arguments"] as? String) ?? (tc["args"] as? String),
+                        let argsData = rawArgs.data(using: .utf8),
+                        let parsed = try? JSONSerialization.jsonObject(with: argsData)
+                            as? [String: Any]
+                    {
+                        args = parsed
                     }
-                    let args =
-                        (tc["args"] as? [String: Any])
-                        ?? (tc["parameters"] as? [String: Any])
-                    if args?["TargetFile"] != nil || args?["AbsolutePath"] != nil {
-                        return "Editing file"
+                    let rawSummary =
+                        (tc["toolSummary"] as? String)
+                        ?? (args?["toolSummary"] as? String)
+                        ?? (tc["toolAction"] as? String)
+                        ?? (args?["toolAction"] as? String)
+                    if let cleanSummary = cleanUnquoted(rawSummary) {
+                        return cleanSummary
+                    }
+                    if let name = tc["name"] as? String {
+                        let lowerName = name.lowercased()
+                        switch lowerName {
+                        case "run_command", "bash", "execute_command", "exec":
+                            if let cmd = cleanUnquoted(
+                                args?["CommandLine"] as? String ?? args?["command"] as? String)
+                            {
+                                let firstWord =
+                                    cmd.split(whereSeparator: \.isWhitespace).first.map(String.init)
+                                    ?? cmd
+                                let basename = URL(fileURLWithPath: firstWord).lastPathComponent
+                                return "Running \(basename)"
+                            }
+                            return "Running command"
+                        case "view_file", "read_file", "read":
+                            if let path = cleanUnquoted(
+                                args?["AbsolutePath"] as? String ?? args?["TargetFile"] as? String
+                                    ?? args?["path"] as? String)
+                            {
+                                let fname = URL(fileURLWithPath: path).lastPathComponent
+                                return "Viewing \(fname)"
+                            }
+                            return "Viewing file"
+                        case "replace_file_content", "multi_replace_file_content", "write_to_file",
+                            "edit_file", "edit":
+                            if let path = cleanUnquoted(
+                                args?["TargetFile"] as? String ?? args?["AbsolutePath"] as? String
+                                    ?? args?["path"] as? String)
+                            {
+                                let fname = URL(fileURLWithPath: path).lastPathComponent
+                                return "Editing \(fname)"
+                            }
+                            return "Editing file"
+                        case "grep_search", "search_web", "file_search", "glob":
+                            if let query = cleanUnquoted(
+                                args?["Query"] as? String ?? args?["query"] as? String)
+                            {
+                                return "Searching: \(query)"
+                            }
+                            return "Searching code"
+                        case "list_dir", "ls":
+                            return "Listing directory"
+                        case "ask_question":
+                            return "Waiting for input"
+                        default:
+                            let humanized = name.replacingOccurrences(of: "_", with: " ")
+                                .capitalized
+                            return humanized
+                        }
                     }
                     return nil
                 }
@@ -345,27 +637,55 @@ enum AgentDetector {
             }
             if let message = obj["message"] as? [String: Any] {
                 if let content = message["content"] as? [[String: Any]] {
-                    let texts = content.compactMap { $0["text"] as? String }
+                    let texts = content.compactMap { cleanUnquoted($0["text"] as? String) }
                     let joined = texts.joined(separator: " ").trimmingCharacters(
                         in: .whitespacesAndNewlines)
                     if !joined.isEmpty {
                         return IslandMetrics.cleanHUDText(joined, maxCharacters: 40)
                     }
                 }
-                if let contentStr = message["content"] as? String, !contentStr.isEmpty {
+                if let contentStr = cleanUnquoted(message["content"] as? String),
+                    !contentStr.isEmpty
+                {
                     return IslandMetrics.cleanHUDText(contentStr, maxCharacters: 40)
                 }
-                if let text = message["text"] as? String, !text.isEmpty {
+                if let text = cleanUnquoted(message["text"] as? String), !text.isEmpty {
                     return IslandMetrics.cleanHUDText(text, maxCharacters: 40)
                 }
-                if let command = message["command"] as? String, !command.isEmpty {
+                if let command = cleanUnquoted(message["command"] as? String), !command.isEmpty {
                     return IslandMetrics.cleanHUDText(command, maxCharacters: 40)
+                }
+            }
+            let objType = obj["type"] as? String ?? ""
+            let objSource = obj["source"] as? String ?? ""
+            if objType == "CHECKPOINT" || objType == "EPHEMERAL_MESSAGE" || objType == "TASK_STATE"
+                || objSource == "SYSTEM"
+                || objType == "VIEW_FILE" || objType == "RUN_COMMAND" || objType == "LIST_DIR"
+            {
+                return nil
+            }
+            if objType == "USER_INPUT" || objSource == "USER" {
+                if let content = cleanUnquoted(obj["content"] as? String), !content.isEmpty {
+                    return IslandMetrics.cleanHUDText(content, maxCharacters: 40)
                 }
             }
             if let contentStr = obj["content"] as? String {
                 let trimmed = contentStr.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    return IslandMetrics.cleanHUDText(trimmed, maxCharacters: 40)
+                if trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:") {
+                    return nil
+                }
+                if !trimmed.isEmpty && !trimmed.hasPrefix("{") {
+                    let firstLine =
+                        trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+                    let clean =
+                        firstLine
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "#*` \t\r\n"))
+                        .replacingOccurrences(of: "**", with: "")
+                        .replacingOccurrences(of: "`", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !clean.isEmpty {
+                        return IslandMetrics.cleanHUDText(clean, maxCharacters: 40)
+                    }
                 }
             }
             if let thinkingStr = obj["thinking"] as? String {
@@ -373,11 +693,19 @@ enum AgentDetector {
                 if !trimmed.isEmpty {
                     let firstLine =
                         trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
-                    return IslandMetrics.cleanHUDText(firstLine, maxCharacters: 40)
+                    let clean =
+                        firstLine
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "#*` \t\r\n"))
+                        .replacingOccurrences(of: "**", with: "")
+                        .replacingOccurrences(of: "`", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !clean.isEmpty {
+                        return IslandMetrics.cleanHUDText(clean, maxCharacters: 40)
+                    }
                 }
             }
             if let bash = obj["bashExecution"] as? [String: Any],
-                let command = bash["command"] as? String,
+                let command = cleanUnquoted(bash["command"] as? String),
                 !command.isEmpty
             {
                 return IslandMetrics.cleanHUDText(command, maxCharacters: 40)
@@ -389,6 +717,252 @@ enum AgentDetector {
             return String(snippet.prefix(160))
         }
         return IslandMetrics.cleanHUDText(snippet, maxCharacters: 40)
+    }
+
+    /// Read and format the latest transcript/log lines for an agent, feeding the Peek overlay.
+    static func recentTranscriptOutput(
+        forAgent name: String,
+        sessionPath: String? = nil,
+        cwd: String? = nil,
+        maxLines: Int = 100,
+        home: String = NSHomeDirectory()
+    ) -> [String] {
+        var best: (url: URL, date: Date)?
+        let searchRoots: [String] = {
+            if let sessionPath, !sessionPath.isEmpty {
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: sessionPath, isDirectory: &isDir) {
+                    return [sessionPath]
+                }
+            }
+            return transcriptSearchPaths(home: home, name: name)
+        }()
+        guard !searchRoots.isEmpty else { return [] }
+
+        for root in searchRoots {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: root, isDirectory: &isDir), !isDir.boolValue {
+                let url = URL(fileURLWithPath: root)
+                let date =
+                    (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                if best == nil || date > best!.date {
+                    best = (url, date)
+                }
+                continue
+            }
+            guard
+                let enumerator = FileManager.default.enumerator(
+                    at: URL(fileURLWithPath: root, isDirectory: true),
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                    options: []
+                )
+            else { continue }
+
+            for case let url as URL in enumerator {
+                let path = url.path
+                if path.contains("/.git/") || path.contains("/node_modules/")
+                    || path.contains("/.Trash/")
+                {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let ext = url.pathExtension.lowercased()
+                let fileName = url.lastPathComponent.lowercased()
+                guard
+                    let values = try? url.resourceValues(
+                        forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                    values.isRegularFile == true,
+                    ext == "jsonl" || ext == "log" || ext == "json" || ext == "txt"
+                        || fileName.contains("log")
+                else { continue }
+                let date = values.contentModificationDate ?? .distantPast
+                if best == nil || date > best!.date {
+                    best = (url, date)
+                }
+            }
+        }
+
+        guard let bestFile = best else { return [] }
+        guard let handle = try? FileHandle(forReadingFrom: bestFile.url) else { return [] }
+        defer { try? handle.close() }
+
+        let maxBytes: UInt64 = 131072
+        let end = (try? handle.seekToEnd()) ?? 0
+        let start = end > maxBytes ? end - maxBytes : 0
+        try? handle.seek(toOffset: start)
+        let data = handle.readDataToEndOfFile()
+        let text = String(decoding: data, as: UTF8.self)
+        guard !text.isEmpty else { return [] }
+
+        let rawLines = text.split(whereSeparator: \.isNewline)
+        var formatted: [String] = []
+
+        for line in rawLines {
+            let lineStr = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !lineStr.isEmpty else { continue }
+
+            if lineStr.hasPrefix("{"),
+                let lineData = lineStr.data(using: .utf8),
+                let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+            {
+                let type = obj["type"] as? String ?? ""
+                let source = obj["source"] as? String ?? ""
+
+                // Skip internal protocol checkpoints
+                if type == "EPHEMERAL_MESSAGE" || type == "CHECKPOINT" || type == "TASK_STATE" {
+                    continue
+                }
+
+                // User prompt
+                if type == "USER_INPUT" || source == "USER" {
+                    if let content = cleanUnquoted(obj["content"] as? String) {
+                        formatted.append("❯ User: \(content.prefix(120))")
+                    }
+                    continue
+                }
+
+                // Tool calls
+                if let toolCalls = obj["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
+                    for tc in toolCalls {
+                        let name = tc["name"] as? String ?? "tool"
+                        var args =
+                            (tc["args"] as? [String: Any]) ?? (tc["parameters"] as? [String: Any])
+                        if args == nil,
+                            let rawArgs = (tc["arguments"] as? String) ?? (tc["args"] as? String),
+                            let argsData = rawArgs.data(using: .utf8),
+                            let parsed = try? JSONSerialization.jsonObject(with: argsData)
+                                as? [String: Any]
+                        {
+                            args = parsed
+                        }
+                        let summary = cleanUnquoted(
+                            (tc["toolSummary"] as? String)
+                                ?? (args?["toolSummary"] as? String)
+                                ?? (tc["toolAction"] as? String)
+                                ?? (args?["toolAction"] as? String)
+                        )
+                        if let summary {
+                            formatted.append("→ \(summary)")
+                        } else {
+                            let lowerName = name.lowercased()
+                            switch lowerName {
+                            case "run_command", "bash", "execute_command", "exec":
+                                if let cmd = cleanUnquoted(
+                                    args?["CommandLine"] as? String ?? args?["command"] as? String)
+                                {
+                                    let firstWord =
+                                        cmd.split(whereSeparator: \.isWhitespace).first.map(
+                                            String.init) ?? cmd
+                                    let basename = URL(fileURLWithPath: firstWord).lastPathComponent
+                                    formatted.append("→ Running \(basename)")
+                                } else {
+                                    formatted.append("→ Running command")
+                                }
+                            case "view_file", "read_file", "read":
+                                if let path = cleanUnquoted(
+                                    args?["AbsolutePath"] as? String ?? args?["TargetFile"]
+                                        as? String
+                                        ?? args?["path"] as? String)
+                                {
+                                    let fname = URL(fileURLWithPath: path).lastPathComponent
+                                    formatted.append("→ Viewing \(fname)")
+                                } else {
+                                    formatted.append("→ Viewing file")
+                                }
+                            case "replace_file_content", "multi_replace_file_content",
+                                "write_to_file",
+                                "edit_file", "edit":
+                                if let path = cleanUnquoted(
+                                    args?["TargetFile"] as? String ?? args?["AbsolutePath"]
+                                        as? String
+                                        ?? args?["path"] as? String)
+                                {
+                                    let fname = URL(fileURLWithPath: path).lastPathComponent
+                                    formatted.append("→ Editing \(fname)")
+                                } else {
+                                    formatted.append("→ Editing file")
+                                }
+                            case "grep_search", "search_web", "file_search", "glob":
+                                if let query = cleanUnquoted(
+                                    args?["Query"] as? String ?? args?["query"] as? String)
+                                {
+                                    formatted.append("→ Searching: \(query)")
+                                } else {
+                                    formatted.append("→ Searching code")
+                                }
+                            case "list_dir", "ls":
+                                formatted.append("→ Listing directory")
+                            case "ask_question":
+                                formatted.append("→ Waiting for input")
+                            default:
+                                let human =
+                                    name.replacingOccurrences(of: "_", with: " ").capitalized
+                                formatted.append("→ \(human)")
+                            }
+                        }
+                    }
+                    continue
+                }
+
+                // Assistant monologue / content
+                if let content = obj["content"] as? String {
+                    let cleaned = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cleaned.isEmpty && !cleaned.hasPrefix("{")
+                        && !cleaned.hasPrefix("Created At:") && !cleaned.hasPrefix("File Path:")
+                    {
+                        let first =
+                            cleaned.split(whereSeparator: \.isNewline).first.map(String.init)
+                            ?? cleaned
+                        let clean = first.replacingOccurrences(of: "**", with: "")
+                            .replacingOccurrences(of: "#", with: "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !clean.isEmpty {
+                            formatted.append("● \(clean.prefix(120))")
+                        }
+                    }
+                    continue
+                }
+
+                if let message = obj["message"] as? [String: Any] {
+                    if let content = message["content"] as? [[String: Any]] {
+                        let texts = content.compactMap { cleanUnquoted($0["text"] as? String) }
+                        let joined = texts.joined(separator: " ").trimmingCharacters(
+                            in: .whitespacesAndNewlines)
+                        if !joined.isEmpty {
+                            formatted.append("● \(joined.prefix(120))")
+                        }
+                    } else if let contentStr = cleanUnquoted(message["content"] as? String),
+                        !contentStr.isEmpty
+                    {
+                        formatted.append("● \(contentStr.prefix(120))")
+                    } else if let text = cleanUnquoted(message["text"] as? String), !text.isEmpty {
+                        formatted.append("● \(text.prefix(120))")
+                    }
+                    continue
+                }
+
+                // Thinking
+                if let thinking = obj["thinking"] as? String {
+                    let cleaned = thinking.replacingOccurrences(of: "**", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cleaned.isEmpty {
+                        let first =
+                            cleaned.split(whereSeparator: \.isNewline).first.map(String.init)
+                            ?? cleaned
+                        formatted.append("💭 \(first.prefix(120))")
+                    }
+                    continue
+                }
+            } else {
+                let cleaned = LogFormatter.cleanAnsi(lineStr)
+                if !cleaned.isEmpty && !cleaned.hasPrefix("{") {
+                    formatted.append(String(cleaned.prefix(160)))
+                }
+            }
+        }
+
+        return Array(formatted.suffix(maxLines))
     }
 }
 
@@ -408,7 +982,8 @@ enum StandaloneAgentScanner {
     /// processes (they are already surfaced via the herdr adapter) and
     /// processes that are not known agent CLIs.
     static func detect(samples: [ProcessSample], home: String) -> [DetectedAgent] {
-        let raw = samples.compactMap { sample -> DetectedAgent? in
+        var raw: [DetectedAgent] = []
+        for sample in samples {
             let procLower = sample.name.lowercased()
             let cmdLower = sample.command.lowercased()
             if procLower.contains("helper") || procLower.contains("renderer")
@@ -425,37 +1000,56 @@ enum StandaloneAgentScanner {
                 || cmdLower.contains(".antigravity-ide/extensions")
                 || cmdLower.contains("language-server") || cmdLower.contains("daemon")
             {
-                return nil
+                continue
             }
             guard
                 let name = AgentDetector.canonicalName(forProcess: sample.name)
                     ?? AgentDetector.canonicalNameFromCommand(sample.command)
             else {
-                return nil
+                continue
             }
             guard !AgentDetector.isHerdrManaged(environmentLines: sample.environmentLines) else {
-                return nil
+                continue
             }
             let roots = AgentDetector.transcriptSearchPaths(home: home, name: name)
-            var activity: String? = nil
-            var isWorking = false
-            for root in roots where activity == nil {
-                if let info = AgentDetector.latestActivityInfo(root: root) {
-                    activity = info.activity
-                    isWorking = info.isRecent && AgentDetector.isWorkingActivity(info.activity)
+            var sessions: [AgentDetector.ActiveSession] = []
+            for root in roots {
+                let found = AgentDetector.activeSessionsInfo(root: root)
+                if !found.isEmpty {
+                    sessions.append(contentsOf: found)
                 }
             }
-            return DetectedAgent(
-                pid: sample.pid,
-                name: name,
-                activity: activity,
-                isWorking: isWorking
-            )
+            sessions.sort(by: { $0.date > $1.date })
+            if !sessions.isEmpty {
+                for session in sessions {
+                    raw.append(
+                        DetectedAgent(
+                            pid: sample.pid,
+                            name: name,
+                            activity: session.activity,
+                            isWorking: session.isWorking,
+                            cwd: session.cwd,
+                            sessionPath: session.sessionPath
+                        )
+                    )
+                }
+            } else {
+                raw.append(
+                    DetectedAgent(
+                        pid: sample.pid,
+                        name: name,
+                        activity: nil,
+                        isWorking: false,
+                        cwd: nil,
+                        sessionPath: nil
+                    )
+                )
+            }
         }
 
         var seenKeys = Set<String>()
         return raw.filter { agent in
-            let key = "\(agent.name):\(agent.activity ?? "")"
+            let key = "\(agent.name):\(agent.cwd ?? "default")"
             guard !seenKeys.contains(key) else { return false }
             seenKeys.insert(key)
             return true

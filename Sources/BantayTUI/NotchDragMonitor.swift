@@ -8,16 +8,7 @@ extension Notification.Name {
     static let notchFilesDropped = Notification.Name("notchFilesDropped")
 }
 
-/// Detects a file drag approaching the notch and announces it so the island
-/// can expand and open the shelf — NotchDrop's pattern. The panel's own
-/// `NSDraggingDestination` rarely fires for a collapsed notch: the drag
-/// cursor is over the menu bar / notch, not the small pill frame, and a
-/// non-activating panel at that window level doesn't reliably receive drag
-/// events. A global `leftMouseDragged` monitor instead watches the cursor
-/// location and pasteboard: when the cursor is inside the notch rectangle
-/// and the pasteboard carries file URLs, it posts `.notchFileDragEntered`.
-/// The actual drop is still handled by `KeyablePanel.performDragOperation`
-/// (once expanded, the panel covers the notch area).
+/// Monitors global mouse drag gestures approaching the screen notch.
 @MainActor
 final class NotchDragMonitor {
     private var monitor: Any?

@@ -53,9 +53,45 @@ struct AgentSnapshot: Identifiable, Equatable {
     /// computed property that re-reads `.git/HEAD` from disk on every SwiftUI
     /// body evaluation.
     let projectContext: ProjectContext?
+    /// Path to the agent's transcript/session directory on disk if known.
+    let sessionPath: String?
+
+    init(
+        id: String,
+        source: String,
+        kind: AgentEventKind,
+        title: String?,
+        message: String?,
+        paneId: String?,
+        workspaceId: String?,
+        cwd: String?,
+        variance: ApprovalVariance?,
+        choices: [String]?,
+        startedAt: Date?,
+        projectContext: ProjectContext?,
+        sessionPath: String? = nil
+    ) {
+        self.id = id
+        self.source = source
+        self.kind = kind
+        self.title = title
+        self.message = message
+        self.paneId = paneId
+        self.workspaceId = workspaceId
+        self.cwd = cwd
+        self.variance = variance
+        self.choices = choices
+        self.startedAt = startedAt
+        self.projectContext = projectContext
+        self.sessionPath = sessionPath
+    }
 
     var approval: IslandMetrics.ApprovalControls {
         IslandMetrics.ApprovalControls(variance: variance, choices: choices)
+    }
+
+    var isWorking: Bool {
+        kind == .progress || kind == .started
     }
 }
 
@@ -66,10 +102,7 @@ struct ProjectContext: Equatable, Sendable {
     let isGit: Bool
     let diffStat: String?
 
-    /// Short-lived per-cwd cache so `.git/HEAD` is read at most once per cwd
-    /// per interval instead of on every poll's roster rebuild (the read runs
-    /// on the main actor today; cwds are stable, so a memo is safe and cuts
-    /// the beachball risk at startup when many agents exist).
+    /// Short-lived cache for Git repository branch and status.
     private static let cacheTTL: TimeInterval = 5.0
     nonisolated(unsafe) private static var cache: [String: (context: ProjectContext, at: Date)] =
         [:]
@@ -252,12 +285,7 @@ final class AgentEventManager: ObservableObject {
     /// numbered-choice, and multi-select controls inline.
     var pendingApprovals: [String: (variance: ApprovalVariance?, choices: [String]?)] =
         [:]
-    /// Panes with an in-flight approve/deny/choice/stop. The control plane
-    /// marks a pane here the instant a user acts so the card shows a resolving
-    /// state and cannot be double-fired (a synchronous `Process.waitUntilExit`
-    /// in the adapter would otherwise block the island and invite a second
-    /// click). Cleared when the next poll confirms the agent left the blocked
-    /// state, or after a safety timeout.
+    /// Panes with an in-flight user action to prevent duplicate clicks.
     private var resolvingPanes: Set<String> = []
     /// Caps how long a pane stays in the resolving state if the next poll
     /// doesn't clear it (e.g. herdr daemon down).
@@ -265,6 +293,7 @@ final class AgentEventManager: ObservableObject {
     private let eventsFileURL: URL
     private let captureEnabled: Bool
     private let herdrAdapter = HerdrSocketAdapter()
+    var activeAdapter: any PlexerAdapter = PlexerFactory.makeAdapter()
 
     init(eventsFileURL: URL? = nil, capture: Bool = true) {
         self.captureEnabled = capture
@@ -286,6 +315,11 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayAsleep = true
+                guard let self else { return }
+                AwayDigestStore.shared.beginAway(
+                    baselineCost: self.usage.costUSD,
+                    baselineTokens: self.usage.totalTokens
+                )
             }
         }
         wakeObserver = workspace.addObserver(
@@ -293,6 +327,17 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayAsleep = false
+                guard let self else { return }
+                if AwayDigestStore.shared.isAway {
+                    let pending = self.agents.filter {
+                        $0.kind == .accessRequest || $0.kind == .waiting
+                    }.count
+                    AwayDigestStore.shared.endAway(
+                        currentCost: self.usage.costUSD,
+                        currentTokens: self.usage.totalTokens,
+                        pendingApprovals: pending
+                    )
+                }
             }
         }
         // Lock state: the distributed notifications are the macOS 13-safe
@@ -305,6 +350,11 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayLocked = true
+                guard let self else { return }
+                AwayDigestStore.shared.beginAway(
+                    baselineCost: self.usage.costUSD,
+                    baselineTokens: self.usage.totalTokens
+                )
             }
         }
         unlockObserver = distCenter.addObserver(
@@ -313,6 +363,15 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayLocked = false
+                guard let self else { return }
+                let pending = self.agents.filter {
+                    $0.kind == .accessRequest || $0.kind == .waiting
+                }.count
+                AwayDigestStore.shared.endAway(
+                    currentCost: self.usage.costUSD,
+                    currentTokens: self.usage.totalTokens,
+                    pendingApprovals: pending
+                )
             }
         }
         start()
@@ -439,10 +498,9 @@ final class AgentEventManager: ObservableObject {
         guard end > readOffset else { return }
         try? handle.seek(toOffset: readOffset)
         let data = handle.readDataToEndOfFile()
-        readOffset = end
-
-        guard let text = String(data: data, encoding: .utf8) else { return }
+        let text = String(decoding: data, as: UTF8.self)
         lineBuffer += text
+        readOffset = end
 
         var lines = lineBuffer.split(whereSeparator: \.isNewline)
         if !lineBuffer.hasSuffix("\n"), let partial = lines.popLast() {
@@ -476,9 +534,27 @@ final class AgentEventManager: ObservableObject {
         // ntfy.sh push for events that need attention even away from the
         // terminal: approvals/blocked always; failures and completions too.
         if let source = event.source {
+            let snap = self.agents.first {
+                (event.paneId != nil && $0.paneId == event.paneId)
+                    || $0.source == source
+            }
             AgentAlertNotifier.notify(
-                source: source, kind: event.kind, title: event.title ?? event.message,
-                paneId: event.paneId)
+                source: source,
+                kind: event.kind,
+                title: event.title ?? event.message,
+                paneId: event.paneId,
+                choices: event.choices,
+                cwd: snap?.cwd,
+                sessionPath: snap?.sessionPath,
+                roster: self.agents
+            )
+            MultiAgentTimelineStore.shared.recordEvent(
+                agentName: source,
+                project: snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
+                kind: event.kind,
+                title: event.title ?? event.message ?? event.kind.label,
+                now: event.createdAt
+            )
         }
         TaskStore.shared.updateTaskState(
             paneId: event.paneId, source: event.sourceKey, kind: event.kind)
@@ -522,6 +598,14 @@ final class AgentEventManager: ObservableObject {
                 createdAt: event.createdAt,
                 duration: completionDuration)
             recentCompletions = Array(([recent] + recentCompletions).prefix(5))
+            if event.kind == .completed {
+                AwayDigestStore.shared.recordCompletion(recent)
+            } else {
+                AwayDigestStore.shared.recordFailure(
+                    agent: event.sourceKey,
+                    reason: event.title ?? event.message
+                )
+            }
         }
 
         if event.kind == .clear {
@@ -647,7 +731,8 @@ extension AgentEventManager {
             variance: nil,
             choices: nil,
             startedAt: nil,
-            projectContext: projectContext
+            projectContext: projectContext,
+            sessionPath: agent.agentSession?.value
         )
     }
 
@@ -828,32 +913,45 @@ extension AgentEventManager {
         let currentDetected = scanStandalone ? lastDetectedAgents : []
         let agents: [HerdrAgentInfo] = await Task.detached(priority: .userInitiated) {
             return herdrAgents
-                + currentDetected.filter {
-                    !Set(herdrAgents.map { $0.agent }).contains($0.name)
-                }.map {
-                    HerdrAgentInfo(
-                        agent: $0.name,
-                        agentStatus: $0.isWorking ? "working" : "idle",
-                        paneId: "standalone:\($0.name)",
+                + currentDetected.filter { detected in
+                    !herdrAgents.contains { herdr in
+                        herdr.agent == detected.name
+                            && (herdr.cwd == nil || herdr.cwd == detected.cwd)
+                    }
+                }.map { detected in
+                    let projectSlug: String = {
+                        if let cwd = detected.cwd, !cwd.isEmpty {
+                            return URL(fileURLWithPath: cwd).lastPathComponent
+                        }
+                        if let session = detected.sessionPath, !session.isEmpty {
+                            return URL(fileURLWithPath: session).lastPathComponent
+                        }
+                        return "standalone"
+                    }()
+                    let sessionRef: HerdrAgentSession? = {
+                        if let session = detected.sessionPath, !session.isEmpty {
+                            return HerdrAgentSession(
+                                agent: detected.name, kind: "path", value: session)
+                        }
+                        return nil
+                    }()
+                    return HerdrAgentInfo(
+                        agent: detected.name,
+                        agentStatus: detected.isWorking ? "working" : "idle",
+                        paneId: "standalone:\(detected.name):\(projectSlug)",
                         workspaceId: nil,
-                        terminalTitle: $0.activity,
-                        cwd: nil,
-                        agentSession: nil
+                        terminalTitle: detected.activity,
+                        cwd: detected.cwd,
+                        agentSession: sessionRef
                     )
                 }
         }.value
-        // PERF: the transcript token/cost enumeration + disk read is gated
-        // behind `usageTrackingEnabled`. Nothing in the UI renders usage (the
-        // footer gauge was removed), so this was running every poll for data
-        // nobody consumed. Phase C (spend history) re-enables it when there's
-        // a consumer.
+        // Transcript token/cost enumeration is gated behind `usageTrackingEnabled`.
         if NotchHUDConfig.shared.usageTrackingEnabled {
             let hasKilo = agents.contains { $0.agent == "kilo" }
             let now = Date()
             if hasKilo, KiloUsageAdapter.detect() {
-                // Kilo's ledger is SQLite — the authoritative source. Quota =
-                // cost over the daily budget; tpm = poll-and-diff cumulative
-                // totals over the poll interval (off-main, WAL-safe read).
+                // Read Kilo usage from SQLite off-main.
                 let pollInterval = NotchHUDConfig.shared.captureInterval
                 let currentUsage = self.usage
                 let currentRate = self.usageRate
@@ -907,6 +1005,10 @@ extension AgentEventManager {
                 self.usage = usageAndRate.0
                 self.usageRate = usageAndRate.1
             }
+            SpendHistoryStore.shared.recordUsage(
+                snapshot: self.usage,
+                peakTPM: self.usageRate.tokensPerMinute ?? 0.0
+            )
             evaluateBudgetAndQuotaAlerts()
         }
         let liveStatuses: [String: String] = Dictionary(
@@ -1026,7 +1128,8 @@ extension AgentEventManager {
                 variance: variance,
                 choices: choices,
                 startedAt: startedAt,
-                projectContext: agent.projectContext
+                projectContext: agent.projectContext,
+                sessionPath: agent.sessionPath
             )
         }
     }
@@ -1048,10 +1151,10 @@ extension AgentEventManager {
     /// resolving so the UI can't double-fire and feels instant. The resolving
     /// flag clears on the next confirming poll, or after `resolvingTimeout`.
     func performAction(
-        paneId: String, _ action: @escaping @Sendable (HerdrSocketAdapter) -> Void
+        paneId: String, _ action: @escaping @Sendable (any PlexerAdapter) -> Void
     ) {
         resolvingPanes.insert(paneId)
-        let adapter = herdrAdapter
+        let adapter = activeAdapter
         Task.detached {
             action(adapter)
             Task { @MainActor in
@@ -1059,6 +1162,35 @@ extension AgentEventManager {
                 self.resolvingPanes.remove(paneId)
             }
         }
+    }
+
+    /// Approves an agent request via the active adapter, routing OpenCode panes to the decision file.
+    func approve(paneId: String) {
+        AwayDigestStore.shared.recordApprovalAnswered()
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+        }
+        performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+    }
+
+    /// Denies an agent request via the active adapter, routing OpenCode panes to the decision file.
+    func deny(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
+        }
+        performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+    }
+
+    /// Selects a numbered choice for an agent request via the active adapter,
+    /// routing OpenCode panes to the decision file with choice index.
+    func approveChoice(paneId: String, choice: Int) {
+        AwayDigestStore.shared.recordApprovalAnswered()
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(
+                paneId: paneId, approve: true, choiceIndex: choice
+            )
+        }
+        performAction(paneId: paneId) { $0.approveChoice(paneId: paneId, choice: choice) }
     }
 
     /// Drop a pane from the resolving set immediately — called when a poll
@@ -1140,20 +1272,26 @@ extension AgentEventManager {
     }
 
     /// Merge standalone-detected agents into the herdr roster without
-    /// duplicating agents herdr already manages (matched by canonical name).
+    /// duplicating agents herdr already manages (matched by canonical name and cwd).
     func mergeStandalone(
         into herdr: [HerdrAgentInfo], detected: [DetectedAgent]
     ) -> [HerdrAgentInfo] {
-        let herdrNames = Set(herdr.map(\.agent))
-        let extras = detected.filter { !herdrNames.contains($0.name) }.map {
-            HerdrAgentInfo(
-                agent: $0.name,
-                agentStatus: $0.isWorking ? "working" : "idle",
+        let extras = detected.filter { det in
+            !herdr.contains { h in
+                h.agent == det.name && (h.cwd == nil || h.cwd == det.cwd)
+            }
+        }.map { det in
+            let sessionRef = det.sessionPath.map {
+                HerdrAgentSession(agent: det.name, kind: "path", value: $0)
+            }
+            return HerdrAgentInfo(
+                agent: det.name,
+                agentStatus: det.isWorking ? "working" : "idle",
                 paneId: nil,
                 workspaceId: nil,
-                terminalTitle: $0.activity,
-                cwd: nil,
-                agentSession: nil
+                terminalTitle: det.activity,
+                cwd: det.cwd,
+                agentSession: sessionRef
             )
         }
         return herdr + extras
@@ -1217,6 +1355,14 @@ extension AgentEventManager {
                 if let sound = NSSound(named: config.errorSoundName) {
                     sound.play()
                 }
+                if config.ntfyEnabled {
+                    AgentAlertNotifier.notify(
+                        source: "budget",
+                        kind: .failed,
+                        title: "🚨 Daily AI Budget Exceeded (\(formattedCost) / \(formattedBudget))",
+                        roster: self.agents
+                    )
+                }
             } else if trigger80 {
                 didAlertBudget80 = true
                 let formattedCost = String(format: "$%.2f", cost)
@@ -1228,6 +1374,14 @@ extension AgentEventManager {
                 )
                 if let sound = NSSound(named: config.approvalSoundName) {
                     sound.play()
+                }
+                if config.ntfyEnabled {
+                    AgentAlertNotifier.notify(
+                        source: "budget",
+                        kind: .waiting,
+                        title: "⚠️ Daily AI Budget 80% (\(formattedCost) / \(formattedBudget))",
+                        roster: self.agents
+                    )
                 }
             }
         }
