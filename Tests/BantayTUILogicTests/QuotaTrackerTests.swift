@@ -276,5 +276,120 @@
                 )
             )
         }
+
+        @Test("CodexUsageAdapter reads deep telemetry from SQLite database")
+        func codexDeepTelemetryParsing() {
+            let tempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("codex-test-\(UUID().uuidString)")
+            let codexDir = tempDir.appendingPathComponent(".codex")
+            try? FileManager.default.createDirectory(
+                at: codexDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tempDir) }
+
+            let dbPath = codexDir.appendingPathComponent("state_5.sqlite").path
+            createMockCodexDB(at: dbPath)
+
+            #expect(CodexUsageAdapter.detect(home: tempDir.path))
+            let telemetry = CodexUsageAdapter.deepTelemetry(home: tempDir.path)
+            #expect(telemetry != nil)
+            #expect(telemetry?.totalTokensUsed == 15400)
+            #expect(telemetry?.activeThreadCount == 1)
+            #expect(telemetry?.latestThreadTitle == "Fix logic bug")
+            #expect(telemetry?.latestModel == "gpt-4o")
+            #expect((telemetry?.estimatedCostUSD ?? 0.0) > 0.0)
+
+            // Test snapshot calculation
+            let snap = CodexUsageAdapter.snapshot(
+                since: 86_400 * 365,
+                now: Date(timeIntervalSince1970: 1_780_000_001),
+                home: tempDir.path
+            )
+            #expect(snap != nil)
+            #expect((snap?.costUSD ?? 0.0) > 0.0)
+            #expect(snap?.costBySource["codex"] != nil)
+        }
+
+        @Test("CursorUsageAdapter reads deep telemetry from ItemTable in state.vscdb")
+        func cursorDeepTelemetryParsing() {
+            let tempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("cursor-test-\(UUID().uuidString)")
+            let globalDir = tempDir.appendingPathComponent(
+                "Library/Application Support/Cursor/User/globalStorage")
+            try? FileManager.default.createDirectory(
+                at: globalDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tempDir) }
+
+            let dbPath = globalDir.appendingPathComponent("state.vscdb").path
+            createMockCursorDB(at: dbPath)
+
+            #expect(CursorUsageAdapter.detect(home: tempDir.path))
+            let telemetry = CursorUsageAdapter.deepTelemetry(home: tempDir.path)
+            #expect(telemetry != nil)
+            #expect(telemetry?.composerSuggestedLines == 1212)
+            #expect(telemetry?.composerAcceptedLines == 340)
+            #expect(telemetry?.contextUsagePercent == 78.614)
+            #expect(telemetry?.totalLinesAdded == 1189)
+            #expect(telemetry?.totalLinesRemoved == 28)
+            #expect(telemetry?.filesChangedCount == 10)
+            #expect(telemetry?.activeSessionName == "Test topic")
+            #expect(telemetry?.unifiedMode == "agent")
+
+            // Test snapshot calculation
+            let snap = CursorUsageAdapter.snapshot(
+                now: Date(),
+                home: tempDir.path
+            )
+            #expect(snap != nil)
+            #expect((snap?.costUSD ?? 0.0) > 0.0)
+            #expect(snap?.costBySource["cursor"] != nil)
+
+            // Verify live quota probe integrates deep telemetry
+            let quotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["cursor"],
+                costUSD: 1.0,
+                budgetUSD: 10.0,
+                home: tempDir.path
+            )
+            let cursorQuota = quotas.first { $0.id == "cursor" }
+            #expect(cursorQuota != nil)
+            #expect(cursorQuota?.usedDisplay.contains("1189 lines") == true)
+            #expect(cursorQuota?.tier.contains("Agent") == true)
+        }
+    }
+
+    private func createMockCodexDB(at path: String) {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK, let db else { return }
+        let schema = """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                model TEXT,
+                tokens_used INTEGER DEFAULT 0,
+                updated_at_ms INTEGER
+            );
+            INSERT INTO threads (id, title, model, tokens_used, updated_at_ms)
+            VALUES ('th_1', 'Fix logic bug', 'gpt-4o', 15400, 1780000000000);
+            """
+        sqlite3_exec(db, schema, nil, nil, nil)
+        sqlite3_close(db)
+    }
+
+    private func createMockCursorDB(at path: String) {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK, let db else { return }
+        let schema = """
+            CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB);
+            INSERT INTO ItemTable (key, value) VALUES (
+                'aiCodeTracking.dailyStats.v1.5.2026-06-29',
+                '{"date":"2026-06-29","composerSuggestedLines":1212,"composerAcceptedLines":340,"tabSuggestedLines":0,"tabAcceptedLines":0}'
+            );
+            INSERT INTO ItemTable (key, value) VALUES (
+                'composer.composerHeaders',
+                '{"allComposers":[{"name":"Test topic","contextUsagePercent":78.614,"totalLinesAdded":1189,"totalLinesRemoved":28,"filesChangedCount":10,"lastUpdatedAt":1780000000000,"unifiedMode":"agent"}]}'
+            );
+            """
+        sqlite3_exec(db, schema, nil, nil, nil)
+        sqlite3_close(db)
     }
 #endif

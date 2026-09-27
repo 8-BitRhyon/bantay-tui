@@ -340,6 +340,16 @@ enum UsageTracker {
             }
             rateLines.append(contentsOf: lines)
         }
+        if names.contains(where: { $0.lowercased() == "codex" }),
+            let codexSnap = CodexUsageAdapter.snapshot(since: 24 * 3600, now: now, home: home)
+        {
+            combined = aggregate([combined, codexSnap])
+        }
+        if names.contains(where: { $0.lowercased() == "cursor" }),
+            let cursorSnap = CursorUsageAdapter.snapshot(now: now, home: home)
+        {
+            combined = aggregate([combined, cursorSnap])
+        }
         return (combined, UsageTracker.rate(lines: rateLines, now: now, window: window))
     }
 

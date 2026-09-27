@@ -1,6 +1,7 @@
 import AppKit
 import EventKit
 import Foundation
+import SQLite3
 
 @main
 struct LogicCheckMain {
@@ -7395,6 +7396,94 @@ struct LogicCheckMain {
                 activeRunway != nil && idleRunway == nil,
                 "L148 forecastHoursRemaining yields runway for active rate and nil for idle"
             )
+
+            // L149: Deep SQLite Telemetry for Codex and Cursor
+            let l149Home = "/tmp/l149-telemetry-\(UUID().uuidString)"
+            let l149CodexDir = l149Home + "/.codex"
+            let l149CursorDir =
+                l149Home + "/Library/Application Support/Cursor/User/globalStorage"
+            try? FileManager.default.createDirectory(
+                atPath: l149CodexDir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(
+                atPath: l149CursorDir, withIntermediateDirectories: true)
+
+            // Setup mock Codex state_5.sqlite
+            var l149CodexDb: OpaquePointer?
+            if sqlite3_open(l149CodexDir + "/state_5.sqlite", &l149CodexDb) == SQLITE_OK,
+                let db = l149CodexDb
+            {
+                let sql = """
+                    CREATE TABLE threads (
+                        id TEXT PRIMARY KEY, title TEXT, model TEXT,
+                        tokens_used INTEGER DEFAULT 0, updated_at_ms INTEGER
+                    );
+                    INSERT INTO threads (id, title, model, tokens_used, updated_at_ms)
+                    VALUES ('th_l149', 'Autonomous loop', 'gpt-4o', 42000, 1780000000000);
+                    """
+                sqlite3_exec(db, sql, nil, nil, nil)
+                sqlite3_close(db)
+            }
+
+            // Setup mock Cursor state.vscdb
+            var l149CursorDb: OpaquePointer?
+            if sqlite3_open(l149CursorDir + "/state.vscdb", &l149CursorDb) == SQLITE_OK,
+                let db = l149CursorDb
+            {
+                let sql = """
+                    CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB);
+                    INSERT INTO ItemTable (key, value) VALUES (
+                        'aiCodeTracking.dailyStats.v1.5.2026-06-29',
+                        '{"date":"2026-06-29","composerSuggestedLines":850,"composerAcceptedLines":210}'
+                    );
+                    INSERT INTO ItemTable (key, value) VALUES (
+                        'composer.composerHeaders',
+                        '{"allComposers":[{"name":"Refactor","contextUsagePercent":64.2,"totalLinesAdded":520,"totalLinesRemoved":12,"unifiedMode":"agent"}]}'
+                    );
+                    """
+                sqlite3_exec(db, sql, nil, nil, nil)
+                sqlite3_close(db)
+            }
+
+            check(
+                CodexUsageAdapter.detect(home: l149Home),
+                "L149 CodexUsageAdapter detects mock state_5.sqlite"
+            )
+            let codexTel = CodexUsageAdapter.deepTelemetry(home: l149Home)
+            check(
+                codexTel != nil && codexTel?.totalTokensUsed == 42000
+                    && codexTel?.latestModel == "gpt-4o",
+                "L149 CodexUsageAdapter parses exact thread tokens and model"
+            )
+
+            check(
+                CursorUsageAdapter.detect(home: l149Home),
+                "L149 CursorUsageAdapter detects mock state.vscdb"
+            )
+            let cursorTel = CursorUsageAdapter.deepTelemetry(home: l149Home)
+            check(
+                cursorTel != nil && cursorTel?.composerSuggestedLines == 850
+                    && cursorTel?.contextUsagePercent == 64.2
+                    && cursorTel?.totalLinesAdded == 520,
+                "L149 CursorUsageAdapter parses exact daily stats, context%, and diff lines"
+            )
+
+            let l149Quotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["codex", "cursor"],
+                costUSD: 1.0,
+                budgetUSD: 10.0,
+                home: l149Home
+            )
+            let l149CodexQ = l149Quotas.first { $0.id == "codex" }
+            let l149CursorQ = l149Quotas.first { $0.id == "cursor" }
+            check(
+                l149CodexQ != nil && l149CodexQ?.usedDisplay.contains("42k tok") == true,
+                "L149 probeLiveQuotas reflects Codex exact SQLite tokens"
+            )
+            check(
+                l149CursorQ != nil && l149CursorQ?.usedDisplay.contains("520 lines") == true,
+                "L149 probeLiveQuotas reflects Cursor exact lines and context"
+            )
+            try? FileManager.default.removeItem(atPath: l149Home)
         }
 
         try? FileManager.default.removeItem(at: brainMockDir)
