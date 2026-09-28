@@ -5000,12 +5000,12 @@ struct LogicCheckMain {
             standaloneAgent.name == "antigravity",
             "L73 standalone agent name mapped")
         // L74 System HUD & Global Hotkey
-        SystemHUDMonitor.shared.showHUD(.volume(0.75, isMuted: false))
+        SystemHUDMonitor.shared.showHUD(.battery(level: 75, isCharging: true))
         check(
-            SystemHUDMonitor.shared.activeHUD?.type == .volume(0.75, isMuted: false),
-            "L74 volume system HUD active")
+            SystemHUDMonitor.shared.activeHUD?.type == .battery(level: 75, isCharging: true),
+            "L74 battery system HUD active")
         check(
-            SystemHUDMonitor.shared.activeHUD?.type.iconName == "speaker.wave.2.fill",
+            SystemHUDMonitor.shared.activeHUD?.type.iconName == "battery.100.bolt",
             "L74 system HUD icon mapped")
         GlobalHotkeyManager.shared.registerGlobalHotkey()
         let isProxy = ApprovalNotificationController.hasBundleProxy
