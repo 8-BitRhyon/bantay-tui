@@ -44,7 +44,7 @@ struct NotchStatusView: View {
         case sessions = "Sessions"
     }
     @State private var historyMode: HistoryMode = .timeline
-    @State private var groupByWorkspace = false
+    @State private var copiedNotes = false
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
     /// icon stays reactive; the config is the single behavioral source of
     /// truth (all logic reads it, and it is the only writer of the defaults).
@@ -335,6 +335,12 @@ struct NotchStatusView: View {
             alignment: .top
         )
         .clipped()
+        .shadow(
+            color: Color.black.opacity(isExpanded ? 0.50 : 0),
+            radius: isExpanded ? 16 : 0,
+            x: 0,
+            y: isExpanded ? 8 : 0
+        )
         .onHover { hovering in
             eventManager.setActive(hovering)
             handleHover(hovering)
@@ -730,25 +736,51 @@ struct NotchStatusView: View {
         } else if ratio >= 0.70 {
             return .orange
         } else {
-            return .white.opacity(isExpanded ? 0.09 : 0.04)
+            return .white.opacity(isExpanded ? 0.22 : 0.04)
         }
     }
 
     private var islandBackground: some View {
         Rectangle()
-            .fill(.black)
+            .fill(
+                isExpanded
+                    ? LinearGradient(
+                        colors: [Color(hex: "12141D"), Color(hex: "08090F")],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    : LinearGradient(
+                        colors: [Color.black, Color.black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+            )
             .mask(islandMask)
             .frame(width: islandWidth + cornerRad * 2, height: islandHeight)
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
                     .strokeBorder(
                         hotkeyBlink
-                            ? .white.opacity(0.45)
+                            ? .white.opacity(0.55)
                             : spendStrokeColor,
                         lineWidth: hotkeyBlink ? 1.5 : 1
                     )
                     .frame(width: islandWidth, height: islandHeight)
                     .animation(.easeOut(duration: 0.12), value: hotkeyBlink)
+            }
+            .overlay {
+                if isExpanded {
+                    RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.12), Color.clear],
+                                startPoint: .top,
+                                endPoint: .center
+                            ),
+                            lineWidth: 1
+                        )
+                        .frame(width: islandWidth, height: islandHeight)
+                }
             }
     }
 
@@ -1613,40 +1645,6 @@ struct NotchStatusView: View {
                 }
                 .keyboardShortcut("7", modifiers: .command)
             }
-            Spacer(minLength: 2)
-
-            // Workspace grouping toggle button
-            Button(action: {
-                groupByWorkspace.toggle()
-            }) {
-                HStack(spacing: 3) {
-                    Image(systemName: groupByWorkspace ? "folder.fill.badge.gearshape" : "folder")
-                        .font(.system(size: 10))
-                    Text("Workspace")
-                        .font(.system(size: 9, weight: groupByWorkspace ? .bold : .regular))
-                }
-                .foregroundColor(
-                    groupByWorkspace ? BantayTheme.statusWorking : BantayTheme.textTertiary
-                )
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2.5)
-                .background(
-                    Capsule()
-                        .fill(
-                            groupByWorkspace
-                                ? BantayTheme.statusWorking.opacity(0.18)
-                                : Color.white.opacity(0.06))
-                )
-                .overlay(
-                    Capsule()
-                        .stroke(
-                            groupByWorkspace
-                                ? BantayTheme.statusWorking.opacity(0.35) : Color.clear,
-                            lineWidth: 0.5)
-                )
-            }
-            .buttonStyle(.plain)
-            .help("Group agents by project workspace folder")
         }
         .padding(.horizontal, 10)
         .frame(height: 22)
@@ -1993,15 +1991,115 @@ struct NotchStatusView: View {
     @ObservedObject private var notesStore = NotesStore.shared
 
     private var notesContent: some View {
-        VStack(spacing: 4) {
-            TextEditor(text: $notesStore.noteText)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.white)
-                .scrollContentBackground(.hidden)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
-                .padding(.horizontal, 10)
-                .frame(height: 96)
+        let words = notesStore.noteText
+            .split(whereSeparator: \.isWhitespace).count
+        let chars = notesStore.noteText.count
+
+        return VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(BantayTheme.statusWorking)
+                        .frame(width: 5, height: 5)
+                    Text("Scratchpad")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundColor(BantayTheme.textPrimary)
+                    Text("•")
+                        .font(.system(size: 8.5))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Text("\(words)w, \(chars)c")
+                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Text("•")
+                        .font(.system(size: 8.5))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Text("Autosaved")
+                        .font(.system(size: 8.5))
+                        .foregroundColor(BantayTheme.textTertiary.opacity(0.8))
+                }
+
+                Spacer(minLength: 4)
+
+                if !notesStore.noteText.isEmpty {
+                    Button(action: {
+                        copyToClipboard(notesStore.noteText)
+                        withAnimation(BantayTheme.springSnappy) {
+                            copiedNotes = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            withAnimation(.easeOut) {
+                                copiedNotes = false
+                            }
+                        }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: copiedNotes ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 8.5))
+                            Text(copiedNotes ? "Copied" : "Copy")
+                                .font(.system(size: 8.5, weight: .medium))
+                        }
+                        .foregroundColor(
+                            copiedNotes ? BantayTheme.statusCompleted : BantayTheme.textSecondary
+                        )
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.white.opacity(0.08), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy notes to clipboard")
+
+                    Button(action: {
+                        notesStore.noteText = ""
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 8.5))
+                            Text("Clear")
+                                .font(.system(size: 8.5, weight: .medium))
+                        }
+                        .foregroundColor(BantayTheme.textTertiary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.white.opacity(0.05), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear scratchpad")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+
+                if notesStore.noteText.isEmpty {
+                    Text(
+                        "Type quick scratch notes, prompt drafts, or snippets here...\nAutosaved to disk."
+                    )
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundColor(BantayTheme.textTertiary.opacity(0.6))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .allowsHitTesting(false)
+                }
+
+                TextEditor(text: $notesStore.noteText)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.white)
+                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxHeight: .infinity)
     }
 
     /// One thumbnail card: icon, name, hover actions (QuickLook / open /
@@ -2282,12 +2380,21 @@ struct NotchStatusView: View {
             {
                 let cleanedTitle = cleanHUDText(rawTitle)
                 if !cleanedTitle.isEmpty {
-                    Text(cleanedTitle)
-                        .font(.system(size: 8.5, weight: .regular))
-                        .foregroundColor(BantayTheme.textTertiary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: 120, alignment: .trailing)
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(BantayTheme.statusWorking)
+                            .frame(width: 4, height: 4)
+                        Text(cleanedTitle)
+                            .font(.system(size: 8.5, weight: .medium))
+                            .foregroundColor(BantayTheme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.white.opacity(0.06), in: Capsule())
+                    .frame(maxWidth: 130, alignment: .trailing)
+                    .help("Active Event: \(cleanedTitle)")
                 }
             }
             Button {

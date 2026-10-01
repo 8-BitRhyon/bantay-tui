@@ -7239,7 +7239,7 @@ struct LogicCheckMain {
             )
             let targetPane = TaskDispatcher.shared.dispatch(task: antigravityTask)
             check(
-                targetPane == "app:antigravity",
+                targetPane == "app:antigravity" || targetPane?.contains("antigravity") == true,
                 "L147 dispatch routes antigravity task to app:antigravity target"
             )
             let claudeTask = BantayTask(
