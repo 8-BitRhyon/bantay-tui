@@ -1,5 +1,7 @@
 #if canImport(Testing)
+    import AppKit
     import Foundation
+    import SwiftUI
     import Testing
 
     @testable import BantayTUI
