@@ -1,16 +1,6 @@
 import Foundation
 
-/// Installs `bantay-opencode.js` into agent plugin directories so sessions
-/// flow into Bantay's event pipeline (working / needs approval / done /
-/// failed) the same way herdr-managed agents do. The plugin is a no-op when
-/// Bantay is absent, so enabling it is safe even if the user only sometimes
-/// runs the agent.
-///
-/// Two targets:
-///  - opencode  → `~/.config/opencode/plugins/`  (classic opencode)
-///  - kilo      → `~/.config/kilo/plugin/`       (opencode fork — loads the
-///    same plugin host from `{plugin,plugins}/*.{ts,js}`; THIS is the path
-///    the user's actual agent reads)
+/// Installs bantay-opencode.js into agent plugin directories.
 enum OpenCodePluginInstaller {
     static let pluginFilename = "bantay-opencode.js"
 
@@ -41,10 +31,7 @@ enum OpenCodePluginInstaller {
         }
     }
 
-    /// Copy the bundled plugin into every agent plugin dir. Returns an error
-    /// message on failure (nil on success). Sources the plugin from the app
-    /// support dir (setup.sh copies it beside the binary, like
-    /// bantay-status.sh) with a dev fallback to the repo's scripts/ dir.
+    /// Copies the bundled OpenCode plugin into target plugin directories.
     static func install() -> String? {
         let supportDir = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

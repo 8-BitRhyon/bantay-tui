@@ -1,11 +1,6 @@
 import Foundation
 
-/// Installs/removes the `#(bantay-status)` tmux status-bar interpolation so
-/// agent status shows inside the terminal you're already using, not just on
-/// the notch. The helper script ships to `~/Library/Application Support/
-/// Bantay-TUI/bantay-status.sh` by `scripts/setup.sh`; this wires it into
-/// the running tmux session's `status-right` (and any future sessions via
-/// `-g`), preserving whatever was there before so removal can restore it.
+/// Manages the #(bantay-status) tmux status-bar integration script.
 enum TmuxStatusInstaller {
     /// The status-right fragment we manage, wrapped so we can find it again.
     static func statusFragment() -> String {

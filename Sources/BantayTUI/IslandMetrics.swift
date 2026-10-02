@@ -44,6 +44,9 @@ public enum IslandMetrics: Sendable {
     public static let closedCornerRadius: CGFloat = 8
     public static let expandedCornerRadius: CGFloat = 24
     public static let pillHeight: CGFloat = 36
+    public static let notificationHeight: CGFloat = 82
+    public static let notificationWidth: CGFloat = 432
+    public static let notificationCornerRadius: CGFloat = 20
     public static let headerHeight: CGFloat = 40
     public static let rowHeight: CGFloat = 26
     public static let taskRowHeight: CGFloat = 34
@@ -546,6 +549,166 @@ public enum IslandMetrics: Sendable {
         return remMinutes > 0 ? "\(hours)h\(remMinutes)m" : "\(hours)h"
     }
 
+    /// Strips ANSI escape sequences, control characters, braille spinners, log envelopes,
+    /// markdown links, and paths to format clean single-line HUD strings.
+    /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.
+    public static func cleanHUDText(_ text: String, maxCharacters: Int = 60) -> String {
+        // 1. Strip ANSI escape sequences, control characters, and braille spinner patterns
+        var s = LogFormatter.stripControlCharacters(text)
+            .replacingOccurrences(of: "\\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+
+        // 2. Strip XML/HTML tags (e.g. <thinking>, </thinking>, <command>)
+        s = s.replacingOccurrences(
+            of: "<[^>]+>",
+            with: "",
+            options: .regularExpression)
+
+        // 3. Strip log envelope metadata (timestamp=... level=... run=... msg=...)
+        s = s.replacingOccurrences(
+            of: "(?:timestamp|time)=[0-9T:.Z+-]+\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:timestamp|time)=\"[^\"]*\"\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:level|lvl)=(?:INFO|WARN|ERROR|DEBUG|TRACE)\\s*",
+            with: "",
+            options: [.regularExpression, .caseInsensitive])
+        s = s.replacingOccurrences(
+            of: "^(?:INFO|WARN|ERROR|DEBUG|TRACE)\\s+",
+            with: "",
+            options: [.regularExpression, .caseInsensitive])
+        s = s.replacingOccurrences(
+            of: "(?:run|run_id)=[a-zA-Z0-9_-]+\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:message|msg)=\"?([^\"]*)\"?",
+            with: "$1",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:service|endpoint)=[a-zA-Z0-9._/-]+\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:count|errors|durationMs)=\\d+\\s*",
+            with: "",
+            options: .regularExpression)
+
+        // 4. Strip bare ISO timestamps (\d{4}-\d{2}-\d{2}T...) and relative time (+40ms)
+        s = s.replacingOccurrences(
+            of: "\\b\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z?\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "\\+\\d+ms\\s*",
+            with: "",
+            options: .regularExpression)
+
+        // 5. Strip terminal progress brackets (e.g. [===> ] 45%)
+        s = s.replacingOccurrences(
+            of: "\\[[=>\\-\\s]+\\]\\s*\\d*%?\\s*",
+            with: "",
+            options: .regularExpression)
+
+        // 6. Strip markdown links: [text](url) -> text
+        let mdLinkPattern = "\\[([^\\]]+)\\]\\([^\\)]+\\)"
+        if let regex = try? NSRegularExpression(pattern: mdLinkPattern, options: []) {
+            let range = NSRange(location: 0, length: s.utf16.count)
+            s = regex.stringByReplacingMatches(
+                in: s, options: [], range: range, withTemplate: "$1")
+        }
+
+        // 7. Strip raw file URLs
+        s = s.replacingOccurrences(of: "file:///[^\\s)]+", with: "", options: .regularExpression)
+
+        // 8. Replace absolute filesystem paths with their last component (basename)
+        let pathWithExtPattern = "/(?:[^\\s/]+/)+([^\\s/]+\\.[a-zA-Z0-9_]+)"
+        if let regex = try? NSRegularExpression(pattern: pathWithExtPattern, options: []) {
+            let range = NSRange(location: 0, length: s.utf16.count)
+            s = regex.stringByReplacingMatches(
+                in: s, options: [], range: range, withTemplate: "$1")
+        }
+
+        // 9. Strip bold/italic/code markdown delimiters
+        s = s.replacingOccurrences(of: "**", with: "")
+        s = s.replacingOccurrences(of: "`", with: "")
+
+        // 10. Collapse excess whitespace
+        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        // 11. Reject unparsed JSON, diff markers, compiler trace noise, hostnames, and shell fallbacks
+        if isSuppressedGarbage(trimmed) {
+            return ""
+        }
+
+        if maxCharacters > 0, trimmed.count > maxCharacters {
+            let prefix = String(trimmed.prefix(maxCharacters - 3))
+            return prefix.trimmingCharacters(in: .whitespaces) + "..."
+        }
+        return trimmed
+    }
+
+    /// True if the string is raw unparsed JSON, a diff chunk, internal daemon noise,
+    /// or a multiplexer hostname/shell fallback.
+    public static func isSuppressedGarbage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        let lower = trimmed.lowercased()
+
+        // Unparsed JSON blobs or brackets
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[")
+            || trimmed.hasPrefix("}") || trimmed.hasPrefix("]")
+            || lower.contains("\"tool_calls\"") || lower.contains("\"tool_use\"")
+            || lower.contains("\"type\":") || lower.contains("\"session_id\":")
+        {
+            return true
+        }
+
+        // Git diff chunks or compiler trace markers
+        if trimmed.hasPrefix("@@") || trimmed.hasPrefix("diff --git")
+            || trimmed.hasPrefix("[diff_block") || trimmed.hasPrefix("::error")
+            || trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:")
+            || trimmed.hasPrefix("Completed At:")
+        {
+            return true
+        }
+
+        // Internal daemon chatter and maintenance pings
+        if lower.contains("service=") || lower.contains("prune=")
+            || lower.contains("catalog request") || lower.contains("catalog response")
+            || lower.contains("catalog fetched") || lower.contains("subscribing")
+            || lower.contains("watching parent process")
+            || lower.contains("ignoring retired") || lower.contains("process_role=")
+            || lower.contains("duplicate skill name") || lower.contains("run_id=")
+            || lower.hasPrefix("cleanup ")
+        {
+            return true
+        }
+
+        // Multiplexer hostnames (e.g. MacBook.local)
+        if lower.hasSuffix(".local") || lower.hasSuffix(".lan") || lower.hasSuffix(".internal") {
+            return true
+        }
+
+        // Multiplexer bare shell names
+        let shells: Set<String> = [
+            "zsh", "bash", "sh", "fish", "csh", "tcsh", "node", "python", "python3", "default",
+            "terminal", "tmux", "zellij", "main", "window", "pane",
+        ]
+        if shells.contains(lower) {
+            return true
+        }
+
+        return false
+    }
+
     /// Whether the roster should react to single-key shortcuts (Y/N/digits).
     /// Requires the island window to be key (clicked/global hotkey focus).
     public static func shortcutKey(for char: Character) -> ApprovalShortcut? {
@@ -644,8 +807,15 @@ public enum IslandMetrics: Sendable {
     /// the pill height so approval controls and idle chips are never clipped —
     /// trimming to just topInset cut off the bottom of the taller approval
     /// pill.
-    public static func closedSize(topInset: CGFloat, notchWidth: CGFloat) -> CGSize {
-        CGSize(width: min(max(notchWidth, 0), expandedWidth), height: topInset + pillHeight)
+    public static func closedSize(
+        topInset: CGFloat, notchWidth: CGFloat, hasNotification: Bool = false
+    ) -> CGSize {
+        if hasNotification {
+            return CGSize(
+                width: min(max(notchWidth, notificationWidth), expandedWidth),
+                height: topInset + notificationHeight)
+        }
+        return CGSize(width: min(max(notchWidth, 0), expandedWidth), height: topInset + pillHeight)
     }
 
     /// The expanded roster content size, height-capped.
@@ -656,7 +826,7 @@ public enum IslandMetrics: Sendable {
     public static func contentHeight(
         isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0,
         shelfTabVisible: Bool = false, overflowCount: Int = 0, groupCount: Int = 0,
-        footerVisible: Bool = true
+        footerVisible: Bool = true, hasNotification: Bool = false
     ) -> CGFloat {
         if isExpanded {
             return expandedSize(
@@ -664,6 +834,9 @@ public enum IslandMetrics: Sendable {
                 shelfTabVisible: shelfTabVisible, overflowCount: overflowCount,
                 groupCount: groupCount, footerVisible: footerVisible
             ).height - topInset
+        }
+        if hasNotification {
+            return notificationHeight
         }
         return pillHeight
     }
@@ -696,28 +869,7 @@ public enum IslandMetrics: Sendable {
         return max(min(max(natural, rowHeight), max(availableHeight, 0)), 0)
     }
 
-    /// Whether a display has a hardware notch, centralizing the heuristic that
-    /// used to be inlined at three call sites (`islandScreen`, `islandFrame`,
-    /// `notchWidth`). One tested function drives all three.
-    ///
-    /// Certified heuristic — a display is NOTCHED only when the safe-area top
-    /// is positive (menu bar and/or notch present) AND at least one auxiliary
-    /// menu-bar area is reported:
-    ///
-    ///     safeTop > 0 && (auxLeft > 0 || auxRight > 0)
-    ///
-    /// Per-row rationale:
-    ///   - safeTop 0 + aux (any)      -> false. A notch-less display (external,
-    ///     or a MacBook with no notch) has a zero safe-area top. Aux-area
-    ///     nil-ness alone is unreliable — macOS 13 vs 14 report auxiliary
-    ///     areas differently on notch-less hardware.
-    ///   - safeTop 37 + aux both 0    -> false. safeTop alone (menu bar +
-    ///     notch height) is not proof of a notch when the OS reports no
-    ///     auxiliary areas (e.g. Stage Manager / iPad-in-Clamshell); the
-    ///     fallback pill geometry engages.
-    ///   - safeTop 24/37 + any aux>0  -> true. A positive safe top plus a real
-    ///     auxiliary icon cluster certifies a notch flanked by menu-bar
-    ///     regions.
+    /// Determines whether a display has a hardware notch based on safe-area and auxiliary regions.
     public static func hasNotch(safeTop: CGFloat, auxLeft: CGFloat, auxRight: CGFloat) -> Bool {
         safeTop > 0 && (auxLeft > 0 || auxRight > 0)
     }
@@ -802,7 +954,7 @@ public enum IslandMetrics: Sendable {
     }
 
     public static func shouldExpand(hovering: Bool, hasAgents: Bool) -> Bool {
-        hovering && hasAgents
+        hovering
     }
 
     public static func shouldCollapse(isExpanded: Bool, hasAgents: Bool) -> Bool {
@@ -941,13 +1093,7 @@ public enum IslandMetrics: Sendable {
     /// Gap between the island edge and a peek panel docked beside it.
     public static let peekGap: CGFloat = 8
 
-    /// Placement for the peek overlay panel: prefers docking beside the
-    /// island (right first, left when the right side lacks room), falls back
-    /// to stacking below the island, always clamps inside the screen, and
-    /// never overlaps the island except in the degenerate case where the
-    /// island itself fills the whole display. Mirrors the `windowFrame`
-    /// clamp discipline and reuses `alignedToBackingPixelGrid` so the panel
-    /// lands on the backing pixel grid for `scale`.
+    /// Calculates the peek panel frame docked beside or below the island.
     public static func peekFrame(
         anchor islandFrame: CGRect, screenFrame: CGRect, size: CGSize, scale: CGFloat = 1
     ) -> CGRect {
@@ -1005,13 +1151,7 @@ public enum IslandMetrics: Sendable {
     }
 }
 
-/// Pure cleaner for raw `pane read` output feeding the peek overlay and the
-/// inline hover tail. Whitespace-trims every line, drops blanks, strips ANSI
-/// escapes and control characters (so binary/ANSI garbage can never render),
-/// hard-truncates over-long lines, and suffixes to `maxLines`. Truncation
-/// happens on grapheme-cluster boundaries, so CJK and emoji survive intact,
-/// and a pathological single line (the 100k-char adversarial case) is handled
-/// without throwing.
+/// Cleans raw terminal output by stripping ANSI escapes and control characters.
 public enum LogFormatter: Sendable {
     public static func cleanedTail(
         _ raw: String, maxLines: Int, maxLineLength: Int
@@ -1032,7 +1172,11 @@ public enum LogFormatter: Sendable {
     /// any remaining C0/C1 control characters. Newlines never reach here (the
     /// input is already split), so every control scalar below 0x20 or in
     /// 0x7F...0x9F is dropped; CJK (U+4E00+) and emoji (U+1F300+) are untouched.
-    private static func stripControlCharacters(_ text: String) -> String {
+    public static func cleanAnsi(_ text: String) -> String {
+        stripControlCharacters(text)
+    }
+
+    public static func stripControlCharacters(_ text: String) -> String {
         var result = String()
         result.reserveCapacity(text.count)
         enum State {
@@ -1046,7 +1190,9 @@ public enum LogFormatter: Sendable {
             case .normal:
                 if char == "\u{1B}" {
                     state = .escape
-                } else if value < 0x20 || (0x7F...0x9F).contains(value) {
+                } else if value < 0x20 || (0x7F...0x9F).contains(value)
+                    || (0x2800...0x28FF).contains(value)
+                {
                     continue
                 } else {
                     result.append(char)
@@ -1062,7 +1208,11 @@ public enum LogFormatter: Sendable {
             case .csi:
                 if (0x40...0x7E).contains(value) { state = .normal }
             case .osc:
-                if char == "\u{1B}" { state = .oscEsc }
+                if char == "\u{07}" || char == "\u{00}" {
+                    state = .normal
+                } else if char == "\u{1B}" {
+                    state = .oscEsc
+                }
             case .oscEsc:
                 if char == "\\" {
                     state = .normal

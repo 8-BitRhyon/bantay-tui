@@ -29,16 +29,7 @@ enum ShelfKeepDuration: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// The shelf: persisted, owns copies of dropped files, expires by retention,
-/// and renders QuickLook thumbnails. Mirrors NotchDrop's TrayDrop semantics —
-/// a drop here is *safe* (the file is copied into Bantay's data dir and
-/// survives the source file moving or the app restarting).
-///
-/// - Persistence: items persisted as JSON in UserDefaults; files copied into
-///   `~/Library/Application Support/Bantay-TUI/shelf/<uuid>/<name>`.
-/// - Retention: `cleanExpired()` removes items past `keepDuration` (config).
-/// - Thumbnails: generated lazily via NSWorkspace icon (fast) then upgraded
-///   to a QuickLook thumbnail when available.
+/// Persists and manages dropped shelf files with QuickLook previews.
 @MainActor
 final class ShelfStore: ObservableObject {
     static let shared = ShelfStore()
@@ -102,15 +93,41 @@ final class ShelfStore: ObservableObject {
     func remove(_ file: ShelfFile) {
         files = ShelfFiles.removing(file.url, from: files)
         try? FileManager.default.removeItem(at: file.url)
+        let parentDir = file.url.deletingLastPathComponent()
+        if parentDir.path.contains("Bantay-TUI/shelf") {
+            try? FileManager.default.removeItem(at: parentDir)
+        }
         save()
     }
 
     func removeAll() {
         for file in files {
             try? FileManager.default.removeItem(at: file.url)
+            let parentDir = file.url.deletingLastPathComponent()
+            if parentDir.path.contains("Bantay-TUI/shelf") {
+                try? FileManager.default.removeItem(at: parentDir)
+            }
         }
         files = []
         save()
+    }
+
+    func copyPath(_ file: ShelfFile) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(file.url.path, forType: .string)
+    }
+
+    func copyContent(_ file: ShelfFile) {
+        guard let text = try? String(contentsOf: file.url, encoding: .utf8) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func airDrop(_ file: ShelfFile) {
+        guard let service = NSSharingService(named: .sendViaAirDrop) else { return }
+        if service.canPerform(withItems: [file.url]) {
+            service.perform(withItems: [file.url])
+        }
     }
 
     /// Expire items past the configured retention. Call on launch and after

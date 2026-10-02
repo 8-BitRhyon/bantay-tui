@@ -20,7 +20,7 @@ final class KeyablePanel: NSPanel {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
-    @MainActor static weak var window: NSWindow?
+    @MainActor static var window: NSWindow?
     /// The live app-delegate instance, for non-main-actor callbacks.
     @MainActor static weak var shared: AppDelegate?
     /// Set once the island has shown at least once; un-gates `hideAtStartup`.
@@ -122,6 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--mcp") || CommandLine.arguments.contains("mcp") {
+            BantayMCPServer.runStdioLoop()
+            exit(0)
+        }
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
         // Data dir + events file always exist (setup.sh parity) so the
@@ -182,10 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         window.backgroundColor = .clear
         window.hasShadow = false
         window.isMovable = false
-        // `.statusBar + 8` (NotchDrop's proven level): above normal windows
-        // AND the menu bar, but within the range where drag-and-drop routes
-        // to the window. `Int32.max - 3` was so far above everything that
-        // Finder drags fell through to the wallpaper instead of the island.
+        // Set window level to statusBar + 8 for drag-and-drop support.
         window.level = .statusBar + 8
         window.collectionBehavior = [
             .fullScreenAuxiliary,
@@ -194,11 +195,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .ignoresCycle,
         ]
         window.canBecomeVisibleWithoutLogin = true
-        // FileDropContentView is a REAL AppKit drag destination. SwiftUI
-        // `.onDrop` silently never registers on a borderless accessory panel
-        // (verified: registeredDraggedTypes stays empty), so an AppKit view
-        // must own the drop. The SwiftUI island is hosted inside it; the view
-        // posts .notchFilesDropped on drop.
+        window.isReleasedWhenClosed = false
+        // FileDropContentView provides AppKit drag-and-drop registration for the island.
         let dropView = FileDropContentView(
             rootView: NotchStatusView().environmentObject(AgentEventManager.shared))
         window.contentView = dropView
@@ -238,14 +236,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition() }
+            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition(entering: true) }
         }
         fullScreenExitObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didExitFullScreenNotification,
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition() }
+            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition(entering: false) }
         }
         spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -295,10 +293,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Re-evaluate island visibility after a full-screen transition and
     /// re-anchor once the WindowServer settles the new frame.
     @MainActor
-    static func handleFullScreenTransition() {
+    static func handleFullScreenTransition(entering: Bool) {
         settleTask?.cancel()
         if IslandMetrics.FullScreenPolicy.shouldShow(
-            inFullScreen: true, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
+            inFullScreen: entering, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
         {
             showAtNotch()
         } else {
@@ -309,7 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
             guard !Task.isCancelled else { return }
             if IslandMetrics.FullScreenPolicy.shouldShow(
-                inFullScreen: true, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
+                inFullScreen: entering, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
             {
                 showAtNotch()
             } else {
@@ -393,12 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         statusItem = item
     }
 
-    /// Global ⌥-key shortcuts: toggle (⌥Space), approve top (⌥Y), deny top
-    /// (⌥N), snooze 15m (⌥S). One key-down monitor per enabled action, so a
-    /// disabled facet stops installing immediately in both directions. Uses
-    /// key-down monitors so no Accessibility permission is required; when
-    /// Input Monitoring is untrusted the monitor comes back nil — log once
-    /// and leave the menu-bar fallbacks working.
+    /// Installs global Option-key shortcut monitors for island toggle, approvals, and snooze.
     @MainActor
     func updateGlobalHotkeyMonitor() {
         for monitor in hotkeyMonitors {
@@ -455,11 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    /// Dispatch a global hotkey action. Approve/deny route through the event
-    /// manager for the top pending approval, guarded exactly like the
-    /// in-island Y/N shortcuts (no compose field open, not resolving) so an
-    /// approval is never dropped or double-fired. Snooze mirrors the 15m menu
-    /// preset.
+    /// Dispatches a global hotkey action to the appropriate handler.
     @MainActor
     static func handleHotkeyAction(_ action: IslandMetrics.HotkeyAction) {
         switch action {
@@ -480,6 +469,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor
     private static func performApprovalHotkey(approve: Bool) {
         guard composingPaneId == nil else { return }
+        if window?.isKeyWindow == true,
+            let responder = window?.firstResponder,
+            responder is NSText || responder is NSTextField
+        {
+            return
+        }
         let manager = AgentEventManager.shared
         let muted = NotchHUDConfig.shared.mutedSources
         let roster =
@@ -491,12 +486,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let merged = manager.mergeApprovals(into: roster)
         let top = merged.first { $0.kind == .accessRequest || $0.kind == .waiting }
         guard let paneId = top?.paneId, !manager.isResolving(paneId: paneId) else { return }
-        manager.performAction(paneId: paneId) { adapter in
-            if approve {
-                adapter.approve(paneId: paneId)
-            } else {
-                adapter.deny(paneId: paneId)
-            }
+        #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        #endif
+        if approve {
+            manager.approve(paneId: paneId)
+        } else {
+            manager.deny(paneId: paneId)
         }
     }
 
@@ -535,11 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    /// Start/stop the remote event-ingest listeners per config. Remote agents
-    /// tunnel into the TCP listener (`ssh -R <port>:localhost:<port>`) and
-    /// POST event lines that enter the same pipeline as local events; the
-    /// user-owned Unix socket (default on) serves local scripts via HTTP
-    /// POST or the bare `token <secret>` + event-line form.
+    /// Configures and starts TCP and Unix socket ingest listeners per configuration.
     @MainActor
     func updateIngestServer() {
         ingestServer?.stop()
@@ -549,12 +541,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let manager = AgentEventManager.shared
         let server = EventIngestServer(
             port: IngestHTTP.clampedPort(config.ingestPort),
-            token: config.ingestToken
-        ) { line in
-            Task { @MainActor in
-                manager.ingestEventLine(line)
+            token: config.ingestToken,
+            onLine: { line in
+                Task { @MainActor in
+                    manager.ingestEventLine(line)
+                }
+            },
+            onAction: { action in
+                Task { @MainActor in
+                    switch action {
+                    case .approve(let paneId):
+                        manager.approve(paneId: paneId)
+                    case .deny(let paneId):
+                        manager.deny(paneId: paneId)
+                    case .choice(let paneId, let index):
+                        manager.approveChoice(paneId: paneId, choice: index)
+                    }
+                }
             }
-        }
+        )
         if config.ingestEnabled {
             server.start()
             Self.dbg(
@@ -596,20 +601,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(.separator())
 
         let agents = AgentEventManager.shared.agents
+        let topApproval = agents.first { $0.kind == .accessRequest || $0.kind == .waiting }
+        if let topApproval, let paneId = topApproval.paneId {
+            let cleanPrompt =
+                topApproval.title.flatMap {
+                    let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
+                    return c.isEmpty ? nil : ": \(c)"
+                } ?? ""
+            let approveTitle = "✓ Approve \(topApproval.source)\(cleanPrompt)"
+            let approveItem = NSMenuItem(
+                title: approveTitle,
+                action: #selector(approveAgent(_:)),
+                keyEquivalent: "y"
+            )
+            approveItem.keyEquivalentModifierMask = [.option]
+            approveItem.target = self
+            approveItem.representedObject = paneId
+            menu.addItem(approveItem)
+
+            let denyItem = NSMenuItem(
+                title: "✕ Deny \(topApproval.source)",
+                action: #selector(denyAgent(_:)),
+                keyEquivalent: "n"
+            )
+            denyItem.keyEquivalentModifierMask = [.option]
+            denyItem.target = self
+            denyItem.representedObject = paneId
+            menu.addItem(denyItem)
+            menu.addItem(.separator())
+        }
+
         if agents.isEmpty {
             let noneItem = NSMenuItem(title: "No agents active", action: nil, keyEquivalent: "")
             noneItem.isEnabled = false
             menu.addItem(noneItem)
         } else {
+            let rosterHeader = NSMenuItem(
+                title: "Agents (\(agents.count))", action: nil, keyEquivalent: "")
+            rosterHeader.isEnabled = false
+            menu.addItem(rosterHeader)
+
             for agent in agents {
                 let isBlocked =
                     agent.kind == .accessRequest || agent.kind == .waiting
-                if isBlocked, agent.paneId != nil {
-                    // Submenu per blocked agent: Approve / Deny (+ choices).
-                    let submenu = NSMenu()
+                let glyph: String = {
+                    switch agent.kind {
+                    case .accessRequest, .waiting: return "🟡"
+                    case .failed: return "🔴"
+                    case .completed: return "🔵"
+                    case .progress, .started: return "🟢"
+                    default: return agent.isWorking ? "🟢" : "⚪️"
+                    }
+                }()
+                let slug = agent.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+                let cleanTitle = agent.title.flatMap {
+                    let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
+                    return c.isEmpty ? nil : c
+                }
+                let desc = cleanTitle ?? agent.kind.label
+                let label =
+                    "\(glyph) \(agent.source)\(slug.map { " (\($0))" } ?? "") — \(desc)"
+                let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+                let submenu = NSMenu()
+
+                if isBlocked, let paneId = agent.paneId {
                     let header = NSMenuItem(
-                        title: "\(agent.source) needs approval", action: nil,
-                        keyEquivalent: "")
+                        title: "\(agent.source) needs approval", action: nil, keyEquivalent: "")
                     header.isEnabled = false
                     submenu.addItem(header)
                     submenu.addItem(.separator())
@@ -618,68 +675,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         submenu.addItem(
                             menuItem(
                                 title: "Approve", action: #selector(approveAgent(_:)),
-                                paneId: agent.paneId!))
+                                paneId: paneId))
                         submenu.addItem(
                             menuItem(
                                 title: "Deny", action: #selector(denyAgent(_:)),
-                                paneId: agent.paneId!))
-                    } else if controls.isMulti {
-                        let labels = controls.optionLabels
-                        for (index, label) in labels.enumerated() {
-                            let text =
-                                controls.choices.indices.contains(index)
-                                ? controls.choices[index] : "Option \(label)"
-                            submenu.addItem(
-                                menuItem(
-                                    title: "\(label). \(text)",
-                                    action: #selector(approveChoiceAgent(_:)),
-                                    paneId: agent.paneId!,
-                                    extra: String(index)))
-                        }
-                        submenu.addItem(
-                            menuItem(
-                                title: "Approve (all selected)",
-                                action: #selector(approveAgent(_:)),
-                                paneId: agent.paneId!))
+                                paneId: paneId))
                     } else {
                         let labels = controls.optionLabels
-                        for (index, label) in labels.enumerated() {
+                        for (index, optLabel) in labels.enumerated() {
                             let text =
                                 controls.choices.indices.contains(index)
-                                ? controls.choices[index] : "Option \(label)"
+                                ? controls.choices[index] : "Option \(optLabel)"
                             submenu.addItem(
                                 menuItem(
-                                    title: "\(label). \(text)",
+                                    title: "\(optLabel). \(text)",
                                     action: #selector(approveChoiceAgent(_:)),
-                                    paneId: agent.paneId!,
+                                    paneId: paneId,
                                     extra: String(index)))
                         }
                         if controls.optionLabels.isEmpty {
                             submenu.addItem(
                                 menuItem(
                                     title: "Approve", action: #selector(approveAgent(_:)),
-                                    paneId: agent.paneId!))
+                                    paneId: paneId))
                         }
                     }
                     submenu.addItem(.separator())
+                }
+
+                if let paneId = agent.paneId {
                     submenu.addItem(
                         menuItem(
-                            title: "Focus terminal", action: #selector(focusAgent(_:)),
-                            paneId: agent.paneId!))
-                    let item = NSMenuItem(
-                        title: "⚠︎ \(agent.source) — \(agent.title ?? "needs approval")",
-                        action: nil, keyEquivalent: "")
-                    item.submenu = submenu
-                    menu.addItem(item)
-                } else {
-                    let item = NSMenuItem(
-                        title: "\(agent.source) · \(agent.kind.label)",
-                        action: #selector(focusAgent(_:)),
-                        keyEquivalent: "")
-                    item.target = self
-                    item.representedObject = agent.paneId
-                    menu.addItem(item)
+                            title: "Focus Window", action: #selector(focusAgent(_:)),
+                            paneId: paneId))
+                    submenu.addItem(
+                        menuItem(
+                            title: "View Session in Browser",
+                            action: #selector(viewSessionInBrowser(_:)),
+                            paneId: paneId))
                 }
+                item.submenu = submenu
+                menu.addItem(item)
             }
         }
 
@@ -808,7 +844,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor
     @objc private func focusAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
-        HerdrSocketAdapter().paneFocus(paneId: paneId)
+        if paneId.hasPrefix("standalone:") {
+            let stripped = paneId.replacingOccurrences(of: "standalone:", with: "")
+            let components = stripped.split(separator: ":")
+            let agentName = String(components.first ?? "")
+            let agent = AgentEventManager.shared.agents.first { $0.paneId == paneId }
+            TerminalFocusser.focusStandalone(source: agentName, cwd: agent?.cwd)
+        } else if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            let agent = AgentEventManager.shared.agents.first { $0.paneId == paneId }
+            TerminalFocusser.focusStandalone(source: "opencode", cwd: agent?.cwd)
+        } else {
+            AgentEventManager.shared.performAction(paneId: paneId) { $0.focusPane(paneId: paneId) }
+        }
+    }
+
+    @MainActor
+    @objc private func viewSessionInBrowser(_ sender: NSMenuItem) {
+        guard let paneId = sender.representedObject as? String else { return }
+        let agent = AgentEventManager.shared.agents.first { $0.paneId == paneId }
+        let source = agent?.source ?? "agent"
+        let slug = agent?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? source
+        RichSessionViewer.openInBrowser(
+            agentName: source,
+            projectSlug: slug,
+            cwd: agent?.cwd,
+            isWorking: agent?.isWorking ?? false,
+            sessionPath: agent?.sessionPath
+        )
     }
 
     /// Helper for a menu item whose target is this delegate and whose
@@ -827,13 +889,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor
     @objc private func approveAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
-        AgentEventManager.shared.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+        AgentEventManager.shared.approve(paneId: paneId)
     }
 
     @MainActor
     @objc private func denyAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
-        AgentEventManager.shared.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+        AgentEventManager.shared.deny(paneId: paneId)
     }
 
     @MainActor
@@ -928,14 +990,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @MainActor
     @objc func openSettings() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
         let window = settingsWindowInstance ?? makeSettingsWindow()
         settingsWindowInstance = window
         NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
         window.center()
+        NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @MainActor
@@ -960,6 +1022,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 NSApp.setActivationPolicy(.accessory)
             }
         }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication, hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            openSettings()
+        }
+        return true
     }
 
     @MainActor

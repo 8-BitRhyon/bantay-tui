@@ -53,6 +53,9 @@ struct SettingsView: View {
     @State private var standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
     @State private var showUsage = NotchHUDConfig.shared.usageTrackingEnabled
     @State private var dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
+    @State private var notifyOnBudgetThresholds = NotchHUDConfig.shared.notifyOnBudgetThresholds
+    @State private var notifyOnHighBurnRate = NotchHUDConfig.shared.notifyOnHighBurnRate
+    @State private var enforceBudgetLimit = NotchHUDConfig.shared.enforceBudgetLimit
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
     @State private var showNotchMascot = NotchHUDConfig.shared.showNotchMascot
     @State private var selectedMascotArchetype = NotchHUDConfig.shared.selectedMascotArchetype
@@ -77,6 +80,7 @@ struct SettingsView: View {
     @State private var notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
     @State private var ntfyTopic = NotchHUDConfig.shared.ntfyTopic
     @State private var ntfyServer = NotchHUDConfig.shared.ntfyServer
+    @State private var ntfyCallbackURL = NotchHUDConfig.shared.ntfyCallbackURL
     @State private var tmuxStatusEnabled = NotchHUDConfig.shared.tmuxStatusEnabled
     @State private var attentionFilter = NotchHUDConfig.shared.attentionFilterEnabled
     @State private var volumePreviewTask: Task<Void, Never>?
@@ -85,20 +89,106 @@ struct SettingsView: View {
     @State private var opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
     @State private var opencodePluginError = ""
     @State private var showTokenRate = NotchHUDConfig.shared.showTokenRate
+    @State private var showAgentsTab = NotchHUDConfig.shared.showAgentsTab
     @State private var showTasksTab = NotchHUDConfig.shared.showTasksTab
+    @State private var showHistoryTab = NotchHUDConfig.shared.showHistoryTab
+    @State private var showShelfTab = NotchHUDConfig.shared.showShelfTab
+    @State private var showMediaTab = NotchHUDConfig.shared.showMediaTab
+    @State private var showNotesTab = NotchHUDConfig.shared.showNotesTab
+    @State private var hoverSensitivity = NotchHUDConfig.shared.hoverSensitivityPreset
     @State private var enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
+    @State private var globalHotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
     @State private var soundThemePreset = NotchHUDConfig.shared.soundThemePreset
     @State private var approvalSoundName = NotchHUDConfig.shared.approvalSoundName
     @State private var completionSoundName = NotchHUDConfig.shared.completionSoundName
     @State private var errorSoundName = NotchHUDConfig.shared.errorSoundName
+    @State private var autoDispatchTasks = NotchHUDConfig.shared.autoDispatchTasks
+    @State private var focusTerminalOnDispatch = NotchHUDConfig.shared.focusTerminalOnDispatch
 
-    /// Whether a section title matches the current search query.
+    private static let sectionKeywords: [String: [String]] = [
+        "Startup": [
+            "launch at login", "hide island at startup", "show island when idle", "idle position",
+            "idle display", "agent name chips", "status dots", "count summary", "max agent chips",
+            "dock",
+        ],
+        "Quick actions": [
+            "global shortcut", "option space", "hotkey", "keyboard shortcuts in roster", "approve",
+            "deny",
+            "edge glow", "pending approvals", "elapsed time", "menu-bar badge",
+        ],
+        "Displays": [
+            "follow mouse screen", "floating pill without notch", "clamshell", "external display",
+            "full screen", "avoid menu-bar icons", "bartender", "ice", "focus terminal", "ghostty",
+            "warp", "wezterm", "alacritty", "iterm2", "terminal", "vscode",
+        ],
+        "Pill behavior": [
+            "auto-clear", "sticky approvals", "ttl", "timeout",
+        ],
+        "Mascot & Pet Companion": [
+            "mascot", "pet", "companion", "dog", "cat", "cybercat", "ceo", "wizard", "dragon",
+            "coffee", "xp", "level", "accessory", "hat", "glasses", "crown", "bowtie", "archetype",
+            "eyes",
+        ],
+        "Expanded panel": [
+            "modular tabs", "agents roster tab", "tasks & reminders tab", "session history tab",
+            "drop shelf", "media tab", "quick notes tab", "scratchpad", "attention-only triage",
+            "hover sensitivity", "quota-axi", "global hotkey",
+        ],
+        "Muted sources": [
+            "mute", "muted sources", "hide source", "unmute",
+        ],
+        "Tasks & Dispatching": [
+            "auto-run tasks", "dispatch", "focus terminal or app", "reminders", "apple reminders",
+        ],
+        "Shelf": [
+            "shelf tab", "clipboard history", "dropped files", "shelf limit", "expire", "duration",
+        ],
+        "Alerts": [
+            "alert sounds", "volume", "sound theme preset", "8-bit arcade", "sci-fi synth",
+            "retro synth", "minimalist", "industrial", "custom", "approval sound",
+            "completion sound",
+            "error sound", "mute while in terminal", "notify when hidden", "preview", "audio",
+        ],
+        "Push notifications (ntfy.sh)": [
+            "push notifications", "ntfy", "topic", "server", "remote devices",
+        ],
+        "tmux status bar": [
+            "tmux", "status bar", "status-right", "live summary",
+        ],
+        "Quiet hours": [
+            "quiet hours", "silence alert sounds", "schedule", "night", "dnd", "do not disturb",
+        ],
+        "herdr integration": [
+            "herdr", "plugin", "adapter", "socket",
+        ],
+        "Claude Code hook": [
+            "claude code", "hook", "permissionprompt", "stop hook", "settings.json",
+        ],
+        "openCode integration": [
+            "opencode", "plugin", "sessions",
+        ],
+        "Remote ingest (SSH bridge)": [
+            "remote ingest", "ssh bridge", "listen port", "curl", "events", "token",
+        ],
+        "Capture": [
+            "poll agents", "interval", "scan standalone agents", "codex", "gemini", "cursor",
+            "opencode", "track token", "cost usage", "spend", "budget", "daily budget limit",
+            "spend edge-glow", "notify at budget thresholds", "token burn rate", "tpm",
+            "enforce budget limit", "block task dispatch",
+        ],
+    ]
+
+    /// Whether a section title matches the current search query or its keywords.
     private func matchesSearch(_ title: String) -> Bool {
-        searchText.isEmpty || title.localizedCaseInsensitiveContains(searchText)
+        guard !searchText.isEmpty else { return true }
+        if title.localizedCaseInsensitiveContains(searchText) { return true }
+        if let keywords = Self.sectionKeywords[title] {
+            return keywords.contains { $0.localizedCaseInsensitiveContains(searchText) }
+        }
+        return false
     }
 
-    /// Sidebar row: icon + label, with a subtle "dot" when a search query
-    /// matches nothing else in that category (so results are findable).
+    /// Sidebar row: icon + label, styled with BantayTheme tokens.
     private func sidebarRow(_ category: Category, matches: Bool) -> some View {
         Button {
             selectedCategory = category
@@ -107,21 +197,34 @@ struct SettingsView: View {
                 Image(systemName: category.icon)
                     .font(.system(size: 12))
                     .frame(width: 18)
-                    .foregroundStyle(selectedCategory == category ? .white : .secondary)
+                    .foregroundStyle(
+                        selectedCategory == category
+                            ? BantayTheme.statusWorking : BantayTheme.textSecondary)
                 Text(category.rawValue)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(selectedCategory == category ? .white : .primary)
+                    .font(
+                        .system(
+                            size: 12, weight: selectedCategory == category ? .semibold : .medium)
+                    )
+                    .foregroundStyle(
+                        selectedCategory == category
+                            ? BantayTheme.textPrimary : BantayTheme.textSecondary)
                 Spacer()
             }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
             selectedCategory == category
-                ? Color.accentColor.opacity(0.22) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                ? BantayTheme.statusWorking.opacity(0.16) : Color.clear,
+            in: RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+                .stroke(
+                    selectedCategory == category
+                        ? BantayTheme.statusWorking.opacity(0.35) : Color.clear, lineWidth: 1)
         )
         .opacity(matches ? 1 : 0.35)
         .disabled(!matches)
@@ -134,9 +237,10 @@ struct SettingsView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "square.3.layers.3d.top.filled")
                         .font(.system(size: 14))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(BantayTheme.statusWorking)
                     Text("Bantay-TUI")
                         .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(BantayTheme.textPrimary)
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
@@ -144,10 +248,11 @@ struct SettingsView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    TextField("Search", text: $searchText)
+                        .foregroundStyle(BantayTheme.textTertiary)
+                    TextField("Search settings...", text: $searchText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
+                        .foregroundStyle(BantayTheme.textPrimary)
                         .disableAutocorrection(true)
                         .onChange(of: searchText) { query in
                             // Jump to the first category with a match so the
@@ -155,18 +260,30 @@ struct SettingsView: View {
                             guard !query.isEmpty else { return }
                             let first = Category.allCases.first {
                                 $0.rawValue.localizedCaseInsensitiveContains(query)
-                                    || sectionTitles(for: $0).contains {
-                                        $0.localizedCaseInsensitiveContains(query)
-                                    }
+                                    || sectionTitles(for: $0).contains { matchesSearch($0) }
                             }
                             if let first { selectedCategory = first }
                         }
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(BantayTheme.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
+                    RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+                        .fill(BantayTheme.cardBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+                        .stroke(BantayTheme.borderSubtle, lineWidth: 1)
                 )
                 .padding(.horizontal, 8)
                 .padding(.bottom, 10)
@@ -178,11 +295,12 @@ struct SettingsView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .frame(width: 190)
+            .frame(width: 195)
             .padding(.top, 14)
-            .background(Color.primary.opacity(0.03))
+            .background(BantayTheme.sidebarBackground)
 
             Divider()
+                .overlay(BantayTheme.borderSubtle)
 
             // Right content panel.
             ScrollView {
@@ -195,24 +313,23 @@ struct SettingsView: View {
                     VStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 22))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(BantayTheme.textTertiary)
                         Text("No settings match “\(searchText)”")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(BantayTheme.textSecondary)
                     }
                     .frame(maxWidth: .infinity, minHeight: 320)
                 }
             }
             .frame(maxWidth: .infinity)
+            .background(BantayTheme.deepBackground)
         }
         .frame(width: 760, height: 620)
+        .preferredColorScheme(.dark)
+        .background(BantayTheme.deepBackground)
         .onAppear { refreshFromConfig() }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWillOpen)) { _ in
-            // Defer the state refresh: `.settingsWillOpen` is posted while the
-            // window is being ordered front (view update in progress), and
-            // mutating @State synchronously during that update throws an ObjC
-            // exception ("Modifying state during view update") that crashes
-            // the app. Hop to the next runloop turn instead.
+            // Defer state refresh to avoid modifying state during view update.
             DispatchQueue.main.async { refreshFromConfig() }
         }
     }
@@ -220,9 +337,7 @@ struct SettingsView: View {
     /// Whether any section in a category matches the current search.
     private func categoryHasMatch(_ category: Category) -> Bool {
         if searchText.isEmpty { return true }
-        return sectionTitles(for: category).contains {
-            $0.localizedCaseInsensitiveContains(searchText)
-        }
+        return sectionTitles(for: category).contains { matchesSearch($0) }
     }
 
     /// The section titles that belong to a category (drives search matching).
@@ -233,7 +348,7 @@ struct SettingsView: View {
         case .appearance:
             ["Pill behavior", "Expanded panel", "Displays", "Mascot & Pet Companion"]
         case .agents:
-            ["Muted sources", "Shelf", "Expanded panel"]
+            ["Muted sources", "Tasks & Dispatching", "Shelf", "Expanded panel"]
         case .notifications:
             ["Alerts", "Push notifications (ntfy.sh)", "Quiet hours", "tmux status bar"]
         case .integrations:
@@ -299,6 +414,34 @@ struct SettingsView: View {
                     .onChange(of: dailyBudgetUSD) { newValue in
                         NotchHUDConfig.shared.dailyBudgetUSD = Double(newValue)
                     }
+                    Toggle(
+                        "Notify at 80% and 100% budget thresholds",
+                        isOn: $notifyOnBudgetThresholds
+                    )
+                    .help(
+                        "Sends warning and alarm notifications when daily spend reaches 80% and 100%."
+                    )
+                    .onChange(of: notifyOnBudgetThresholds) { newValue in
+                        NotchHUDConfig.shared.notifyOnBudgetThresholds = newValue
+                    }
+                    Toggle(
+                        "Alert on high token burn rate (⚡ > 2,500 tpm)",
+                        isOn: $notifyOnHighBurnRate
+                    )
+                    .help(
+                        "Notifies when agents consume tokens at an excessively high rate."
+                    )
+                    .onChange(of: notifyOnHighBurnRate) { newValue in
+                        NotchHUDConfig.shared.notifyOnHighBurnRate = newValue
+                    }
+                    Toggle(
+                        "Enforce budget limit (block task dispatch)",
+                        isOn: $enforceBudgetLimit
+                    )
+                    .help("Blocks new task dispatches when the daily budget is exhausted.")
+                    .onChange(of: enforceBudgetLimit) { newValue in
+                        NotchHUDConfig.shared.enforceBudgetLimit = newValue
+                    }
                 }
             }
 
@@ -322,6 +465,25 @@ struct SettingsView: View {
                             }
                         }
                     }
+                }
+            }
+
+            if selectedCategory == .agents && matchesSearch("Tasks & Dispatching") {
+                Section("Tasks & Dispatching") {
+                    Toggle("Auto-run tasks on creation", isOn: $autoDispatchTasks)
+                        .help(
+                            "Automatically dispatch tasks to target agent when created with @agent tag."
+                        )
+                        .onChange(of: autoDispatchTasks) { newValue in
+                            NotchHUDConfig.shared.autoDispatchTasks = newValue
+                        }
+                    Toggle("Focus terminal or app on dispatch", isOn: $focusTerminalOnDispatch)
+                        .help(
+                            "Bring the agent's terminal pane or desktop IDE window into focus when dispatching."
+                        )
+                        .onChange(of: focusTerminalOnDispatch) { newValue in
+                            NotchHUDConfig.shared.focusTerminalOnDispatch = newValue
+                        }
                 }
             }
 
@@ -663,6 +825,12 @@ struct SettingsView: View {
                         .onChange(of: ntfyServer) { newValue in
                             NotchHUDConfig.shared.ntfyServer = newValue
                         }
+                    TextField("Callback URL", text: $ntfyCallbackURL)
+                        .textFieldStyle(.roundedBorder)
+                        .help("Public/Tailscale URL for approvals (e.g. http://my-mac:41817).")
+                        .onChange(of: ntfyCallbackURL) { newValue in
+                            NotchHUDConfig.shared.ntfyCallbackURL = newValue
+                        }
                     Text(
                         ntfyTopic.isEmpty
                             ? "Push is off — set a topic to receive approvals, failures and completions on other devices."
@@ -803,31 +971,51 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            HStack(spacing: 12) {
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.adaptive(minimum: 96, maximum: 110), spacing: 8)
+                                ],
+                                spacing: 8
+                            ) {
                                 ForEach(MascotState.allCases) { state in
-                                    VStack(spacing: 4) {
+                                    VStack(spacing: 6) {
                                         MascotView(
-                                            archetype: selectedMascotArchetype, state: state,
-                                            size: 20)
+                                            archetype: selectedMascotArchetype,
+                                            state: state,
+                                            size: 22
+                                        )
+                                        .padding(.top, 4)
+
                                         Text(state.statusText)
-                                            .font(.system(size: 9, weight: .semibold))
-                                            .foregroundStyle(.primary)
+                                            .font(.system(size: 9.5, weight: .bold))
+                                            .foregroundColor(BantayTheme.color(for: state))
+                                            .lineLimit(1)
+
                                         Text(
                                             "“\(selectedMascotArchetype.personalityQuote(for: state))”"
                                         )
                                         .font(.system(size: 8))
-                                        .foregroundStyle(.secondary)
+                                        .foregroundColor(BantayTheme.textTertiary)
                                         .lineLimit(2)
                                         .multilineTextAlignment(.center)
-                                        .frame(width: 80, height: 24)
+                                        .frame(height: 22)
                                     }
-                                    .padding(6)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity)
                                     .background(
-                                        Color.white.opacity(0.06),
-                                        in: RoundedRectangle(cornerRadius: 6))
+                                        BantayTheme.cardBackground,
+                                        in: RoundedRectangle(cornerRadius: BantayTheme.radiusMedium)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: BantayTheme.radiusMedium)
+                                            .stroke(
+                                                BantayTheme.color(for: state).opacity(0.25),
+                                                lineWidth: 1)
+                                    )
                                 }
                             }
-                            .padding(.top, 4)
+                            .padding(.top, 6)
                         }
                     }
                 }
@@ -900,8 +1088,40 @@ struct SettingsView: View {
             }
 
             if selectedCategory == .appearance && matchesSearch("Expanded panel") {
-                Section("Expanded panel") {
-                    Toggle("Attention-only tab", isOn: $attentionFilter)
+                Section("Expanded panel & Modular tabs") {
+                    Toggle("🤖 Agents Roster tab", isOn: $showAgentsTab)
+                        .help("Enable or disable AI agent monitoring and roster in notch.")
+                        .onChange(of: showAgentsTab) { newValue in
+                            NotchHUDConfig.shared.showAgentsTab = newValue
+                        }
+                    Toggle("📋 Tasks & Reminders tab", isOn: $showTasksTab)
+                        .help(
+                            "Adds a Barrie-style Task Manager tab to the expanded Dynamic Island."
+                        )
+                        .onChange(of: showTasksTab) { newValue in
+                            NotchHUDConfig.shared.showTasksTab = newValue
+                        }
+                    Toggle("📜 Session History tab", isOn: $showHistoryTab)
+                        .help("Adds a Session History feed tab to the expanded Dynamic Island.")
+                        .onChange(of: showHistoryTab) { newValue in
+                            NotchHUDConfig.shared.showHistoryTab = newValue
+                        }
+                    Toggle("📁 Drop Shelf & Pasteboard tab", isOn: $showShelfTab)
+                        .help("Adds a file drop shelf & pasteboard history tab to expanded island.")
+                        .onChange(of: showShelfTab) { newValue in
+                            NotchHUDConfig.shared.showShelfTab = newValue
+                        }
+                    Toggle("🎵 Now Playing Media tab", isOn: $showMediaTab)
+                        .help("Adds Apple Music & Spotify player controls to expanded island.")
+                        .onChange(of: showMediaTab) { newValue in
+                            NotchHUDConfig.shared.showMediaTab = newValue
+                        }
+                    Toggle("📝 Quick Notes Scratchpad tab", isOn: $showNotesTab)
+                        .help("Adds an auto-saving markdown quick notes tab to expanded island.")
+                        .onChange(of: showNotesTab) { newValue in
+                            NotchHUDConfig.shared.showNotesTab = newValue
+                        }
+                    Toggle("Attention-only triage tab", isOn: $attentionFilter)
                         .help(
                             "Adds an Attention tab showing only agents that need "
                                 + "you or failed — the 'everything that needs me' triage."
@@ -909,22 +1129,26 @@ struct SettingsView: View {
                         .onChange(of: attentionFilter) { newValue in
                             NotchHUDConfig.shared.attentionFilterEnabled = newValue
                         }
-                    Toggle("Barrie Tasks tab", isOn: $showTasksTab)
-                        .help(
-                            "Adds a Barrie-style Task Manager tab to the expanded Dynamic Island."
-                        )
-                        .onChange(of: showTasksTab) { newValue in
-                            NotchHUDConfig.shared.showTasksTab = newValue
-                        }
+                    Picker("Notch Hover Sensitivity", selection: $hoverSensitivity) {
+                        Text("Instant (0.03s)").tag("Instant")
+                        Text("Snappy (0.08s)").tag("Snappy")
+                        Text("Balanced (0.18s)").tag("Balanced")
+                        Text("Relaxed (0.35s)").tag("Relaxed")
+                    }
+                    .help("Adjust how quickly hovering over the notch expands the UI.")
+                    .onChange(of: hoverSensitivity) { newValue in
+                        NotchHUDConfig.shared.hoverSensitivityPreset = newValue
+                    }
                     Toggle("Quota-Axi provider gauge", isOn: $enableQuotaAxiGauge)
                         .help("Displays live Quota-Axi provider percentage in header bar.")
                         .onChange(of: enableQuotaAxiGauge) { newValue in
                             NotchHUDConfig.shared.enableQuotaAxiGauge = newValue
                         }
-                    Toggle("Group agents by state", isOn: $expandedGroupByState)
-                        .help("Need-input first, then working, done, failed, idle.")
-                        .onChange(of: expandedGroupByState) { newValue in
-                            NotchHUDConfig.shared.expandedGroupByState = newValue
+                    Toggle("⌨️ Global Hotkey (⌥Space)", isOn: $globalHotkeyEnabled)
+                        .help("Press Option+Space from anywhere to toggle the Dynamic Island.")
+                        .onChange(of: globalHotkeyEnabled) { newValue in
+                            NotchHUDConfig.shared.globalHotkeyEnabled = newValue
+                            GlobalHotkeyManager.shared.registerGlobalHotkey()
                         }
                 }
             }
@@ -1189,6 +1413,8 @@ struct WelcomeView: View {
         }
         .padding(20)
         .frame(width: 430)
+        .preferredColorScheme(.dark)
+        .background(BantayTheme.deepBackground)
         .onAppear {
             Task.detached(priority: .utility) {
                 let loaded = LaunchAgent.isLoaded()

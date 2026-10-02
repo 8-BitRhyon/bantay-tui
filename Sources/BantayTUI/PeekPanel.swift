@@ -7,6 +7,10 @@ import SwiftUI
 final class PeekPanelModel: ObservableObject {
     @Published var source: String = ""
     @Published var paneId: String? = nil
+    @Published var cwd: String? = nil
+    @Published var sessionPath: String? = nil
+    @Published var isWorking = false
+    @Published var projectSlug = ""
     @Published var tailLines: [String] = []
     @Published var diffPreview: String?
     @Published var isLoading = false
@@ -34,7 +38,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
 
     /// Show the overlay docked beside the island for `agent`. One overlay at a
     /// time: when already visible, the existing panel re-points at `agent`.
-    func show(agent: AgentSnapshot, adapter: HerdrSocketAdapter) {
+    func show(agent: AgentSnapshot, adapter: any PlexerAdapter) {
         if let panel, panel.isVisible {
             reload(agent: agent, adapter: adapter)
             return
@@ -84,23 +88,30 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     /// Fetch the tail + diff off the main actor, cancelling any in-flight
     /// fetch for the previous agent. Detached so the adapter's socket/CLI I/O
     /// never touches the main thread; the result lands back on the main actor.
-    private func reload(agent: AgentSnapshot, adapter: HerdrSocketAdapter) {
+    private func reload(agent: AgentSnapshot, adapter: any PlexerAdapter) {
         fetchTask?.cancel()
         model.source = agent.source
         model.paneId = agent.paneId
+        model.cwd = agent.cwd
+        model.sessionPath = agent.sessionPath
+        model.isWorking = agent.kind == .progress || agent.kind == .started
+        model.projectSlug = agent.projectContext?.project ?? agent.source
         model.tailLines = []
         model.diffPreview = nil
         model.isLoading = true
         let paneId = agent.paneId
         let cwd = agent.cwd
         let source = agent.source
+        let sessionPath = agent.sessionPath
         fetchTask = Task.detached {
-            let tail: [String]
-            if let paneId {
+            var tail: [String] = []
+            if let paneId, !paneId.hasPrefix("standalone:") {
                 let raw = await adapter.captureTail(paneId: paneId, lines: 200)
                 tail = LogFormatter.cleanedTail(raw, maxLines: 200, maxLineLength: 240)
-            } else {
-                tail = []
+            }
+            if tail.isEmpty {
+                tail = AgentDetector.recentTranscriptOutput(
+                    forAgent: source, sessionPath: sessionPath, cwd: cwd, maxLines: 200)
             }
             let diff: String?
             if let cwd {
@@ -176,6 +187,29 @@ private struct PeekPanelView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
+                Button {
+                    RichSessionViewer.openInBrowser(
+                        agentName: model.source,
+                        projectSlug: model.projectSlug,
+                        cwd: model.cwd,
+                        isWorking: model.isWorking,
+                        sessionPath: model.sessionPath,
+                        tailLines: model.tailLines
+                    )
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "safari")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("Open in Browser")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(.cyan)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2.5)
+                    .background(Color.cyan.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Open full session and diff in Chrome/Dia")
                 Text("Esc to close")
                     .font(.system(size: 8.5, weight: .medium))
                     .foregroundColor(.white.opacity(0.35))
@@ -290,7 +324,7 @@ private struct PeekPanelView: View {
                                 .padding(.vertical, 4)
                                 .background(Color.cyan, in: Capsule())
                             }
-                            .buttonStyle(ScalePressButtonStyle())
+                            .buttonStyle(.plain)
                         }
                     }
                 }

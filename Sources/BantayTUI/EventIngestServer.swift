@@ -1,19 +1,31 @@
 import Foundation
 import Network
 
+/// Action dispatched by remote phone callback (e.g. ntfy action buttons).
+enum IngestAction: Equatable, Sendable {
+    case approve(paneId: String)
+    case deny(paneId: String)
+    case choice(paneId: String, index: Int)
+}
+
 /// Minimal HTTP request parsing for the local event-ingest listener.
 /// Remote agents (or SSH tunnels) POST one JSON event line per request.
 enum IngestHTTP {
     struct Request: Equatable, Sendable {
         let method: String
+        let target: String
         let token: String?
         let body: Data
+
+        init(method: String, target: String = "/events", token: String?, body: Data) {
+            self.method = method
+            self.target = target
+            self.token = token
+            self.body = body
+        }
     }
 
-    /// Extract method, optional `?token=` query param, and body from raw HTTP
-    /// bytes. Requires a `\r\n\r\n` header terminator and a valid
-    /// Content-Length; returns nil when the body is not yet complete or the
-    /// request is not POST.
+    /// Extracts HTTP method, target URI, optional token parameter, and body payload.
     static func request(from data: Data) -> Request? {
         guard let terminator = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
         let headerData = data[..<terminator.lowerBound]
@@ -22,7 +34,7 @@ enum IngestHTTP {
         guard let first = lines.first else { return nil }
         let parts = first.split(separator: " ").map(String.init)
         guard parts.count >= 2, parts[0].uppercased() == "POST" else { return nil }
-        // The request target may carry `?token=<secret>` on /events.
+        // The request target may carry `?token=<secret>` on /events or /action.
         let target = parts[1]
         let token: String?
         if let queryStart = target.firstIndex(of: "?") {
@@ -48,13 +60,113 @@ enum IngestHTTP {
         }
         return Request(
             method: parts[0],
+            target: target,
             token: token,
             body: data.subdata(in: bodyStart..<(bodyStart + contentLength)))
     }
 
-    /// 200 OK with a tiny body.
-    static func okResponse() -> Data {
-        Data("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".utf8)
+    /// Resolves an action (approve, deny, choice) from the request path, query, or body.
+    static func action(from request: Request) -> IngestAction? {
+        let target = request.target
+        let path: String
+        let queryParams: [String: String]
+        if let queryStart = target.firstIndex(of: "?") {
+            path = String(target[..<queryStart])
+            let queryString = String(target[target.index(after: queryStart)...])
+            var params: [String: String] = [:]
+            for pair in queryString.split(separator: "&") {
+                let kv = pair.split(separator: "=", maxSplits: 1)
+                if kv.count == 2 {
+                    let key = String(kv[0]).removingPercentEncoding ?? String(kv[0])
+                    let val = String(kv[1]).removingPercentEncoding ?? String(kv[1])
+                    params[key] = val
+                }
+            }
+            queryParams = params
+        } else {
+            path = target
+            queryParams = [:]
+        }
+
+        // 1. Check URL path routing: /approve, /deny, /choice
+        if path == "/approve" {
+            guard let pane = queryParams["pane"] ?? queryParams["pane_id"] else { return nil }
+            return .approve(paneId: pane)
+        }
+        if path == "/deny" {
+            guard let pane = queryParams["pane"] ?? queryParams["pane_id"] else { return nil }
+            return .deny(paneId: pane)
+        }
+        if path == "/choice" {
+            guard let pane = queryParams["pane"] ?? queryParams["pane_id"],
+                let choiceStr = queryParams["choice"] ?? queryParams["index"],
+                let choiceInt = Int(choiceStr)
+            else {
+                return nil
+            }
+            return .choice(paneId: pane, index: choiceInt)
+        }
+
+        // 2. Check query params on /action: ?action=approve&pane=...
+        if let actionName = queryParams["action"]?.lowercased() {
+            guard let pane = queryParams["pane"] ?? queryParams["pane_id"] else { return nil }
+            switch actionName {
+            case "approve":
+                return .approve(paneId: pane)
+            case "deny":
+                return .deny(paneId: pane)
+            case "choice":
+                if let choiceStr = queryParams["choice"] ?? queryParams["index"],
+                    let choiceInt = Int(choiceStr)
+                {
+                    return .choice(paneId: pane, index: choiceInt)
+                }
+                return nil
+            default:
+                break
+            }
+        }
+
+        // 3. Check JSON body: {"action": "approve", "pane_id": "..."}
+        if let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+            let actionName = (json["action"] as? String)?.lowercased(),
+            let pane = (json["pane"] as? String) ?? (json["pane_id"] as? String)
+        {
+            switch actionName {
+            case "approve":
+                return .approve(paneId: pane)
+            case "deny":
+                return .deny(paneId: pane)
+            case "choice":
+                if let choiceInt = json["choice"] as? Int ?? json["index"] as? Int {
+                    return .choice(paneId: pane, index: choiceInt)
+                }
+                return nil
+            default:
+                break
+            }
+        }
+
+        return nil
+    }
+
+    /// Formats an away digest summary or ambient spend status for /digest requests.
+    static func digestResponse(digest: AwayDigest?, todayCost: Double) -> String {
+        if let digest {
+            return (["🌙 Away Digest (\(digest.formattedDuration)):"] + digest.summaryLines)
+                .joined(separator: "\n")
+        }
+        let costStr = String(format: "%.2f", todayCost)
+        return "Bantay Status: Normal. Today's spend: $\(costStr). No unreviewed away digest."
+    }
+
+    /// 200 OK with custom body.
+    static func okResponse(message: String = "ok") -> Data {
+        let count = message.utf8.count
+        return Data(
+            "HTTP/1.1 200 OK\r\nContent-Length: \(count)\r\nConnection: close\r\n\r\n\(message)"
+                .utf8
+        )
     }
 
     /// 400 Bad Request.
@@ -73,23 +185,25 @@ enum IngestHTTP {
     }
 }
 
-/// Localhost event-ingest listener. Receives POSTed JSON event lines from
-/// remote agents (e.g. over `ssh -R <port>:localhost:<port>`), validates them
-/// with the agent payload decoder, and forwards them to the app via `onLine`.
-/// Every request must present the matching ingest token (`?token=…`) —
-/// otherwise 403 and the event is dropped, so a local process cannot forge
-/// events or keystroke-inject approvals.
+/// Local event-ingest listener receiving JSON lines over HTTP and Unix domain socket.
 final class EventIngestServer {
     private let port: UInt16
     private let token: String
     private let onLine: @Sendable (String) -> Void
+    private let onAction: (@Sendable (IngestAction) -> Void)?
     private var listener: NWListener?
     private var unixListener: UnixIngestListener?
 
-    init(port: UInt16, token: String, onLine: @escaping @Sendable (String) -> Void) {
+    init(
+        port: UInt16,
+        token: String,
+        onLine: @escaping @Sendable (String) -> Void,
+        onAction: (@Sendable (IngestAction) -> Void)? = nil
+    ) {
         self.port = port
         self.token = token
         self.onLine = onLine
+        self.onAction = onAction
     }
 
     func start() {
@@ -99,9 +213,10 @@ final class EventIngestServer {
         let listener = try? NWListener(using: parameters)
         self.listener = listener
         let onLine = self.onLine
+        let onAction = self.onAction
         let token = self.token
         listener?.newConnectionHandler = { connection in
-            Self.accept(connection, token: token, onLine: onLine)
+            Self.accept(connection, token: token, onLine: onLine, onAction: onAction)
         }
         listener?.start(queue: .main)
     }
@@ -130,7 +245,10 @@ final class EventIngestServer {
     }
 
     private static func accept(
-        _ connection: NWConnection, token: String, onLine: @escaping @Sendable (String) -> Void
+        _ connection: NWConnection,
+        token: String,
+        onLine: @escaping @Sendable (String) -> Void,
+        onAction: (@Sendable (IngestAction) -> Void)?
     ) {
         connection.start(queue: .main)
         let buffer = ReceiveBuffer()
@@ -147,7 +265,10 @@ final class EventIngestServer {
                 connection.cancel()
                 return
             }
-            respond(to: request, token: token, onLine: onLine, connection: connection)
+            respond(
+                to: request, token: token, onLine: onLine, onAction: onAction,
+                connection: connection
+            )
         }
     }
 
@@ -158,6 +279,7 @@ final class EventIngestServer {
         to request: IngestHTTP.Request,
         token: String,
         onLine: @escaping @Sendable (String) -> Void,
+        onAction: (@Sendable (IngestAction) -> Void)?,
         connection: NWConnection
     ) {
         // Auth gate: constant-time token comparison. Reject early (no
@@ -172,6 +294,53 @@ final class EventIngestServer {
                 })
             return
         }
+
+        // Action routes (/approve, /deny, /choice, /action)
+        if let action = IngestHTTP.action(from: request) {
+            onAction?(action)
+            let ack: String
+            switch action {
+            case .approve(let p): ack = "approved \(p)"
+            case .deny(let p): ack = "denied \(p)"
+            case .choice(let p, let c): ack = "selected choice \(c) for \(p)"
+            }
+            connection.send(
+                content: IngestHTTP.okResponse(message: ack),
+                completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+            return
+        }
+
+        // Digest route (/digest)
+        if request.target.hasPrefix("/digest") {
+            let summary = MainActor.assumeIsolated { () -> String in
+                let digest = AwayDigestStore.shared.currentDigest
+                let key = SpendHistoryStore.dateKey()
+                let cost = SpendHistoryStore.shared.dailyRecords[key]?.totalCostUSD ?? 0.0
+                return IngestHTTP.digestResponse(digest: digest, todayCost: cost)
+            }
+            connection.send(
+                content: IngestHTTP.okResponse(message: summary),
+                completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+            return
+        }
+
+        // Claude statusline telemetry route (/telemetry/claude)
+        if request.target.hasPrefix("/telemetry/claude") {
+            if let line = String(data: request.body, encoding: .utf8), !line.isEmpty {
+                ClaudeUsageAdapter.record(jsonString: line)
+                connection.send(
+                    content: IngestHTTP.okResponse(message: "claude telemetry recorded"),
+                    completion: .contentProcessed { _ in
+                        connection.cancel()
+                    })
+                return
+            }
+        }
+
         if let line = String(data: request.body, encoding: .utf8) {
             onLine(line)
             connection.send(
@@ -258,32 +427,13 @@ extension EventIngestServer {
         data.count > maxIngestLineBytes
     }
 
-    /// Stale-socket decision: a bind failure with a leftover socket file can
-    /// only mean a crashed run (this app is the socket's single owner), so
-    /// unlink and rebind. Never unlink when no file exists or the bind
-    /// succeeded.
+    /// Determines if a stale socket file should be unlinked after a bind failure.
     static func shouldUnlinkStaleSocket(bindFailed: Bool, socketExists: Bool) -> Bool {
         bindFailed && socketExists
     }
 }
 
-/// Accepts event lines over a Unix-domain socket (plan 017 W2).
-///
-/// Implemented on POSIX `socket(AF_UNIX)` rather than `NWListener`: this
-/// SDK's Network.framework exposes no UNIX listener API (`NWParameters.unix`
-/// is unavailable and forcing a unix `requiredLocalEndpoint` fails with
-/// EINVAL), so the listen socket and per-connection reads are owned here.
-/// The socket file is created mode 0600 inside the (0700) app-support
-/// directory, so only the owning user can reach it.
-///
-/// One connection carries either:
-///   1. an HTTP POST — same `IngestHTTP` parsing as the TCP listener
-///      (`curl --unix-socket <path> -X POST --data-binary @-
-///      "http://localhost/events?token=<secret>"`), or
-///   2. the bare NDJSON form — a `token <secret>` line, ONE event JSON
-///      line, then close (the "any CLI tool/script" path).
-/// Both forms validate through the same `AgentEventPayload` decoder and
-/// funnel into the same `ingestEventLine`.
+/// Accepts event lines over a Unix-domain socket.
 final class UnixIngestListener {
     private let path: String
     private let token: String
@@ -416,11 +566,7 @@ final class UnixIngestListener {
     }
 }
 
-/// Per-accepted-connection read state. Reads on the main queue via a
-/// DispatchSource; settles exactly once when the payload form is complete
-/// (HTTP Content-Length, or the bare form's token + event lines once both are
-/// present or EOF arrives). A 5s deadline closes idle connections so a writer
-/// that never closes cannot pin a connection forever.
+/// Manages buffered read state and lifecycle for an accepted connection.
 private final class ConnectionState {
     private let fd: Int32
     private let token: String

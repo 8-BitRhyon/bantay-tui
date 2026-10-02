@@ -22,7 +22,9 @@ The terminal is where agents live but not where you always are. Bantay bridges t
 | `HerdrSocketAdapter.swift` | Runs the herdr CLI / socket: `agent list`, `pane focus`, `agent send-keys` (approve/deny/choices), `pane read`; conforms to `PlexerAdapter` |
 | `PlexerAdapter.swift` | Multiplexer seam: `PlexerKind` + pure `PlexerDetection` (HERDR_ENV/socket, TMUX env/socket, ZELLIJ env) + the `PlexerAdapter` protocol (listPanes, captureTail, focusPane, sendLine, sendKeys, approve, deny, stop, attachPane) — tmux/zellij adapters plug in behind it |
 | `AgentDetector.swift` | Standalone agent detection: process-name classification (claude/codex/gemini/cursor/opencode), herdr-managed env filtering, transcript discovery + newest-JSONL tailing for latest activity |
-| `UsageTracker.swift` | Token/cost gauge: parses `usage`/`costUSD` from Claude Code and Codex transcripts, aggregates, budget fraction, compact formatting |
+| `UsageTracker.swift` | Token/cost gauge: parses `usage`/`costUSD` from Claude Code and Codex transcripts, aggregates, budget fraction, compact formatting, prompt cache 90% discount savings |
+| `UniversalUsageAdapters.swift` | Multi-vendor quota & BYOK adapters (`ClaudeUsageAdapter`, `CodexUsageAdapter`, `CursorUsageAdapter`, `OpenRouterUsageAdapter`, `OllamaUsageAdapter`): rate-limit hooks, SQLite parsing, live reset countdowns |
+| `TaskDispatcher.swift` | Multi-agent task routing & failover across provider candidates (`claude` → `codex` → `antigravity` → `ollama`) with 429 quarantine backoff |
 | `EventIngestServer.swift` | Localhost HTTP listener (NWListener) for remote events over SSH tunnels; strict POST parsing; appends validated payloads to the watched events file |
 | `ShelfModel.swift` | Pure clipboard-history + shelf-file logic (dedup, ordering, limits) |
 | `TerminalFocusser.swift` | Terminal-agnostic focus: ordered bundle-ID registry (Ghostty/Warp/WezTerm/Alacritty/iTerm2/Terminal/VSCode/IntelliJ) + app activation |

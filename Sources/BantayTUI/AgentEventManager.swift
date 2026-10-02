@@ -53,9 +53,45 @@ struct AgentSnapshot: Identifiable, Equatable {
     /// computed property that re-reads `.git/HEAD` from disk on every SwiftUI
     /// body evaluation.
     let projectContext: ProjectContext?
+    /// Path to the agent's transcript/session directory on disk if known.
+    let sessionPath: String?
+
+    init(
+        id: String,
+        source: String,
+        kind: AgentEventKind,
+        title: String?,
+        message: String?,
+        paneId: String?,
+        workspaceId: String?,
+        cwd: String?,
+        variance: ApprovalVariance?,
+        choices: [String]?,
+        startedAt: Date?,
+        projectContext: ProjectContext?,
+        sessionPath: String? = nil
+    ) {
+        self.id = id
+        self.source = source
+        self.kind = kind
+        self.title = title
+        self.message = message
+        self.paneId = paneId
+        self.workspaceId = workspaceId
+        self.cwd = cwd
+        self.variance = variance
+        self.choices = choices
+        self.startedAt = startedAt
+        self.projectContext = projectContext
+        self.sessionPath = sessionPath
+    }
 
     var approval: IslandMetrics.ApprovalControls {
         IslandMetrics.ApprovalControls(variance: variance, choices: choices)
+    }
+
+    var isWorking: Bool {
+        kind == .progress || kind == .started
     }
 }
 
@@ -64,22 +100,35 @@ struct ProjectContext: Equatable, Sendable {
     let project: String
     let branch: String?
     let isGit: Bool
+    let diffStat: String?
 
-    /// Short-lived per-cwd cache so `.git/HEAD` is read at most once per cwd
-    /// per interval instead of on every poll's roster rebuild (the read runs
-    /// on the main actor today; cwds are stable, so a memo is safe and cuts
-    /// the beachball risk at startup when many agents exist).
+    /// Short-lived cache for Git repository branch and status.
     private static let cacheTTL: TimeInterval = 5.0
     nonisolated(unsafe) private static var cache: [String: (context: ProjectContext, at: Date)] =
         [:]
     private static let cacheLock = NSLock()
 
-    init(cwd: String) {
+    init(project: String, branch: String?, isGit: Bool, diffStat: String? = nil) {
+        self.project = project
+        self.branch = branch
+        self.isGit = isGit
+        self.diffStat = diffStat
+    }
+
+    init(cwd: String, diffStat: String? = nil) {
         if let hit = Self.cached(cwd) {
+            if let diffStat, hit.diffStat != diffStat {
+                let updated = ProjectContext(
+                    project: hit.project, branch: hit.branch, isGit: hit.isGit, diffStat: diffStat)
+                Self.store(cwd, updated)
+                self = updated
+                return
+            }
             self = hit
             return
         }
         self.project = (cwd as NSString).lastPathComponent
+        self.diffStat = diffStat
         let headURL = URL(fileURLWithPath: cwd).appendingPathComponent(".git/HEAD")
         if let content = try? String(contentsOf: headURL, encoding: .utf8) {
             let parsed = Self.parseHead(content)
@@ -123,6 +172,28 @@ struct ProjectContext: Equatable, Sendable {
             return ("detached", true)
         }
         return (nil, false)
+    }
+
+    /// Pure parser for git shortstat lines (e.g. "2 files changed, 14 insertions(+), 3 deletions(-)").
+    /// Returns compact representation like "+14 -3" or nil.
+    static func parseDiffStat(_ shortstat: String) -> String? {
+        let trimmed = shortstat.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var ins = ""
+        var del = ""
+        let parts = trimmed.components(separatedBy: ",")
+        for part in parts {
+            let lower = part.lowercased()
+            if lower.contains("insertion") {
+                let nums = part.filter { $0.isNumber }
+                if !nums.isEmpty { ins = "+\(nums)" }
+            } else if lower.contains("deletion") {
+                let nums = part.filter { $0.isNumber }
+                if !nums.isEmpty { del = "-\(nums)" }
+            }
+        }
+        let joined = [ins, del].filter { !$0.isEmpty }.joined(separator: " ")
+        return joined.isEmpty ? nil : joined
     }
 }
 
@@ -187,14 +258,24 @@ final class AgentEventManager: ObservableObject {
     private var lastSoundAt: [String: Date] = [:]
     /// PERF-2: last time the standalone ps scan ran (throttle state).
     private var lastStandaloneScan: Date?
+    /// Cached standalone detected agents between scans (prevent wiping roster between ticks).
+    private var lastDetectedAgents: [DetectedAgent] = []
+    private var activeScanTask: Task<[DetectedAgent], Never>?
+    private var isRefreshingRoster = false
+    private var hasPendingRosterRefresh = false
     /// PERF-2: minimum interval between standalone `ps` scans.
-    static let minScanInterval: TimeInterval = 30
+    static let minScanInterval: TimeInterval = 2.0
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
     /// expensive enumeration + read on each poll.
     private var transcriptMtimes: [String: Date] = [:]
     /// Last kilo cumulative snapshot + poll interval, for tpm poll-and-diff.
     private var lastKiloSnapshot: UsageSnapshot?
     private var kiloPollInterval: TimeInterval = 2.0
+    /// Direction B: Budget & Quota active alert tracking state.
+    private var didAlertBudget80 = false
+    private var didAlertBudget100 = false
+    private var lastBudgetAlertDay: Int = Calendar.current.component(.day, from: Date())
+    private var lastHighBurnAlertDate: Date?
     /// When each pane's current working burst started (for elapsed timers).
     /// Set when a pane transitions into progress/started; cleared when it
     /// leaves working state.
@@ -204,12 +285,7 @@ final class AgentEventManager: ObservableObject {
     /// numbered-choice, and multi-select controls inline.
     var pendingApprovals: [String: (variance: ApprovalVariance?, choices: [String]?)] =
         [:]
-    /// Panes with an in-flight approve/deny/choice/stop. The control plane
-    /// marks a pane here the instant a user acts so the card shows a resolving
-    /// state and cannot be double-fired (a synchronous `Process.waitUntilExit`
-    /// in the adapter would otherwise block the island and invite a second
-    /// click). Cleared when the next poll confirms the agent left the blocked
-    /// state, or after a safety timeout.
+    /// Panes with an in-flight user action to prevent duplicate clicks.
     private var resolvingPanes: Set<String> = []
     /// Caps how long a pane stays in the resolving state if the next poll
     /// doesn't clear it (e.g. herdr daemon down).
@@ -217,6 +293,7 @@ final class AgentEventManager: ObservableObject {
     private let eventsFileURL: URL
     private let captureEnabled: Bool
     private let herdrAdapter = HerdrSocketAdapter()
+    var activeAdapter: any PlexerAdapter = PlexerFactory.makeAdapter()
 
     init(eventsFileURL: URL? = nil, capture: Bool = true) {
         self.captureEnabled = capture
@@ -238,6 +315,11 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayAsleep = true
+                guard let self else { return }
+                AwayDigestStore.shared.beginAway(
+                    baselineCost: self.usage.costUSD,
+                    baselineTokens: self.usage.totalTokens
+                )
             }
         }
         wakeObserver = workspace.addObserver(
@@ -245,6 +327,17 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayAsleep = false
+                guard let self else { return }
+                if AwayDigestStore.shared.isAway {
+                    let pending = self.agents.filter {
+                        $0.kind == .accessRequest || $0.kind == .waiting
+                    }.count
+                    AwayDigestStore.shared.endAway(
+                        currentCost: self.usage.costUSD,
+                        currentTokens: self.usage.totalTokens,
+                        pendingApprovals: pending
+                    )
+                }
             }
         }
         // Lock state: the distributed notifications are the macOS 13-safe
@@ -257,6 +350,11 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayLocked = true
+                guard let self else { return }
+                AwayDigestStore.shared.beginAway(
+                    baselineCost: self.usage.costUSD,
+                    baselineTokens: self.usage.totalTokens
+                )
             }
         }
         unlockObserver = distCenter.addObserver(
@@ -265,6 +363,15 @@ final class AgentEventManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.displayLocked = false
+                guard let self else { return }
+                let pending = self.agents.filter {
+                    $0.kind == .accessRequest || $0.kind == .waiting
+                }.count
+                AwayDigestStore.shared.endAway(
+                    currentCost: self.usage.costUSD,
+                    currentTokens: self.usage.totalTokens,
+                    pendingApprovals: pending
+                )
             }
         }
         start()
@@ -391,10 +498,9 @@ final class AgentEventManager: ObservableObject {
         guard end > readOffset else { return }
         try? handle.seek(toOffset: readOffset)
         let data = handle.readDataToEndOfFile()
-        readOffset = end
-
-        guard let text = String(data: data, encoding: .utf8) else { return }
+        let text = String(decoding: data, as: UTF8.self)
         lineBuffer += text
+        readOffset = end
 
         var lines = lineBuffer.split(whereSeparator: \.isNewline)
         if !lineBuffer.hasSuffix("\n"), let partial = lines.popLast() {
@@ -428,10 +534,30 @@ final class AgentEventManager: ObservableObject {
         // ntfy.sh push for events that need attention even away from the
         // terminal: approvals/blocked always; failures and completions too.
         if let source = event.source {
+            let snap = self.agents.first {
+                (event.paneId != nil && $0.paneId == event.paneId)
+                    || $0.source == source
+            }
             AgentAlertNotifier.notify(
-                source: source, kind: event.kind, title: event.title ?? event.message,
-                paneId: event.paneId)
+                source: source,
+                kind: event.kind,
+                title: event.title ?? event.message,
+                paneId: event.paneId,
+                choices: event.choices,
+                cwd: snap?.cwd,
+                sessionPath: snap?.sessionPath,
+                roster: self.agents
+            )
+            MultiAgentTimelineStore.shared.recordEvent(
+                agentName: source,
+                project: snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
+                kind: event.kind,
+                title: event.title ?? event.message ?? event.kind.label,
+                now: event.createdAt
+            )
         }
+        TaskStore.shared.updateTaskState(
+            paneId: event.paneId, source: event.sourceKey, kind: event.kind)
         if event.kind == .accessRequest || event.kind == .waiting {
             pendingApprovals[key] = (variance: event.variance, choices: event.choices)
         } else if event.kind != .progress && event.kind != .started {
@@ -472,6 +598,14 @@ final class AgentEventManager: ObservableObject {
                 createdAt: event.createdAt,
                 duration: completionDuration)
             recentCompletions = Array(([recent] + recentCompletions).prefix(5))
+            if event.kind == .completed {
+                AwayDigestStore.shared.recordCompletion(recent)
+            } else {
+                AwayDigestStore.shared.recordFailure(
+                    agent: event.sourceKey,
+                    reason: event.title ?? event.message
+                )
+            }
         }
 
         if event.kind == .clear {
@@ -550,6 +684,16 @@ extension AgentEventManager {
         }
     }
 
+    /// Agent-aware status mapping. Pi has no built-in permission system — a
+    /// `blocked` status is an extension/trust dialog, not a request Bantay can
+    /// approve. Surface it as amber `.waiting` instead of a red "Need
+    /// approval" alarm (which implies an approvable security decision).
+    nonisolated static func kind(for status: String, agent: String) -> AgentEventKind? {
+        guard let kind = kind(for: status) else { return nil }
+        if agent == "pi", kind == .accessRequest { return .waiting }
+        return kind
+    }
+
     nonisolated static func severity(of kind: AgentEventKind) -> Int {
         switch kind {
         case .accessRequest: return 4
@@ -562,7 +706,7 @@ extension AgentEventManager {
     }
 
     nonisolated static func snapshot(for agent: HerdrAgentInfo) -> AgentSnapshot? {
-        guard let kind = kind(for: agent.agentStatus ?? "") else { return nil }
+        guard let kind = kind(for: agent.agentStatus ?? "", agent: agent.agent) else { return nil }
         let projectContext: ProjectContext? = {
             guard let cwd = agent.cwd, !cwd.isEmpty else { return nil }
             return ProjectContext(cwd: cwd)
@@ -587,7 +731,8 @@ extension AgentEventManager {
             variance: nil,
             choices: nil,
             startedAt: nil,
-            projectContext: projectContext
+            projectContext: projectContext,
+            sessionPath: agent.agentSession?.value
         )
     }
 
@@ -601,7 +746,9 @@ extension AgentEventManager {
 
         var grouped: [String: [AgentEvent]] = [:]
         for agent in agents {
-            guard let kind = kind(for: agent.agentStatus ?? ""), kind != .idle else { continue }
+            guard let kind = kind(for: agent.agentStatus ?? "", agent: agent.agent),
+                kind != .idle
+            else { continue }
             let key = agent.paneId ?? agent.agent
             grouped[key, default: []].append(
                 AgentEvent(
@@ -724,6 +871,20 @@ extension AgentEventManager {
     }
 
     private func refreshRosterAndArmWaits() async {
+        if isRefreshingRoster {
+            hasPendingRosterRefresh = true
+            return
+        }
+        isRefreshingRoster = true
+        defer {
+            isRefreshingRoster = false
+            if hasPendingRosterRefresh {
+                hasPendingRosterRefresh = false
+                Task { @MainActor [weak self] in
+                    await self?.refreshRosterAndArmWaits()
+                }
+            }
+        }
         ensureFileWatcher()
         let herdrAgents: [HerdrAgentInfo] = await herdrAdapter.listAgents()
         let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
@@ -738,35 +899,59 @@ extension AgentEventManager {
                 minInterval: Self.minScanInterval)
         if rescan {
             lastStandaloneScan = Date()
+            if let existing = activeScanTask {
+                lastDetectedAgents = await existing.value
+            } else {
+                let task = Task.detached(priority: .userInitiated) {
+                    StandaloneAgentScanner.scan()
+                }
+                activeScanTask = task
+                lastDetectedAgents = await task.value
+                activeScanTask = nil
+            }
         }
+        let currentDetected = scanStandalone ? lastDetectedAgents : []
         let agents: [HerdrAgentInfo] = await Task.detached(priority: .userInitiated) {
-            let detected = rescan ? StandaloneAgentScanner.scan() : []
             return herdrAgents
-                + detected.filter {
-                    !Set(herdrAgents.map { $0.agent }).contains($0.name)
-                }.map {
-                    HerdrAgentInfo(
-                        agent: $0.name,
-                        agentStatus: "working",
-                        paneId: nil,
+                + currentDetected.filter { detected in
+                    !herdrAgents.contains { herdr in
+                        herdr.agent == detected.name
+                            && (herdr.cwd == nil || herdr.cwd == detected.cwd)
+                    }
+                }.map { detected in
+                    let projectSlug: String = {
+                        if let cwd = detected.cwd, !cwd.isEmpty {
+                            return URL(fileURLWithPath: cwd).lastPathComponent
+                        }
+                        if let session = detected.sessionPath, !session.isEmpty {
+                            return URL(fileURLWithPath: session).lastPathComponent
+                        }
+                        return "standalone"
+                    }()
+                    let sessionRef: HerdrAgentSession? = {
+                        if let session = detected.sessionPath, !session.isEmpty {
+                            return HerdrAgentSession(
+                                agent: detected.name, kind: "path", value: session)
+                        }
+                        return nil
+                    }()
+                    return HerdrAgentInfo(
+                        agent: detected.name,
+                        agentStatus: detected.isWorking ? "working" : "idle",
+                        paneId: "standalone:\(detected.name):\(projectSlug)",
                         workspaceId: nil,
-                        terminalTitle: $0.activity,
-                        cwd: nil
+                        terminalTitle: detected.activity,
+                        cwd: detected.cwd,
+                        agentSession: sessionRef
                     )
                 }
         }.value
-        // PERF: the transcript token/cost enumeration + disk read is gated
-        // behind `usageTrackingEnabled`. Nothing in the UI renders usage (the
-        // footer gauge was removed), so this was running every poll for data
-        // nobody consumed. Phase C (spend history) re-enables it when there's
-        // a consumer.
+        // Transcript token/cost enumeration is gated behind `usageTrackingEnabled`.
         if NotchHUDConfig.shared.usageTrackingEnabled {
             let hasKilo = agents.contains { $0.agent == "kilo" }
             let now = Date()
             if hasKilo, KiloUsageAdapter.detect() {
-                // Kilo's ledger is SQLite — the authoritative source. Quota =
-                // cost over the daily budget; tpm = poll-and-diff cumulative
-                // totals over the poll interval (off-main, WAL-safe read).
+                // Read Kilo usage from SQLite off-main.
                 let pollInterval = NotchHUDConfig.shared.captureInterval
                 let currentUsage = self.usage
                 let currentRate = self.usageRate
@@ -820,6 +1005,11 @@ extension AgentEventManager {
                 self.usage = usageAndRate.0
                 self.usageRate = usageAndRate.1
             }
+            SpendHistoryStore.shared.recordUsage(
+                snapshot: self.usage,
+                peakTPM: self.usageRate.tokensPerMinute ?? 0.0
+            )
+            evaluateBudgetAndQuotaAlerts()
         }
         let liveStatuses: [String: String] = Dictionary(
             agents.compactMap {
@@ -845,6 +1035,14 @@ extension AgentEventManager {
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
+        for agent in agents where agent.agentStatus == "working" {
+            let key = agent.paneId ?? agent.agent
+            if startedAtByPane[key] == nil {
+                startedAtByPane[key] = Date()
+            }
+        }
+        let liveAgentKeys = Set(agents.compactMap { $0.paneId ?? $0.agent })
+        startedAtByPane = startedAtByPane.filter { liveAgentKeys.contains($0.key) }
         self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)
@@ -906,7 +1104,7 @@ extension AgentEventManager {
     /// the full interactive surface and elapsed timers.
     func mergeApprovals(into roster: [AgentSnapshot]) -> [AgentSnapshot] {
         let muted = NotchHUDConfig.shared.mutedSources
-        return roster.compactMap { agent in
+        return roster.compactMap { (agent: AgentSnapshot) -> AgentSnapshot? in
             guard !muted.contains(agent.source) else { return nil }
             let key = agent.paneId ?? agent.source
             var variance = agent.variance
@@ -930,7 +1128,8 @@ extension AgentEventManager {
                 variance: variance,
                 choices: choices,
                 startedAt: startedAt,
-                projectContext: agent.projectContext
+                projectContext: agent.projectContext,
+                sessionPath: agent.sessionPath
             )
         }
     }
@@ -952,10 +1151,10 @@ extension AgentEventManager {
     /// resolving so the UI can't double-fire and feels instant. The resolving
     /// flag clears on the next confirming poll, or after `resolvingTimeout`.
     func performAction(
-        paneId: String, _ action: @escaping @Sendable (HerdrSocketAdapter) -> Void
+        paneId: String, _ action: @escaping @Sendable (any PlexerAdapter) -> Void
     ) {
         resolvingPanes.insert(paneId)
-        let adapter = herdrAdapter
+        let adapter = activeAdapter
         Task.detached {
             action(adapter)
             Task { @MainActor in
@@ -963,6 +1162,35 @@ extension AgentEventManager {
                 self.resolvingPanes.remove(paneId)
             }
         }
+    }
+
+    /// Approves an agent request via the active adapter, routing OpenCode panes to the decision file.
+    func approve(paneId: String) {
+        AwayDigestStore.shared.recordApprovalAnswered()
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+        }
+        performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+    }
+
+    /// Denies an agent request via the active adapter, routing OpenCode panes to the decision file.
+    func deny(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
+        }
+        performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+    }
+
+    /// Selects a numbered choice for an agent request via the active adapter,
+    /// routing OpenCode panes to the decision file with choice index.
+    func approveChoice(paneId: String, choice: Int) {
+        AwayDigestStore.shared.recordApprovalAnswered()
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(
+                paneId: paneId, approve: true, choiceIndex: choice
+            )
+        }
+        performAction(paneId: paneId) { $0.approveChoice(paneId: paneId, choice: choice) }
     }
 
     /// Drop a pane from the resolving set immediately — called when a poll
@@ -1044,22 +1272,136 @@ extension AgentEventManager {
     }
 
     /// Merge standalone-detected agents into the herdr roster without
-    /// duplicating agents herdr already manages (matched by canonical name).
+    /// duplicating agents herdr already manages (matched by canonical name and cwd).
     func mergeStandalone(
         into herdr: [HerdrAgentInfo], detected: [DetectedAgent]
     ) -> [HerdrAgentInfo] {
-        let herdrNames = Set(herdr.map(\.agent))
-        let extras = detected.filter { !herdrNames.contains($0.name) }.map {
-            HerdrAgentInfo(
-                agent: $0.name,
-                agentStatus: "working",
+        let extras = detected.filter { det in
+            !herdr.contains { h in
+                h.agent == det.name && (h.cwd == nil || h.cwd == det.cwd)
+            }
+        }.map { det in
+            let sessionRef = det.sessionPath.map {
+                HerdrAgentSession(agent: det.name, kind: "path", value: $0)
+            }
+            return HerdrAgentInfo(
+                agent: det.name,
+                agentStatus: det.isWorking ? "working" : "idle",
                 paneId: nil,
                 workspaceId: nil,
-                terminalTitle: $0.activity,
-                cwd: nil
+                terminalTitle: det.activity,
+                cwd: det.cwd,
+                agentSession: sessionRef
             )
         }
         return herdr + extras
+    }
+
+    // MARK: - Active Budget & Quota Enforcement (Direction B)
+
+    /// Pure helper to evaluate budget threshold state transitions (testable without side-effects).
+    static func evaluateBudgetThreshold(
+        cost: Double,
+        budget: Double,
+        alreadyAlerted80: Bool,
+        alreadyAlerted100: Bool
+    ) -> (alert80: Bool, alert100: Bool) {
+        let safeBudget = max(budget, 0.5)
+        let ratio = cost / safeBudget
+        var trigger80 = false
+        var trigger100 = false
+        if ratio >= 1.0 && !alreadyAlerted100 {
+            trigger100 = true
+        } else if ratio >= 0.8 && !alreadyAlerted80 && !alreadyAlerted100 {
+            trigger80 = true
+        }
+        return (trigger80, trigger100)
+    }
+
+    /// Evaluates daily spend against budget limit and checks for runaway burn rates.
+    func evaluateBudgetAndQuotaAlerts() {
+        let currentDay = Calendar.current.component(.day, from: Date())
+        if currentDay != lastBudgetAlertDay {
+            // Day rollover: reset daily budget alert flags
+            didAlertBudget80 = false
+            didAlertBudget100 = false
+            lastBudgetAlertDay = currentDay
+        }
+
+        let config = NotchHUDConfig.shared
+        guard config.usageTrackingEnabled else { return }
+
+        // 1. Budget Threshold Alerts (80% and 100%)
+        if config.notifyOnBudgetThresholds {
+            let budget = max(config.dailyBudgetUSD, 0.5)
+            let cost = usage.costUSD
+            let (trigger80, trigger100) = Self.evaluateBudgetThreshold(
+                cost: cost,
+                budget: budget,
+                alreadyAlerted80: didAlertBudget80,
+                alreadyAlerted100: didAlertBudget100
+            )
+
+            if trigger100 {
+                didAlertBudget100 = true
+                didAlertBudget80 = true
+                let formattedCost = String(format: "$%.2f", cost)
+                let formattedBudget = String(format: "$%.2f", budget)
+                ApprovalNotificationController.shared.postAlert(
+                    title: "🚨 Daily AI Budget Exceeded",
+                    subtitle: "Spend \(formattedCost) has reached the \(formattedBudget) limit",
+                    soundName: config.errorSoundName
+                )
+                if let sound = NSSound(named: config.errorSoundName) {
+                    sound.play()
+                }
+                if config.ntfyEnabled {
+                    AgentAlertNotifier.notify(
+                        source: "budget",
+                        kind: .failed,
+                        title: "🚨 Daily AI Budget Exceeded (\(formattedCost) / \(formattedBudget))",
+                        roster: self.agents
+                    )
+                }
+            } else if trigger80 {
+                didAlertBudget80 = true
+                let formattedCost = String(format: "$%.2f", cost)
+                let formattedBudget = String(format: "$%.2f", budget)
+                ApprovalNotificationController.shared.postAlert(
+                    title: "⚠️ Daily AI Budget Warning",
+                    subtitle: "Spend \(formattedCost) has reached 80% of \(formattedBudget) limit",
+                    soundName: config.approvalSoundName
+                )
+                if let sound = NSSound(named: config.approvalSoundName) {
+                    sound.play()
+                }
+                if config.ntfyEnabled {
+                    AgentAlertNotifier.notify(
+                        source: "budget",
+                        kind: .waiting,
+                        title: "⚠️ Daily AI Budget 80% (\(formattedCost) / \(formattedBudget))",
+                        roster: self.agents
+                    )
+                }
+            }
+        }
+
+        // 2. High Burn Rate Alert (Runaway agent loops)
+        if config.notifyOnHighBurnRate,
+            let tpm = usageRate.tokensPerMinute,
+            tpm >= config.highBurnThresholdTPM
+        {
+            let now = Date()
+            if lastHighBurnAlertDate == nil || now.timeIntervalSince(lastHighBurnAlertDate!) > 300 {
+                lastHighBurnAlertDate = now
+                let formattedRate = String(format: "%.0f", tpm)
+                ApprovalNotificationController.shared.postAlert(
+                    title: "⚡ High Token Burn Rate",
+                    subtitle: "Current velocity is \(formattedRate) tokens/min",
+                    soundName: config.approvalSoundName
+                )
+            }
+        }
     }
 }
 
