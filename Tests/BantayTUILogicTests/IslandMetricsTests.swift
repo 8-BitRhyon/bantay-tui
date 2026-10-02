@@ -116,4 +116,51 @@
             #expect(abs(wf.midX - 1367 / 2) <= midXTol)
         }
     }
+
+    @Suite("HUD Text Sanitization")
+    struct HUDTextSanitizationTests {
+        @Test("strips ANSI color escapes and control characters")
+        func stripsAnsiCodes() {
+            let ansi = "\u{001B}[38;5;208mRunning tests\u{001B}[0m"
+            #expect(IslandMetrics.cleanHUDText(ansi) == "Running tests")
+
+            let cursorCode = "\u{001B}[2K\u{001B}[1GCompiling sources"
+            #expect(IslandMetrics.cleanHUDText(cursorCode) == "Compiling sources")
+        }
+
+        @Test("strips terminal braille spinners")
+        func stripsBrailleSpinners() {
+            let spinner = "⠋ Inspecting directory tree"
+            #expect(IslandMetrics.cleanHUDText(spinner) == "Inspecting directory tree")
+            let midSpinner = "Building ⠹ project"
+            #expect(IslandMetrics.cleanHUDText(midSpinner) == "Building project")
+        }
+
+        @Test("strips log envelopes and ISO timestamps")
+        func stripsLogEnvelopes() {
+            let logLine = "2026-10-01T12:00:00Z [INFO] level=info Building project"
+            #expect(IslandMetrics.cleanHUDText(logLine) == "Building project")
+        }
+
+        @Test("suppresses raw JSON blobs")
+        func suppressesRawJSON() {
+            let json = "{\"role\":\"assistant\",\"content\":\"Working\"}"
+            #expect(IslandMetrics.isSuppressedGarbage(json))
+            #expect(IslandMetrics.cleanHUDText(json) == "")
+        }
+
+        @Test("suppresses hostnames and shell prompts")
+        func suppressesHostnames() {
+            #expect(IslandMetrics.isSuppressedGarbage("MacBook-Pro.local"))
+            #expect(IslandMetrics.cleanHUDText("MacBook-Pro.local") == "")
+            #expect(IslandMetrics.isSuppressedGarbage("rhyon@mbp:~$"))
+            #expect(IslandMetrics.cleanHUDText("rhyon@mbp:~$") == "")
+        }
+
+        @Test("strips progress bars and percentages")
+        func stripsProgressBars() {
+            let progress = "[====>    ] 45% Compiling"
+            #expect(IslandMetrics.cleanHUDText(progress) == "Compiling")
+        }
+    }
 #endif

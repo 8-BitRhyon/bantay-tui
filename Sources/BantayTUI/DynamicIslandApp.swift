@@ -603,9 +603,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let agents = AgentEventManager.shared.agents
         let topApproval = agents.first { $0.kind == .accessRequest || $0.kind == .waiting }
         if let topApproval, let paneId = topApproval.paneId {
-            let approveTitle =
-                "✓ Approve \(topApproval.source)"
-                + (topApproval.title.map { ": \($0)" } ?? "")
+            let cleanPrompt =
+                topApproval.title.flatMap {
+                    let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
+                    return c.isEmpty ? nil : ": \(c)"
+                } ?? ""
+            let approveTitle = "✓ Approve \(topApproval.source)\(cleanPrompt)"
             let approveItem = NSMenuItem(
                 title: approveTitle,
                 action: #selector(approveAgent(_:)),
@@ -651,8 +654,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     }
                 }()
                 let slug = agent.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+                let cleanTitle = agent.title.flatMap {
+                    let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
+                    return c.isEmpty ? nil : c
+                }
+                let desc = cleanTitle ?? agent.kind.label
                 let label =
-                    "\(glyph) \(agent.source)\(slug.map { " (\($0))" } ?? "") — \(agent.title ?? agent.kind.label)"
+                    "\(glyph) \(agent.source)\(slug.map { " (\($0))" } ?? "") — \(desc)"
                 let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
 

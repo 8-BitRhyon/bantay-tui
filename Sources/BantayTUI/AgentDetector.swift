@@ -311,6 +311,13 @@ enum AgentDetector {
         guard var str = text?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty else {
             return nil
         }
+        // Normalize escaped quotes first (e.g. \"text\" -> "text")
+        if str.contains("\\\"") {
+            str = str.replacingOccurrences(of: "\\\"", with: "\"")
+        }
+        if str.contains("\\'") {
+            str = str.replacingOccurrences(of: "\\'", with: "'")
+        }
         while (str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2)
             || (str.hasPrefix("'") && str.hasSuffix("'") && str.count >= 2)
             || (str.hasPrefix("`") && str.hasSuffix("`") && str.count >= 2)
@@ -532,17 +539,97 @@ enum AgentDetector {
         return true
     }
 
+    /// Translates raw terminal commands into clean, human-readable action phrases.
+    static func summarizeCommand(_ rawCmd: String) -> String {
+        let trimmed = rawCmd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Running command" }
+        let firstWord =
+            trimmed.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? trimmed
+        let basename = URL(fileURLWithPath: firstWord).lastPathComponent
+        if !basename.isEmpty && !IslandMetrics.isSuppressedGarbage(basename) {
+            return "Running \(basename)"
+        }
+        return "Running command"
+    }
+
+    /// Summarizes a tool call into a concise, human-readable action phrase.
+    static func summarizeToolCall(
+        name: String, args: [String: Any]?, tc: [String: Any]? = nil
+    ) -> String? {
+        let rawSummary =
+            (tc?["toolSummary"] as? String)
+            ?? (args?["toolSummary"] as? String)
+            ?? (tc?["toolAction"] as? String)
+            ?? (args?["toolAction"] as? String)
+            ?? (args?["summary"] as? String)
+            ?? (args?["action"] as? String)
+        if let cleanSummary = cleanUnquoted(rawSummary),
+            !cleanSummary.isEmpty,
+            !IslandMetrics.isSuppressedGarbage(cleanSummary)
+        {
+            return cleanSummary
+        }
+
+        let lowerName = name.lowercased()
+        switch lowerName {
+        case "run_command", "bash", "execute_command", "exec", "terminal":
+            if let cmd = cleanUnquoted(
+                args?["CommandLine"] as? String ?? args?["command"] as? String
+                    ?? args?["cmd"] as? String)
+            {
+                return summarizeCommand(cmd)
+            }
+            return "Running command"
+        case "view_file", "read_file", "read", "open":
+            if let path = cleanUnquoted(
+                args?["AbsolutePath"] as? String ?? args?["TargetFile"] as? String
+                    ?? args?["path"] as? String ?? args?["file_path"] as? String)
+            {
+                let fname = URL(fileURLWithPath: path).lastPathComponent
+                return "Viewing \(fname)"
+            }
+            return "Viewing file"
+        case "replace_file_content", "multi_replace_file_content", "write_to_file",
+            "edit_file", "edit", "strreplaceedit":
+            if let path = cleanUnquoted(
+                args?["TargetFile"] as? String ?? args?["AbsolutePath"] as? String
+                    ?? args?["path"] as? String ?? args?["file_path"] as? String)
+            {
+                let fname = URL(fileURLWithPath: path).lastPathComponent
+                return "Editing \(fname)"
+            }
+            return "Editing file"
+        case "grep_search", "search_web", "file_search", "glob":
+            if let query = cleanUnquoted(
+                args?["Query"] as? String ?? args?["query"] as? String
+                    ?? args?["pattern"] as? String)
+            {
+                return "Searching: \(query)"
+            }
+            return "Searching code"
+        case "list_dir", "list_directory", "ls":
+            return "Listing directory"
+        case "ask_question", "askquestion", "question":
+            return "Waiting for input"
+        default:
+            let humanized = name.replacingOccurrences(of: "_", with: " ").capitalized
+            return humanized
+        }
+    }
+
     /// Extracts a readable one-line snippet from a transcript line.
     /// Prioritizes concise action summaries over rambling assistant text or long filenames,
     /// cleans paths down to basenames, and strips log envelopes.
     static func readableLine(_ line: String) -> String? {
         let lower = line.lowercased()
-        // Skip log warnings, debug, and trace lines entirely - they are internal engine chatter
+        // Skip log warnings, debug, trace lines, and daemon chatter entirely
         if lower.contains("level=warn") || lower.contains("level=debug")
             || lower.contains("level=trace")
             || lower.contains("lvl=warn") || lower.contains("lvl=debug")
             || lower.contains("lvl=trace")
             || lower.contains("duplicate skill name")
+            || lower.contains("service=marketplace")
+            || lower.contains("cleanup prune=")
         {
             return nil
         }
@@ -556,7 +643,7 @@ enum AgentDetector {
         if let data = line.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {
-            // Prioritize concise tool summaries over full filenames or monologue
+            // 1. Tool calls (Antigravity / OpenAI schema)
             if let toolCalls = obj["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
                 let summaries = toolCalls.compactMap { tc -> String? in
                     var args =
@@ -569,109 +656,93 @@ enum AgentDetector {
                     {
                         args = parsed
                     }
-                    let rawSummary =
-                        (tc["toolSummary"] as? String)
-                        ?? (args?["toolSummary"] as? String)
-                        ?? (tc["toolAction"] as? String)
-                        ?? (args?["toolAction"] as? String)
-                    if let cleanSummary = cleanUnquoted(rawSummary) {
-                        return cleanSummary
-                    }
-                    if let name = tc["name"] as? String {
-                        let lowerName = name.lowercased()
-                        switch lowerName {
-                        case "run_command", "bash", "execute_command", "exec":
-                            if let cmd = cleanUnquoted(
-                                args?["CommandLine"] as? String ?? args?["command"] as? String)
-                            {
-                                let firstWord =
-                                    cmd.split(whereSeparator: \.isWhitespace).first.map(String.init)
-                                    ?? cmd
-                                let basename = URL(fileURLWithPath: firstWord).lastPathComponent
-                                return "Running \(basename)"
-                            }
-                            return "Running command"
-                        case "view_file", "read_file", "read":
-                            if let path = cleanUnquoted(
-                                args?["AbsolutePath"] as? String ?? args?["TargetFile"] as? String
-                                    ?? args?["path"] as? String)
-                            {
-                                let fname = URL(fileURLWithPath: path).lastPathComponent
-                                return "Viewing \(fname)"
-                            }
-                            return "Viewing file"
-                        case "replace_file_content", "multi_replace_file_content", "write_to_file",
-                            "edit_file", "edit":
-                            if let path = cleanUnquoted(
-                                args?["TargetFile"] as? String ?? args?["AbsolutePath"] as? String
-                                    ?? args?["path"] as? String)
-                            {
-                                let fname = URL(fileURLWithPath: path).lastPathComponent
-                                return "Editing \(fname)"
-                            }
-                            return "Editing file"
-                        case "grep_search", "search_web", "file_search", "glob":
-                            if let query = cleanUnquoted(
-                                args?["Query"] as? String ?? args?["query"] as? String)
-                            {
-                                return "Searching: \(query)"
-                            }
-                            return "Searching code"
-                        case "list_dir", "ls":
-                            return "Listing directory"
-                        case "ask_question":
-                            return "Waiting for input"
-                        default:
-                            let humanized = name.replacingOccurrences(of: "_", with: " ")
-                                .capitalized
-                            return humanized
-                        }
-                    }
-                    return nil
+                    let name = tc["name"] as? String ?? "tool"
+                    return summarizeToolCall(name: name, args: args, tc: tc)
                 }
                 let joined = summaries.joined(separator: ", ").trimmingCharacters(
                     in: .whitespacesAndNewlines)
                 if !joined.isEmpty {
-                    return IslandMetrics.cleanHUDText(joined, maxCharacters: 40)
+                    let cleaned = IslandMetrics.cleanHUDText(joined, maxCharacters: 40)
+                    if !cleaned.isEmpty { return cleaned }
                 }
             }
+
+            // 2. Claude Code tool_use (e.g. {"type": "tool_use", "name": "Bash", "input": {...}})
+            let objType = obj["type"] as? String ?? ""
+            if objType == "tool_use", let toolName = obj["name"] as? String {
+                let inputArgs = obj["input"] as? [String: Any]
+                if let summary = summarizeToolCall(name: toolName, args: inputArgs) {
+                    let cleaned = IslandMetrics.cleanHUDText(summary, maxCharacters: 40)
+                    if !cleaned.isEmpty { return cleaned }
+                }
+            }
+
+            // 3. Goose / Custom event action (e.g. {"action": {"tool": "edit", ...}})
+            if let action = obj["action"] as? [String: Any],
+                let toolName = action["tool"] as? String ?? action["name"] as? String
+            {
+                let args = action["args"] as? [String: Any]
+                if let summary = summarizeToolCall(name: toolName, args: args) {
+                    let cleaned = IslandMetrics.cleanHUDText(summary, maxCharacters: 40)
+                    if !cleaned.isEmpty { return cleaned }
+                }
+            }
+
+            // 4. Message content / command
             if let message = obj["message"] as? [String: Any] {
                 if let content = message["content"] as? [[String: Any]] {
                     let texts = content.compactMap { cleanUnquoted($0["text"] as? String) }
                     let joined = texts.joined(separator: " ").trimmingCharacters(
                         in: .whitespacesAndNewlines)
                     if !joined.isEmpty {
-                        return IslandMetrics.cleanHUDText(joined, maxCharacters: 40)
+                        let cleaned = IslandMetrics.cleanHUDText(joined, maxCharacters: 40)
+                        if !cleaned.isEmpty { return cleaned }
                     }
                 }
                 if let contentStr = cleanUnquoted(message["content"] as? String),
                     !contentStr.isEmpty
                 {
-                    return IslandMetrics.cleanHUDText(contentStr, maxCharacters: 40)
+                    let cleaned = IslandMetrics.cleanHUDText(contentStr, maxCharacters: 40)
+                    if !cleaned.isEmpty { return cleaned }
                 }
                 if let text = cleanUnquoted(message["text"] as? String), !text.isEmpty {
-                    return IslandMetrics.cleanHUDText(text, maxCharacters: 40)
+                    let cleaned = IslandMetrics.cleanHUDText(text, maxCharacters: 40)
+                    if !cleaned.isEmpty { return cleaned }
                 }
                 if let command = cleanUnquoted(message["command"] as? String), !command.isEmpty {
-                    return IslandMetrics.cleanHUDText(command, maxCharacters: 40)
+                    let cleaned = IslandMetrics.cleanHUDText(command, maxCharacters: 40)
+                    if !cleaned.isEmpty { return cleaned }
                 }
             }
-            let objType = obj["type"] as? String ?? ""
+
+            // 5. Internal protocol checkpoints and noise to skip entirely
             let objSource = obj["source"] as? String ?? ""
             if objType == "CHECKPOINT" || objType == "EPHEMERAL_MESSAGE" || objType == "TASK_STATE"
-                || objSource == "SYSTEM"
+                || objSource == "SYSTEM" || objSource == "SYSTEM_MESSAGE"
                 || objType == "VIEW_FILE" || objType == "RUN_COMMAND" || objType == "LIST_DIR"
+                || objType == "LIST_DIRECTORY" || objType == "GREP_SEARCH"
+                || objType == "SEARCH_WEB" || objType == "CODE_ACTION"
+                || objType == "CONVERSATION_HISTORY" || objType == "KNOWLEDGE_ARTIFACTS"
+                || objType == "ERROR_MESSAGE" || objType == "SYSTEM_MESSAGE"
+                || objType == "STATUS_UPDATE"
             {
                 return nil
             }
-            if objType == "USER_INPUT" || objSource == "USER" {
+
+            // 6. User prompt
+            if objType == "USER_INPUT" || objSource == "USER" || objSource == "USER_EXPLICIT" {
                 if let content = cleanUnquoted(obj["content"] as? String), !content.isEmpty {
-                    return IslandMetrics.cleanHUDText(content, maxCharacters: 40)
+                    let cleaned = IslandMetrics.cleanHUDText(content, maxCharacters: 40)
+                    if !cleaned.isEmpty { return cleaned }
                 }
             }
+
+            // 7. Direct assistant content
             if let contentStr = obj["content"] as? String {
                 let trimmed = contentStr.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:") {
+                if trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:")
+                    || IslandMetrics.isSuppressedGarbage(trimmed)
+                {
                     return nil
                 }
                 if !trimmed.isEmpty && !trimmed.hasPrefix("{") {
@@ -684,13 +755,19 @@ enum AgentDetector {
                         .replacingOccurrences(of: "`", with: "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !clean.isEmpty {
-                        return IslandMetrics.cleanHUDText(clean, maxCharacters: 40)
+                        let cleaned = IslandMetrics.cleanHUDText(clean, maxCharacters: 40)
+                        if !cleaned.isEmpty { return cleaned }
                     }
                 }
             }
+
+            // 8. Thinking / reasoning monologue
             if let thinkingStr = obj["thinking"] as? String {
                 let trimmed = thinkingStr.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
+                if IslandMetrics.isSuppressedGarbage(trimmed) {
+                    return nil
+                }
+                if !trimmed.isEmpty && !trimmed.hasPrefix("{") {
                     let firstLine =
                         trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
                     let clean =
@@ -700,17 +777,24 @@ enum AgentDetector {
                         .replacingOccurrences(of: "`", with: "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !clean.isEmpty {
-                        return IslandMetrics.cleanHUDText(clean, maxCharacters: 40)
+                        let cleaned = IslandMetrics.cleanHUDText(clean, maxCharacters: 40)
+                        if !cleaned.isEmpty { return cleaned }
                     }
                 }
             }
+
+            // 9. Bash execution
             if let bash = obj["bashExecution"] as? [String: Any],
                 let command = cleanUnquoted(bash["command"] as? String),
                 !command.isEmpty
             {
-                return IslandMetrics.cleanHUDText(command, maxCharacters: 40)
+                let summary = summarizeCommand(command)
+                let cleaned = IslandMetrics.cleanHUDText(summary, maxCharacters: 40)
+                if !cleaned.isEmpty { return cleaned }
             }
         }
+
+        // Plain text fallback: strip control codes and suppress garbage
         let snippet = line.trimmingCharacters(in: .whitespacesAndNewlines)
         if snippet.isEmpty { return nil }
         if snippet.hasPrefix("{") {
@@ -809,20 +893,27 @@ enum AgentDetector {
                 let type = obj["type"] as? String ?? ""
                 let source = obj["source"] as? String ?? ""
 
-                // Skip internal protocol checkpoints
-                if type == "EPHEMERAL_MESSAGE" || type == "CHECKPOINT" || type == "TASK_STATE" {
+                // Skip internal protocol checkpoints and tool outputs
+                if type == "EPHEMERAL_MESSAGE" || type == "CHECKPOINT" || type == "TASK_STATE"
+                    || type == "VIEW_FILE" || type == "RUN_COMMAND" || type == "LIST_DIR"
+                    || type == "LIST_DIRECTORY" || type == "GREP_SEARCH"
+                    || type == "SEARCH_WEB" || type == "CODE_ACTION"
+                    || type == "CONVERSATION_HISTORY" || type == "KNOWLEDGE_ARTIFACTS"
+                    || type == "ERROR_MESSAGE" || type == "SYSTEM_MESSAGE"
+                    || type == "STATUS_UPDATE" || source == "SYSTEM"
+                {
                     continue
                 }
 
                 // User prompt
-                if type == "USER_INPUT" || source == "USER" {
+                if type == "USER_INPUT" || source == "USER" || source == "USER_EXPLICIT" {
                     if let content = cleanUnquoted(obj["content"] as? String) {
                         formatted.append("❯ User: \(content.prefix(120))")
                     }
                     continue
                 }
 
-                // Tool calls
+                // Tool calls (Antigravity / OpenAI schema)
                 if let toolCalls = obj["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
                     for tc in toolCalls {
                         let name = tc["name"] as? String ?? "tool"
@@ -836,71 +927,18 @@ enum AgentDetector {
                         {
                             args = parsed
                         }
-                        let summary = cleanUnquoted(
-                            (tc["toolSummary"] as? String)
-                                ?? (args?["toolSummary"] as? String)
-                                ?? (tc["toolAction"] as? String)
-                                ?? (args?["toolAction"] as? String)
-                        )
-                        if let summary {
+                        if let summary = summarizeToolCall(name: name, args: args) {
                             formatted.append("→ \(summary)")
-                        } else {
-                            let lowerName = name.lowercased()
-                            switch lowerName {
-                            case "run_command", "bash", "execute_command", "exec":
-                                if let cmd = cleanUnquoted(
-                                    args?["CommandLine"] as? String ?? args?["command"] as? String)
-                                {
-                                    let firstWord =
-                                        cmd.split(whereSeparator: \.isWhitespace).first.map(
-                                            String.init) ?? cmd
-                                    let basename = URL(fileURLWithPath: firstWord).lastPathComponent
-                                    formatted.append("→ Running \(basename)")
-                                } else {
-                                    formatted.append("→ Running command")
-                                }
-                            case "view_file", "read_file", "read":
-                                if let path = cleanUnquoted(
-                                    args?["AbsolutePath"] as? String ?? args?["TargetFile"]
-                                        as? String
-                                        ?? args?["path"] as? String)
-                                {
-                                    let fname = URL(fileURLWithPath: path).lastPathComponent
-                                    formatted.append("→ Viewing \(fname)")
-                                } else {
-                                    formatted.append("→ Viewing file")
-                                }
-                            case "replace_file_content", "multi_replace_file_content",
-                                "write_to_file",
-                                "edit_file", "edit":
-                                if let path = cleanUnquoted(
-                                    args?["TargetFile"] as? String ?? args?["AbsolutePath"]
-                                        as? String
-                                        ?? args?["path"] as? String)
-                                {
-                                    let fname = URL(fileURLWithPath: path).lastPathComponent
-                                    formatted.append("→ Editing \(fname)")
-                                } else {
-                                    formatted.append("→ Editing file")
-                                }
-                            case "grep_search", "search_web", "file_search", "glob":
-                                if let query = cleanUnquoted(
-                                    args?["Query"] as? String ?? args?["query"] as? String)
-                                {
-                                    formatted.append("→ Searching: \(query)")
-                                } else {
-                                    formatted.append("→ Searching code")
-                                }
-                            case "list_dir", "ls":
-                                formatted.append("→ Listing directory")
-                            case "ask_question":
-                                formatted.append("→ Waiting for input")
-                            default:
-                                let human =
-                                    name.replacingOccurrences(of: "_", with: " ").capitalized
-                                formatted.append("→ \(human)")
-                            }
                         }
+                    }
+                    continue
+                }
+
+                // Claude Code tool_use
+                if type == "tool_use", let toolName = obj["name"] as? String {
+                    let inputArgs = obj["input"] as? [String: Any]
+                    if let summary = summarizeToolCall(name: toolName, args: inputArgs) {
+                        formatted.append("→ \(summary)")
                     }
                     continue
                 }

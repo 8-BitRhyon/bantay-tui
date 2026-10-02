@@ -549,18 +549,29 @@ public enum IslandMetrics: Sendable {
         return remMinutes > 0 ? "\(hours)h\(remMinutes)m" : "\(hours)h"
     }
 
-    /// Strips raw markdown links, escape sequences (\n), log envelopes (timestamp=...),
-    /// and replaces long file paths with their basename to format clean single-line HUD strings.
+    /// Strips ANSI escape sequences, control characters, braille spinners, log envelopes,
+    /// markdown links, and paths to format clean single-line HUD strings.
+    /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.
     public static func cleanHUDText(_ text: String, maxCharacters: Int = 60) -> String {
-        var s =
-            text
+        // 1. Strip ANSI escape sequences, control characters, and braille spinner patterns
+        var s = LogFormatter.stripControlCharacters(text)
             .replacingOccurrences(of: "\\n", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
 
-        // Strip log envelope metadata (timestamp=... level=... run=... msg=...)
+        // 2. Strip XML/HTML tags (e.g. <thinking>, </thinking>, <command>)
+        s = s.replacingOccurrences(
+            of: "<[^>]+>",
+            with: "",
+            options: .regularExpression)
+
+        // 3. Strip log envelope metadata (timestamp=... level=... run=... msg=...)
         s = s.replacingOccurrences(
             of: "(?:timestamp|time)=[0-9T:.Z+-]+\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:timestamp|time)=\"[^\"]*\"\\s*",
             with: "",
             options: .regularExpression)
         s = s.replacingOccurrences(
@@ -568,15 +579,43 @@ public enum IslandMetrics: Sendable {
             with: "",
             options: [.regularExpression, .caseInsensitive])
         s = s.replacingOccurrences(
-            of: "run=[a-zA-Z0-9_-]+\\s*",
+            of: "^(?:INFO|WARN|ERROR|DEBUG|TRACE)\\s+",
+            with: "",
+            options: [.regularExpression, .caseInsensitive])
+        s = s.replacingOccurrences(
+            of: "(?:run|run_id)=[a-zA-Z0-9_-]+\\s*",
             with: "",
             options: .regularExpression)
         s = s.replacingOccurrences(
             of: "(?:message|msg)=\"?([^\"]*)\"?",
             with: "$1",
             options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:service|endpoint)=[a-zA-Z0-9._/-]+\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?:count|errors|durationMs)=\\d+\\s*",
+            with: "",
+            options: .regularExpression)
 
-        // Strip markdown links: [text](url) -> text
+        // 4. Strip bare ISO timestamps (\d{4}-\d{2}-\d{2}T...) and relative time (+40ms)
+        s = s.replacingOccurrences(
+            of: "\\b\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z?\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "\\+\\d+ms\\s*",
+            with: "",
+            options: .regularExpression)
+
+        // 5. Strip terminal progress brackets (e.g. [===> ] 45%)
+        s = s.replacingOccurrences(
+            of: "\\[[=>\\-\\s]+\\]\\s*\\d*%?\\s*",
+            with: "",
+            options: .regularExpression)
+
+        // 6. Strip markdown links: [text](url) -> text
         let mdLinkPattern = "\\[([^\\]]+)\\]\\([^\\)]+\\)"
         if let regex = try? NSRegularExpression(pattern: mdLinkPattern, options: []) {
             let range = NSRange(location: 0, length: s.utf16.count)
@@ -584,11 +623,10 @@ public enum IslandMetrics: Sendable {
                 in: s, options: [], range: range, withTemplate: "$1")
         }
 
-        // Strip raw file URLs
+        // 7. Strip raw file URLs
         s = s.replacingOccurrences(of: "file:///[^\\s)]+", with: "", options: .regularExpression)
 
-        // Replace absolute filesystem paths with their last component (basename)
-        // e.g. /Users/rhyon/.../Sources/BantayTUI/MascotModel.swift -> MascotModel.swift
+        // 8. Replace absolute filesystem paths with their last component (basename)
         let pathWithExtPattern = "/(?:[^\\s/]+/)+([^\\s/]+\\.[a-zA-Z0-9_]+)"
         if let regex = try? NSRegularExpression(pattern: pathWithExtPattern, options: []) {
             let range = NSRange(location: 0, length: s.utf16.count)
@@ -596,20 +634,79 @@ public enum IslandMetrics: Sendable {
                 in: s, options: [], range: range, withTemplate: "$1")
         }
 
-        // Strip bold/italic/code markdown delimiters
+        // 9. Strip bold/italic/code markdown delimiters
         s = s.replacingOccurrences(of: "**", with: "")
         s = s.replacingOccurrences(of: "`", with: "")
 
-        // Collapse excess whitespace
+        // 10. Collapse excess whitespace
         s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard !trimmed.isEmpty else { return "" }
+
+        // 11. Reject unparsed JSON, diff markers, compiler trace noise, hostnames, and shell fallbacks
+        if isSuppressedGarbage(trimmed) {
+            return ""
+        }
 
         if maxCharacters > 0, trimmed.count > maxCharacters {
             let prefix = String(trimmed.prefix(maxCharacters - 3))
             return prefix.trimmingCharacters(in: .whitespaces) + "..."
         }
         return trimmed
+    }
+
+    /// True if the string is raw unparsed JSON, a diff chunk, internal daemon noise,
+    /// or a multiplexer hostname/shell fallback.
+    public static func isSuppressedGarbage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        let lower = trimmed.lowercased()
+
+        // Unparsed JSON blobs or brackets
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[")
+            || trimmed.hasPrefix("}") || trimmed.hasPrefix("]")
+            || lower.contains("\"tool_calls\"") || lower.contains("\"tool_use\"")
+            || lower.contains("\"type\":") || lower.contains("\"session_id\":")
+        {
+            return true
+        }
+
+        // Git diff chunks or compiler trace markers
+        if trimmed.hasPrefix("@@") || trimmed.hasPrefix("diff --git")
+            || trimmed.hasPrefix("[diff_block") || trimmed.hasPrefix("::error")
+            || trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:")
+            || trimmed.hasPrefix("Completed At:")
+        {
+            return true
+        }
+
+        // Internal daemon chatter and maintenance pings
+        if lower.contains("service=") || lower.contains("prune=")
+            || lower.contains("catalog request") || lower.contains("catalog response")
+            || lower.contains("catalog fetched") || lower.contains("subscribing")
+            || lower.contains("watching parent process")
+            || lower.contains("ignoring retired") || lower.contains("process_role=")
+            || lower.contains("duplicate skill name") || lower.contains("run_id=")
+            || lower.hasPrefix("cleanup ")
+        {
+            return true
+        }
+
+        // Multiplexer hostnames (e.g. MacBook.local)
+        if lower.hasSuffix(".local") || lower.hasSuffix(".lan") || lower.hasSuffix(".internal") {
+            return true
+        }
+
+        // Multiplexer bare shell names
+        let shells: Set<String> = [
+            "zsh", "bash", "sh", "fish", "csh", "tcsh", "node", "python", "python3", "default",
+            "terminal", "tmux", "zellij", "main", "window", "pane",
+        ]
+        if shells.contains(lower) {
+            return true
+        }
+
+        return false
     }
 
     /// Whether the roster should react to single-key shortcuts (Y/N/digits).
@@ -1093,7 +1190,9 @@ public enum LogFormatter: Sendable {
             case .normal:
                 if char == "\u{1B}" {
                     state = .escape
-                } else if value < 0x20 || (0x7F...0x9F).contains(value) {
+                } else if value < 0x20 || (0x7F...0x9F).contains(value)
+                    || (0x2800...0x28FF).contains(value)
+                {
                     continue
                 } else {
                     result.append(char)
@@ -1109,7 +1208,11 @@ public enum LogFormatter: Sendable {
             case .csi:
                 if (0x40...0x7E).contains(value) { state = .normal }
             case .osc:
-                if char == "\u{1B}" { state = .oscEsc }
+                if char == "\u{07}" || char == "\u{00}" {
+                    state = .normal
+                } else if char == "\u{1B}" {
+                    state = .oscEsc
+                }
             case .oscEsc:
                 if char == "\\" {
                     state = .normal
