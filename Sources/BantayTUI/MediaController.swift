@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import Foundation
 
-public struct MediaTrack: Equatable, Sendable {
+public struct MediaTrack: Equatable, @unchecked Sendable {
     public let title: String
     public let artist: String
     public let album: String
