@@ -1,4 +1,4 @@
-import EventKit
+@preconcurrency import EventKit
 import Foundation
 
 /// Live bridge to Apple Reminders via EventKit.
@@ -65,7 +65,8 @@ public final class RemindersProvider: ObservableObject {
         }
     }
 
-    /// Background inbound sync from Apple Reminders into Bantay TaskStore using default shared store.
+    /// Background inbound sync from Apple Reminders into Bantay TaskStore using
+    /// the default shared store.
     public func syncInboundReminders() async {
         await syncInboundReminders(into: .shared)
     }
@@ -100,20 +101,32 @@ public final class RemindersProvider: ObservableObject {
 
     /// Request Reminders permission (prompts once).
     public func requestAccess() async -> Bool {
-        guard let store else { return false }
+        guard ApprovalNotificationController.hasBundleProxy else { return false }
         do {
-            let granted: Bool
-            if #available(macOS 14.0, *) {
-                granted = try await store.requestFullAccessToReminders()
-            } else {
-                granted = try await store.requestAccess(to: .reminder)
-            }
+            let granted = try await Self.performAccessRequest()
             authorized = granted
-            if granted { defaultList = store.defaultCalendarForNewReminders() }
+            if granted { defaultList = store?.defaultCalendarForNewReminders() }
             return granted
         } catch {
             authorized = false
             return false
+        }
+    }
+
+    nonisolated private static func performAccessRequest() async throws -> Bool {
+        let localStore = EKEventStore()
+        if #available(macOS 14.0, *) {
+            return try await localStore.requestFullAccessToReminders()
+        } else {
+            return try await withCheckedThrowingContinuation { continuation in
+                localStore.requestAccess(to: .reminder) { ok, err in
+                    if let err {
+                        continuation.resume(throwing: err)
+                    } else {
+                        continuation.resume(returning: ok)
+                    }
+                }
+            }
         }
     }
 
