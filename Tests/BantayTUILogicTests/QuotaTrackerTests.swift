@@ -5,6 +5,7 @@
 
     @testable import BantayTUI
 
+    @MainActor
     @Suite("Provider Quota and GUI Agent Detection", .serialized)
     struct QuotaTrackerTests {
         @Test("probeLiveQuotas generates expected provider profiles for all providers")

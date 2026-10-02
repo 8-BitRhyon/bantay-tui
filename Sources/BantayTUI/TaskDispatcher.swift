@@ -10,7 +10,7 @@ public final class TaskDispatcher: ObservableObject {
     private init() {}
 
     /// Whether task dispatch is currently allowed under the active budget policy.
-    public static func isDispatchAllowed(
+    nonisolated public static func isDispatchAllowed(
         cost: Double,
         budget: Double,
         enforceLimit: Bool
@@ -20,11 +20,11 @@ public final class TaskDispatcher: ObservableObject {
         return cost < safeBudget
     }
 
-    private static let lock = NSLock()
+    nonisolated private static let lock = NSLock()
     nonisolated(unsafe) private static var _quarantineMap: [String: Date] = [:]
 
     /// Quarantined provider IDs whose cooldown has not yet expired.
-    public static var activeQuarantinedProviders: Set<String> {
+    nonisolated public static var activeQuarantinedProviders: Set<String> {
         lock.lock()
         defer { lock.unlock() }
         let now = Date()
@@ -33,7 +33,7 @@ public final class TaskDispatcher: ObservableObject {
     }
 
     /// Records rate limit or 429 event to temporarily quarantine provider.
-    public static func recordRateLimitCooldown(
+    nonisolated public static func recordRateLimitCooldown(
         provider: String,
         cooldownSeconds: TimeInterval = 300
     ) {
@@ -44,7 +44,7 @@ public final class TaskDispatcher: ObservableObject {
     }
 
     // Quota-aware fallback chains per agent
-    private static let fallbackChains: [String: [String]] = [
+    nonisolated private static let fallbackChains: [String: [String]] = [
         "claude": ["codex", "antigravity", "cursor", "ollama"],
         "codex": ["claude", "antigravity", "cursor", "ollama"],
         "cursor": ["claude", "codex", "antigravity", "ollama"],
@@ -54,7 +54,7 @@ public final class TaskDispatcher: ObservableObject {
     ]
 
     /// Resolves target agent respecting quota saturation and quarantine cooldowns.
-    public static func resolveQuotaAwareAgent(
+    nonisolated public static func resolveQuotaAwareAgent(
         preferredAgent: String,
         quotas: [ProviderQuota],
         quarantinedProviders: Set<String> = []
