@@ -46,7 +46,7 @@
                 defer: false)
             window.contentViewController = controller
             window.makeKeyAndOrderFront(nil)
-            #expect(controller.view != nil)
+            #expect(controller.isViewLoaded)
             window.close()
         }
 

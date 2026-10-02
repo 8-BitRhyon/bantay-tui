@@ -1,5 +1,6 @@
 #if canImport(Testing)
     import Foundation
+    import SQLite3
     import Testing
 
     @testable import BantayTUI
