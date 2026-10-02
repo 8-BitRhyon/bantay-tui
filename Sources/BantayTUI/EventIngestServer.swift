@@ -328,6 +328,19 @@ final class EventIngestServer {
             return
         }
 
+        // Claude statusline telemetry route (/telemetry/claude)
+        if request.target.hasPrefix("/telemetry/claude") {
+            if let line = String(data: request.body, encoding: .utf8), !line.isEmpty {
+                ClaudeUsageAdapter.record(jsonString: line)
+                connection.send(
+                    content: IngestHTTP.okResponse(message: "claude telemetry recorded"),
+                    completion: .contentProcessed { _ in
+                        connection.cancel()
+                    })
+                return
+            }
+        }
+
         if let line = String(data: request.body, encoding: .utf8) {
             onLine(line)
             connection.send(

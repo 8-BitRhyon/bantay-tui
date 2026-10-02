@@ -7486,6 +7486,191 @@ struct LogicCheckMain {
             try? FileManager.default.removeItem(atPath: l149Home)
         }
 
+        // MARK: - Layer 150: Semantic Activity Detection & HUD Text Sanitization
+        do {
+            // 1. ANSI and spinner stripping
+            let ansi = "\u{001B}[38;5;208mRunning tests\u{001B}[0m"
+            check(
+                IslandMetrics.cleanHUDText(ansi) == "Running tests",
+                "L150 cleanHUDText strips ANSI escapes"
+            )
+            let spinner = "⠋ Generating assets"
+            check(
+                IslandMetrics.cleanHUDText(spinner) == "Generating assets",
+                "L150 cleanHUDText strips braille spinner"
+            )
+
+            // 2. Raw JSON suppression and hostname rejection
+            let rawJson = "{\"role\":\"assistant\",\"content\":\"Working\"}"
+            check(
+                IslandMetrics.isSuppressedGarbage(rawJson),
+                "L150 isSuppressedGarbage rejects raw JSON"
+            )
+            check(
+                IslandMetrics.cleanHUDText(rawJson).isEmpty,
+                "L150 cleanHUDText returns empty for raw JSON"
+            )
+            check(
+                IslandMetrics.isSuppressedGarbage("MacBook-Pro.local"),
+                "L150 isSuppressedGarbage rejects hostnames"
+            )
+            check(
+                IslandMetrics.cleanHUDText("MacBook-Pro.local").isEmpty,
+                "L150 cleanHUDText returns empty for hostnames"
+            )
+
+            // 3. Antigravity tool call parsing
+            let agToolLine =
+                "{\"tool_calls\":[{\"name\":\"write_to_file\","
+                + "\"args\":{\"TargetFile\":\"/tmp/Notch.swift\"}}]}"
+            check(
+                AgentDetector.readableLine(agToolLine) == "Editing Notch.swift",
+                "L150 readableLine parses write_to_file as Editing Notch.swift"
+            )
+            let agCommandWithSummary =
+                "{\"tool_calls\":[{\"name\":\"run_command\","
+                + "\"args\":{\"CommandLine\":\"swift test\"},"
+                + "\"toolSummary\":\"Running tests\"}]}"
+            check(
+                AgentDetector.readableLine(agCommandWithSummary) == "Running tests",
+                "L150 readableLine parses run_command with toolSummary as Running tests"
+            )
+
+            // 4. Claude Code tool_use parsing (binary fallback)
+            let claudeTool =
+                "{\"type\":\"tool_use\",\"name\":\"Bash\","
+                + "\"input\":{\"command\":\"git commit -m 'feat: ui'\"}}"
+            check(
+                AgentDetector.readableLine(claudeTool) == "Running git",
+                "L150 readableLine parses Claude Code git command as Running git"
+            )
+
+            // 5. Explicit toolSummary prioritization
+            let explicitSummary =
+                "{\"tool_calls\":[{\"name\":\"custom_tool\","
+                + "\"toolSummary\":\"Indexing project symbols\"}]}"
+            check(
+                AgentDetector.readableLine(explicitSummary) == "Indexing project symbols",
+                "L150 readableLine prioritizes explicit toolSummary"
+            )
+        }
+
+        // --- Layer 151: Universal Quota Detection & BYOK Orchestration Pipeline ---
+        do {
+            // 1. ClaudeUsageAdapter live rate_limits parsing & quota synthesis
+            let claudeJson = """
+                {
+                    "rate_limits": {
+                        "five_hour": {
+                            "used_percentage": 42.5,
+                            "resets_at": 1780000000
+                        },
+                        "seven_day": {
+                            "used_percentage": 18.0,
+                            "resets_at": 1780500000
+                        }
+                    }
+                }
+                """
+            let limits = ClaudeUsageAdapter.record(jsonString: claudeJson)
+            check(
+                limits != nil && limits?.fiveHour?.usedPercentage == 42.5,
+                "L151 ClaudeUsageAdapter parses five_hour used percentage"
+            )
+            check(
+                limits?.fiveHour?.resetsAt != nil,
+                "L151 ClaudeUsageAdapter parses resets_at epoch timestamp"
+            )
+            let claudeQuota = ClaudeUsageAdapter.quota()
+            check(
+                claudeQuota != nil && abs((claudeQuota?.remainingPercent ?? 0) - 57.5) < 0.01,
+                "L151 ClaudeUsageAdapter computes remaining percentage from used percentage"
+            )
+
+            // 2. OpenRouter BYOK Key Response Parsing
+            let openRouterJson = """
+                {
+                    "data": {
+                        "label": "Workstation Key",
+                        "usage": 15.00,
+                        "limit": 60.00,
+                        "is_free_tier": false
+                    }
+                }
+                """
+            let orQuota = OpenRouterUsageAdapter.parseKeyResponse(Data(openRouterJson.utf8))
+            check(
+                orQuota != nil && orQuota?.remainingPercent == 75.0,
+                "L151 OpenRouterUsageAdapter parses key usage and remaining percentage"
+            )
+            check(
+                orQuota?.totalDisplay == "$60.00 cap" && orQuota?.tier == "BYOK",
+                "L151 OpenRouterUsageAdapter reports cap and tier"
+            )
+
+            // 3. Ollama Local Daemon Response Parsing
+            let ollamaJson = """
+                {
+                    "models": [
+                        { "name": "llama3:latest", "model": "llama3:latest" },
+                        { "name": "qwen2.5-coder:7b", "model": "qwen2.5-coder:7b" }
+                    ]
+                }
+                """
+            let ollamaQuota = OllamaUsageAdapter.parsePsResponse(Data(ollamaJson.utf8))
+            check(
+                ollamaQuota != nil && ollamaQuota?.remainingPercent == 100.0,
+                "L151 OllamaUsageAdapter reports zero-cost unlimited local quota"
+            )
+            check(
+                ollamaQuota?.usedDisplay.contains("2 running") == true,
+                "L151 OllamaUsageAdapter detects running model count"
+            )
+
+            // 4. Dynamic Live Reset Countdowns
+            let now = Date()
+            let future = now.addingTimeInterval(5400)
+            let cdQuota = ProviderQuota(
+                provider: "Claude Code",
+                remainingPercent: 50.0,
+                resetsAt: future
+            )
+            let countdownStr = cdQuota.dynamicResetDescription(now: now)
+            check(
+                countdownStr.contains("1h 30m"),
+                "L151 dynamicResetDescription generates relative countdown string"
+            )
+
+            // 5. Quota-Aware Task Orchestration & Failover
+            let criticalClaude = ProviderQuota(
+                provider: "Claude Code",
+                remainingPercent: 3.5
+            )
+            let healthyCodex = ProviderQuota(
+                provider: "OpenAI Codex",
+                remainingPercent: 85.0
+            )
+            let testQuotas = [criticalClaude, healthyCodex]
+            let failover = TaskDispatcher.resolveQuotaAwareAgent(
+                preferredAgent: "claude",
+                quotas: testQuotas,
+                quarantinedProviders: []
+            )
+            check(
+                failover.agent == "codex" && failover.reroutedFrom == "claude",
+                "L151 TaskDispatcher reroutes critical provider to next healthy chain candidate"
+            )
+
+            // 6. Prompt Caching Economics (90% discount on cache reads)
+            var snap = UsageSnapshot()
+            snap.inputTokens = 10_000
+            snap.cacheReadTokens = 100_000
+            check(
+                abs(snap.promptCacheSavingsUSD - 0.27) < 0.001,
+                "L151 UsageSnapshot computes 90% discount savings on prompt cache reads"
+            )
+        }
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 

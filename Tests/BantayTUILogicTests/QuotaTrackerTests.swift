@@ -355,6 +355,145 @@
             #expect(cursorQuota?.usedDisplay.contains("1189 lines") == true)
             #expect(cursorQuota?.tier.contains("Agent") == true)
         }
+
+        @Test("ClaudeUsageAdapter parses statusLine rate limits and computes remaining quota")
+        func claudeRateLimitsParsing() {
+            let json = """
+                {
+                    "rate_limits": {
+                        "five_hour": {
+                            "used_percentage": 42.5,
+                            "resets_at": 1780000000
+                        },
+                        "seven_day": {
+                            "used_percentage": 18.0,
+                            "resets_at": 1780500000
+                        }
+                    }
+                }
+                """
+            let limits = ClaudeUsageAdapter.record(jsonString: json)
+            #expect(limits != nil)
+            #expect(limits?.fiveHour?.usedPercentage == 42.5)
+            #expect(limits?.fiveHour?.resetsAt != nil)
+
+            let quota = ClaudeUsageAdapter.quota()
+            #expect(quota != nil)
+            #expect(quota?.provider == "Claude Code")
+            #expect(quota?.remainingPercent == 57.5)
+            #expect(quota?.resetsAt != nil)
+            #expect(
+                quota?.usedDisplay.contains("43%") == true
+                    || quota?.usedDisplay.contains("42%") == true)
+        }
+
+        @Test("OpenRouterUsageAdapter parses key response and limits")
+        func openRouterKeyParsing() {
+            let json = """
+                {
+                    "data": {
+                        "label": "Workstation Key",
+                        "usage": 15.00,
+                        "limit": 60.00,
+                        "is_free_tier": false
+                    }
+                }
+                """
+            let quota = OpenRouterUsageAdapter.parseKeyResponse(Data(json.utf8))
+            #expect(quota != nil)
+            #expect(quota?.provider == "OpenRouter")
+            #expect(quota?.remainingPercent == 75.0)
+            #expect(quota?.tier == "BYOK")
+            #expect(quota?.usedDisplay.contains("$15.00") == true)
+            #expect(quota?.totalDisplay.contains("$60.00 cap") == true)
+        }
+
+        @Test("OllamaUsageAdapter parses running models")
+        func ollamaPsParsing() {
+            let json = """
+                {
+                    "models": [
+                        { "name": "llama3:latest", "model": "llama3:latest" },
+                        { "name": "codellama:13b", "model": "codellama:13b" }
+                    ]
+                }
+                """
+            let quota = OllamaUsageAdapter.parsePsResponse(Data(json.utf8))
+            #expect(quota != nil)
+            #expect(quota?.provider == "Ollama")
+            #expect(quota?.remainingPercent == 100.0)
+            #expect(quota?.tier == "Local Models")
+            #expect(quota?.usedDisplay.contains("2 running") == true)
+        }
+
+        @Test("dynamicResetDescription computes relative countdowns")
+        func dynamicResetCountdown() {
+            let now = Date()
+            let resetIn90Min = now.addingTimeInterval(5400)
+            let quota = ProviderQuota(
+                provider: "Claude Code",
+                remainingPercent: 50.0,
+                resetsAt: resetIn90Min
+            )
+            let desc = quota.dynamicResetDescription(now: now)
+            #expect(desc.contains("1h 30m"))
+
+            let resetIn15Min = now.addingTimeInterval(900)
+            let quota15 = ProviderQuota(
+                provider: "Claude Code",
+                remainingPercent: 50.0,
+                resetsAt: resetIn15Min
+            )
+            #expect(quota15.dynamicResetDescription(now: now) == "Resets in 15m")
+
+            let expiredQuota = ProviderQuota(
+                provider: "Claude Code",
+                remainingPercent: 50.0,
+                resetsAt: now.addingTimeInterval(-60)
+            )
+            #expect(expiredQuota.dynamicResetDescription(now: now) == "Resets now")
+        }
+
+        @Test("TaskDispatcher resolves fallback agent when primary is critical or in cooldown")
+        func taskDispatcherQuotaFailover() {
+            let criticalClaude = ProviderQuota(
+                provider: "Claude Code",
+                remainingPercent: 4.0
+            )
+            let healthyCodex = ProviderQuota(
+                provider: "OpenAI Codex",
+                remainingPercent: 80.0
+            )
+            let quotas = [criticalClaude, healthyCodex]
+
+            let resolution = TaskDispatcher.resolveQuotaAwareAgent(
+                preferredAgent: "claude",
+                quotas: quotas,
+                quarantinedProviders: []
+            )
+            #expect(resolution.agent == "codex")
+            #expect(resolution.reroutedFrom == "claude")
+
+            let healthyClaude = ProviderQuota(
+                provider: "Claude Code",
+                remainingPercent: 90.0
+            )
+            let resolutionQuarantined = TaskDispatcher.resolveQuotaAwareAgent(
+                preferredAgent: "claude",
+                quotas: [healthyClaude, healthyCodex],
+                quarantinedProviders: ["claude"]
+            )
+            #expect(resolutionQuarantined.agent == "codex")
+            #expect(resolutionQuarantined.reroutedFrom == "claude")
+        }
+
+        @Test("promptCacheSavingsUSD computes 90% discount on cache reads")
+        func promptCacheSavings() {
+            var snapshot = UsageSnapshot()
+            snapshot.inputTokens = 10_000
+            snapshot.cacheReadTokens = 100_000
+            #expect(abs(snapshot.promptCacheSavingsUSD - 0.27) < 0.001)
+        }
     }
 
     private func createMockCodexDB(at path: String) {

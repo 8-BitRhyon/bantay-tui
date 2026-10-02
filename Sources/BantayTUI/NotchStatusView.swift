@@ -940,10 +940,13 @@ struct NotchStatusView: View {
                             .frame(
                                 width: IslandMetrics.idleDotSize,
                                 height: IslandMetrics.idleDotSize)
-                        Text(event.title ?? event.kind.label)
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
+                        Text(
+                            event.title.map { IslandMetrics.cleanHUDText($0, maxCharacters: 40) }
+                                .flatMap { $0.isEmpty ? nil : $0 } ?? event.kind.label
+                        )
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
                     }
                     .padding(.horizontal, IslandMetrics.idleChipHPad)
                     .frame(height: 20)
@@ -1161,7 +1164,9 @@ struct NotchStatusView: View {
                 }
 
                 Text(
-                    event.title ?? event.message
+                    (event.title ?? event.message).map {
+                        IslandMetrics.cleanHUDText($0, maxCharacters: 80)
+                    }.flatMap { $0.isEmpty ? nil : $0 }
                         ?? (isCompleted ? "Task completed successfully" : "Agent requires input")
                 )
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -1296,11 +1301,14 @@ struct NotchStatusView: View {
                     .background(Color.white.opacity(0.12), in: Capsule())
             }
             if showDetail, let title = event.title, !title.isEmpty {
-                Text("·").foregroundStyle(.secondary)
-                Text(title)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                let clean = IslandMetrics.cleanHUDText(title, maxCharacters: 40)
+                if !clean.isEmpty {
+                    Text("·").foregroundStyle(.secondary)
+                    Text(clean)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             approvalActions(variance: variance, choices: choices, paneId: paneId)
@@ -2234,10 +2242,11 @@ struct NotchStatusView: View {
 
     private var quotaAxiBadge: some View {
         let active = Array(Set(eventManager.agents.map(\.source)))
-        let quotas = QuotaAxiTracker.fallbackQuotas(
+        let quotas = QuotaAxiTracker.probeLiveQuotas(
             activeProviders: active,
             costUSD: eventManager.usage.costUSD,
-            budgetUSD: NotchHUDConfig.shared.dailyBudgetUSD
+            budgetUSD: NotchHUDConfig.shared.dailyBudgetUSD,
+            burnRateTPM: eventManager.usageRate.tokensPerMinute ?? 0.0
         )
         let minQuota = quotas.min(by: { $0.remainingPercent < $1.remainingPercent })
         let percentInt = Int(minQuota?.remainingPercent ?? 100)
@@ -2517,11 +2526,14 @@ struct NotchStatusView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if let title = recent.title {
-                        Text(title)
-                            .font(.system(size: 8.5, weight: .regular))
-                            .foregroundColor(.white.opacity(0.6))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        let clean = cleanHUDText(title)
+                        if !clean.isEmpty {
+                            Text(clean)
+                                .font(.system(size: 8.5, weight: .regular))
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
                     Spacer(minLength: 8)
                     // Item 8: show duration on completed rows when available.
@@ -2544,7 +2556,10 @@ struct NotchStatusView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
                     "\(recent.source) \(recent.kind == .failed ? "failed" : "completed")"
-                        + (recent.title.map { ": \($0)" } ?? ""))
+                        + (recent.title.flatMap {
+                            let c = cleanHUDText($0)
+                            return c.isEmpty ? nil : ": \(c)"
+                        } ?? ""))
             }
         }
     }
@@ -2782,7 +2797,8 @@ struct NotchStatusView: View {
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                 } else if let live = agent.title ?? agent.message,
-                                    agent.kind.isOngoing
+                                    agent.kind.isOngoing,
+                                    !cleanHUDText(live).isEmpty
                                 {
                                     Text(cleanHUDText(live))
                                         .font(.system(size: 8.5, weight: .medium))
@@ -2809,11 +2825,14 @@ struct NotchStatusView: View {
                         }
                         Spacer(minLength: 4)
                         if let title = agent.title, !agent.kind.isOngoing {
-                            Text(cleanHUDText(title))
-                                .font(.system(size: 9, weight: .regular))
-                                .foregroundColor(.white.opacity(0.6))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+                            let clean = cleanHUDText(title)
+                            if !clean.isEmpty {
+                                Text(clean)
+                                    .font(.system(size: 9, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
                         }
                     }
                     .contentShape(Rectangle())
@@ -3396,7 +3415,9 @@ private struct AgentRowAccessibility: ViewModifier {
             // user must be able to act on approvals from the roster.
             .accessibilityElement(children: .contain)
             .accessibilityLabel("\(agent.source), \(agent.kind.label)")
-            .accessibilityValue(agent.title ?? agent.message ?? "")
+            .accessibilityValue(
+                (agent.title ?? agent.message).map { IslandMetrics.cleanHUDText($0) } ?? ""
+            )
             .accessibilityAction(named: "Approve") {
                 if let paneId = agent.paneId,
                     agent.kind == .accessRequest || agent.kind == .waiting

@@ -15,8 +15,8 @@ Agents run inside herdr, tmux, zellij, or a plain terminal — Bantay detects th
 - **Real-time by default** — a persistent herdr `events.subscribe` push stream drives the roster (sub-millisecond status transitions, no polling); the poll loop is a slow safety net.
 - **Push notifications (ntfy.sh)** — approvals, failures, and completions pushed to your phone/other devices via a configurable topic.
 - **tmux status-bar integration** — optional one-line agent summary (`◐ working · ⚠ blocked`) inside tmux `status-right`.
-- **Universal agent detection** — herdr panes *plus* standalone Claude Code, Codex, Gemini, Cursor, and opencode processes (with latest-activity tailing from transcripts). No multiplexer required.
-- **Live usage, cost & quota** — a real ledger adapter reads kilo's SQLite database (`kilo.db` — the source behind `kilo stats`): daily spend vs. your budget drives the quota badge + edge-glow, and a tokens-per-minute badge polls cumulative totals for a live rate. A scalable `UsageSample` provider protocol extends to Codex, Claude, opencode, and aider.
+- **Universal agent detection & clean telemetry** — herdr panes *plus* standalone Claude Code, Codex, Gemini, Cursor, and opencode processes. Human-readable activity parsing ("Editing Notch.swift", "Running tests") with ANSI escape stripping and braille spinner cleansing.
+- **Universal multi-vendor quota & BYOK telemetry** — deep SQLite inspection (`~/.codex/state_5.sqlite`, Cursor `state.vscdb`), live Claude Code `statusLine` hook ingestion, OpenRouter API key quota tracking, and local Ollama models. Includes minute-accurate live countdowns (`"Resets in 1h 24m"`), 90% prompt cache discount economics, and quota-aware task orchestration with 429 quarantine backoff.
 - **Drop files onto the notch** — drag a file/photo over the notch to expand it, open the Shelf, and land the file there. The shelf is a real NotchDrop-style surface: copies files into its own storage, persists across restarts, renders QuickLook thumbnails, has a retention policy, and glows on drop.
 - **Apple Reminders in the task tab** — one-tap sync with the Reminders app (EventKit): quick-add, complete, remove, overdue highlight — plus a Barrie-style **natural-language quick-add** ("take out trash before end of day @home" → date, priority, tags, agent parsed live with a preview chip).
 - **Workflow from anywhere** — global `⌥Space` to show/hide the island, `Y`/`N`/`1-9` roster shortcuts, edge-glow when agents need you, menu-bar badge with pending count, clipboard + file shelf, per-agent prompt composition.
@@ -176,7 +176,7 @@ Source: [`docs/ci-pipeline.mmd`](docs/ci-pipeline.mmd)
 | 1 · Format | `swift format lint --recursive --strict Sources Tests` | Style deviation (`.swift-format`) |
 | 2 · Compile | `swift build` | Compiler errors or warnings-as-failures |
 | 3 · Tests | `swift test` | Failing unit test (`BantayTUILogicTests`) |
-| 3.5 · Logic checks | `swiftc` + run `.kilo/LogicCheck.swift` | Any failing L1–L64 harness assertion (runs without XCTest) |
+| 3.5 · Logic checks | `bash scripts/build-logic-harness.sh` | Any failing L1–L151 harness assertion (runs without XCTest) |
 | 4 · Release | `swift build -c release` | Release-mode build failure |
 | 5 · Security | gitleaks + SHA-pin audit | Leaked secrets; unpinned third-party actions |
 
@@ -226,10 +226,10 @@ swift format format --in-place --recursive Sources Tests   # apply style
 swift format lint --recursive --strict Sources Tests       # CI Layer 1
 swift build                                                # CI Layer 2
 swift test                                                 # CI Layer 3 (requires Xcode)
-swiftc -o /tmp/logic-check <harness sources> && /tmp/logic-check   # CI Layer 3.5
+bash scripts/build-logic-harness.sh                         # CI Layer 3.5
 ```
 
-The `.kilo/LogicCheck.swift` harness (L1–L64) runs without XCTest and is the primary local gate: idle-strip geometry, expanded control-plane metrics, approval controls, heartbeat/phantom protection, screen selection, menu-bar clearance, usage parsing, ingest parsing, shelf logic, terminal registry, and facet persistence. Unit tests live in `Tests/BantayTUILogicTests`.
+The `.kilo/LogicCheck.swift` harness (L1–L151) runs without XCTest and is the primary local gate: idle-strip geometry, expanded control-plane metrics, approval controls, heartbeat/phantom protection, screen selection, menu-bar clearance, usage parsing, ingest parsing, shelf logic, terminal registry, facet persistence, universal quota detection, and multi-agent failover routing. Unit tests live in `Tests/BantayTUILogicTests`.
 
 ## License
 

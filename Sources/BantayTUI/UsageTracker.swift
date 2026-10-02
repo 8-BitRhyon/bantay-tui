@@ -24,6 +24,13 @@ struct UsageSnapshot: Equatable, Sendable {
     var totalTokens: Int {
         inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens
     }
+
+    /// Prompt caching savings achieved (Anthropic/OpenAI cache reads are 90% discounted vs standard input).
+    var promptCacheSavingsUSD: Double {
+        let standardInputRate = (Double(cacheReadTokens) / 1_000_000.0) * 3.0
+        let discountedRate = (Double(cacheReadTokens) / 1_000_000.0) * 0.30
+        return max(0.0, standardInputRate - discountedRate)
+    }
 }
 
 /// Token rate signal for the usage gauge: tokens/min over a rolling window
@@ -175,12 +182,11 @@ enum UsageParser {
         {
             snapshot.costUSD = cost
         } else if snapshot.totalTokens > 0, piCost == nil {
-            let inputCost =
-                (Double(
-                    snapshot.inputTokens + snapshot.cacheReadTokens + snapshot.cacheCreationTokens)
-                    / 1_000_000.0) * 3.0
+            let regularInputCost = (Double(snapshot.inputTokens) / 1_000_000.0) * 3.0
+            let cacheReadCost = (Double(snapshot.cacheReadTokens) / 1_000_000.0) * 0.30
+            let cacheWriteCost = (Double(snapshot.cacheCreationTokens) / 1_000_000.0) * 3.75
             let outputCost = (Double(snapshot.outputTokens) / 1_000_000.0) * 15.0
-            snapshot.costUSD = inputCost + outputCost
+            snapshot.costUSD = regularInputCost + cacheReadCost + cacheWriteCost + outputCost
         }
         guard snapshot.totalTokens > 0 || snapshot.costUSD > 0 else { return nil }
         return snapshot

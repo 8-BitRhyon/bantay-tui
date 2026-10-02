@@ -264,6 +264,280 @@ public enum CursorUsageAdapter: Sendable {
     }
 }
 
+/// Real-time rate limits ingested from Claude Code's `statusLine` hook or local state.
+public struct ClaudeRateLimits: Equatable, Sendable, Codable {
+    public struct Window: Equatable, Sendable, Codable {
+        public var usedPercentage: Double
+        public var resetsAt: Date?
+
+        public init(usedPercentage: Double = 0.0, resetsAt: Date? = nil) {
+            self.usedPercentage = usedPercentage
+            self.resetsAt = resetsAt
+        }
+    }
+
+    public var fiveHour: Window?
+    public var sevenDay: Window?
+    public var lastUpdated: Date
+
+    public init(
+        fiveHour: Window? = nil,
+        sevenDay: Window? = nil,
+        lastUpdated: Date = Date()
+    ) {
+        self.fiveHour = fiveHour
+        self.sevenDay = sevenDay
+        self.lastUpdated = lastUpdated
+    }
+}
+
+/// Adapter for real-time Claude Code statusLine and local rate limit telemetry.
+public enum ClaudeUsageAdapter: Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _cachedLimits: ClaudeRateLimits?
+
+    public static var cachedLimits: ClaudeRateLimits? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _cachedLimits
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _cachedLimits = newValue
+        }
+    }
+
+    /// Parses rate limit JSON payload from Claude Code statusLine or file export.
+    public static func parseRateLimitsJSON(_ data: Data) -> ClaudeRateLimits? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let limitsObj =
+            (obj["rate_limits"] as? [String: Any])
+            ?? (obj["rateLimits"] as? [String: Any])
+            ?? obj
+
+        func parseWindow(_ raw: Any?) -> ClaudeRateLimits.Window? {
+            guard let dict = raw as? [String: Any] else { return nil }
+            let used =
+                (dict["used_percentage"] as? NSNumber)?.doubleValue
+                ?? (dict["usedPercentage"] as? NSNumber)?.doubleValue
+                ?? (dict["used"] as? NSNumber)?.doubleValue
+                ?? 0.0
+
+            var resetsAt: Date?
+            if let num = (dict["resets_at"] as? NSNumber)?.doubleValue
+                ?? (dict["resetsAt"] as? NSNumber)?.doubleValue
+                ?? (dict["reset"] as? NSNumber)?.doubleValue
+            {
+                if num > 1_000_000_000_000 {
+                    resetsAt = Date(timeIntervalSince1970: num / 1000.0)
+                } else if num > 1_000_000_000 {
+                    resetsAt = Date(timeIntervalSince1970: num)
+                }
+            } else if let str = dict["resets_at"] as? String
+                ?? dict["resetsAt"] as? String
+            {
+                if let sec = Double(str) {
+                    resetsAt = Date(timeIntervalSince1970: sec)
+                } else {
+                    let iso = ISO8601DateFormatter()
+                    resetsAt = iso.date(from: str)
+                }
+            }
+
+            return ClaudeRateLimits.Window(usedPercentage: used, resetsAt: resetsAt)
+        }
+
+        let fiveH =
+            parseWindow(limitsObj["five_hour"])
+            ?? parseWindow(limitsObj["fiveHour"])
+            ?? parseWindow(limitsObj["5h"])
+        let sevenD =
+            parseWindow(limitsObj["seven_day"])
+            ?? parseWindow(limitsObj["sevenDay"])
+            ?? parseWindow(limitsObj["7d"])
+
+        guard fiveH != nil || sevenD != nil else { return nil }
+        return ClaudeRateLimits(fiveHour: fiveH, sevenDay: sevenD, lastUpdated: Date())
+    }
+
+    /// Records payload directly from EventIngestServer /telemetry/claude route.
+    @discardableResult
+    public static func record(jsonString: String) -> ClaudeRateLimits? {
+        guard let data = jsonString.data(using: .utf8),
+            let limits = parseRateLimitsJSON(data)
+        else {
+            return nil
+        }
+        cachedLimits = limits
+        return limits
+    }
+
+    /// Reads cached rate limits from ~/.claude statusline files if present.
+    public static func readFromDisk(home: String = NSHomeDirectory()) -> ClaudeRateLimits? {
+        let candidatePaths = [
+            "\(home)/.claude/rate_limits.json",
+            "\(home)/.claude/statusline-output.json",
+            "\(home)/.claude/telemetry.json",
+        ]
+        for path in candidatePaths {
+            if let data = FileManager.default.contents(atPath: path),
+                let limits = parseRateLimitsJSON(data)
+            {
+                cachedLimits = limits
+                return limits
+            }
+        }
+        return nil
+    }
+
+    /// Generates high-fidelity ProviderQuota using live statusLine rate limits.
+    public static func quota(home: String = NSHomeDirectory()) -> ProviderQuota? {
+        guard let limits = cachedLimits ?? readFromDisk(home: home) else {
+            return nil
+        }
+        let usedPct = limits.fiveHour?.usedPercentage ?? limits.sevenDay?.usedPercentage ?? 0.0
+        let remainingPct = max(0.0, min(100.0, 100.0 - usedPct))
+        let resetsAt = limits.fiveHour?.resetsAt ?? limits.sevenDay?.resetsAt
+        let tier = limits.sevenDay != nil ? "Pro / Max" : "Pro Plan"
+        let usedStr = String(format: "%.0f%% used", usedPct)
+
+        return ProviderQuota(
+            provider: "Claude Code",
+            remainingPercent: remainingPct,
+            resetHint: "5h rolling window",
+            tier: tier,
+            usedDisplay: usedStr,
+            totalDisplay: "5h Window",
+            resetsAt: resetsAt
+        )
+    }
+}
+
+/// Universal adapter probing OpenRouter BYOK key metadata, usage, and credit limits.
+public enum OpenRouterUsageAdapter: Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _cachedQuota: ProviderQuota?
+
+    public static var cachedQuota: ProviderQuota? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _cachedQuota
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _cachedQuota = newValue
+        }
+    }
+
+    /// Detects presence of OpenRouter API key in environment or local config files.
+    public static func detect(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        home: String = NSHomeDirectory()
+    ) -> Bool {
+        if let key = env["OPENROUTER_API_KEY"], !key.isEmpty { return true }
+        let paths = [
+            "\(home)/.openrouter/config.json",
+            "\(home)/.config/openrouter/key",
+            "\(home)/.openrouter/key",
+        ]
+        return paths.contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// Parses OpenRouter /api/v1/key response payload into ProviderQuota.
+    public static func parseKeyResponse(_ data: Data) -> ProviderQuota? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let dataObj = (obj["data"] as? [String: Any]) ?? obj
+        let usage = (dataObj["usage"] as? NSNumber)?.doubleValue ?? 0.0
+        let limit = (dataObj["limit"] as? NSNumber)?.doubleValue
+        let isFreeTier = (dataObj["is_free_tier"] as? Bool) ?? false
+
+        let remainingPct: Double
+        let totalStr: String
+        if let limit = limit, limit > 0 {
+            remainingPct = max(0.0, min(100.0, ((limit - usage) / limit) * 100.0))
+            totalStr = String(format: "$%.2f cap", limit)
+        } else {
+            remainingPct = 100.0
+            totalStr = "PayG"
+        }
+
+        let tierStr = isFreeTier ? "Free Tier" : "BYOK"
+        let usedStr = String(format: "$%.2f used", usage)
+
+        return ProviderQuota(
+            provider: "OpenRouter",
+            remainingPercent: remainingPct,
+            resetHint: "Monthly credit limit",
+            tier: tierStr,
+            usedDisplay: usedStr,
+            totalDisplay: totalStr,
+            resetsAt: nil
+        )
+    }
+}
+
+/// Universal adapter probing local Ollama models and VRAM limits.
+public enum OllamaUsageAdapter: Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _cachedQuota: ProviderQuota?
+
+    public static var cachedQuota: ProviderQuota? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _cachedQuota
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _cachedQuota = newValue
+        }
+    }
+
+    /// Whether local Ollama service is configured or running.
+    public static func detect(home: String = NSHomeDirectory()) -> Bool {
+        if FileManager.default.fileExists(atPath: "\(home)/.ollama") { return true }
+        if FileManager.default.fileExists(atPath: "/usr/local/bin/ollama")
+            || FileManager.default.fileExists(atPath: "/opt/homebrew/bin/ollama")
+        {
+            return true
+        }
+        return false
+    }
+
+    /// Parses Ollama /api/ps response payload into ProviderQuota.
+    public static func parsePsResponse(_ data: Data) -> ProviderQuota? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let models = (obj["models"] as? [[String: Any]]) ?? []
+        let modelNames = models.compactMap { $0["name"] as? String ?? $0["model"] as? String }
+        let count = models.count
+        let usedDisplay =
+            count > 0
+            ? "\(count) running (\(modelNames.prefix(2).joined(separator: ", ")))"
+            : "Idle"
+
+        return ProviderQuota(
+            provider: "Ollama",
+            remainingPercent: 100.0,
+            resetHint: "Unlimited (Local)",
+            tier: "Local Models",
+            usedDisplay: usedDisplay,
+            totalDisplay: "Local VRAM",
+            resetsAt: nil
+        )
+    }
+}
+
 // ponytail: single shared SQLite query helper with immutable zero-locking URI
 private func sqlite3Query(sql: String, db: URL) -> [[String]]? {
     var handle: OpaquePointer?

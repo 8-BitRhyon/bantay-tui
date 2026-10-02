@@ -13,6 +13,8 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         }
         if lower.contains("windsurf") || lower.contains("cascade") { return "windsurf" }
         if lower.contains("kilo") { return "kilo" }
+        if lower.contains("openrouter") { return "openrouter" }
+        if lower.contains("ollama") { return "ollama" }
         return lower
     }
     public var provider: String
@@ -23,8 +25,10 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
     public var totalDisplay: String
     public var burnRateTPM: Double
     public var hoursRemaining: Double?
+    public var resetsAt: Date?
+    public var isCooldown: Bool
     public var isWarning: Bool { remainingPercent <= 20.0 }
-    public var isCritical: Bool { remainingPercent <= 5.0 }
+    public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown }
 
     public init(
         provider: String,
@@ -34,7 +38,9 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         usedDisplay: String = "",
         totalDisplay: String = "",
         burnRateTPM: Double = 0.0,
-        hoursRemaining: Double? = nil
+        hoursRemaining: Double? = nil,
+        resetsAt: Date? = nil,
+        isCooldown: Bool = false
     ) {
         self.provider = provider
         self.remainingPercent = min(max(remainingPercent, 0.0), 100.0)
@@ -44,6 +50,25 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         self.totalDisplay = totalDisplay
         self.burnRateTPM = burnRateTPM
         self.hoursRemaining = hoursRemaining
+        self.resetsAt = resetsAt
+        self.isCooldown = isCooldown
+    }
+
+    /// Formats dynamic live countdown if resetsAt is present, otherwise falls back to static resetHint.
+    public func dynamicResetDescription(now: Date = Date()) -> String {
+        guard let resetsAt else { return resetHint }
+        let diff = resetsAt.timeIntervalSince(now)
+        if diff <= 0 {
+            return "Resets now"
+        }
+        let totalMinutes = Int(diff / 60)
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours > 0 {
+            return "Resets in \(hours)h \(minutes)m"
+        } else {
+            return "Resets in \(max(1, minutes))m"
+        }
     }
 }
 
@@ -178,6 +203,8 @@ public final class QuotaAxiTracker: Sendable {
         if fs.fileExists(atPath: home + "/.gemini") { recognized.insert("antigravity") }
         if fs.fileExists(atPath: home + "/.codeium/windsurf") { recognized.insert("windsurf") }
         if fs.fileExists(atPath: home + "/.local/state/kilo") { recognized.insert("kilo") }
+        if OpenRouterUsageAdapter.detect(home: home) { recognized.insert("openrouter") }
+        if OllamaUsageAdapter.detect(home: home) { recognized.insert("ollama") }
 
         if recognized.isEmpty {
             recognized = ["claude", "codex", "cursor"]
@@ -189,17 +216,24 @@ public final class QuotaAxiTracker: Sendable {
                 tokensPerMin: burnRateTPM, remainingPercent: basePercent)
             switch p {
             case "claude":
-                results.append(
-                    ProviderQuota(
-                        provider: "Claude Code",
-                        remainingPercent: basePercent,
-                        resetHint: "5h rolling window",
-                        tier: "Pro Plan",
-                        usedDisplay: String(format: "$%.2f", costUSD),
-                        totalDisplay: String(format: "$%.2f cap", budget),
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
+                if let live = ClaudeUsageAdapter.quota(home: home) {
+                    var quota = live
+                    quota.burnRateTPM = burnRateTPM
+                    quota.hoursRemaining = hoursLeft
+                    results.append(quota)
+                } else {
+                    results.append(
+                        ProviderQuota(
+                            provider: "Claude Code",
+                            remainingPercent: basePercent,
+                            resetHint: "5h rolling window",
+                            tier: "Pro Plan",
+                            usedDisplay: String(format: "$%.2f", costUSD),
+                            totalDisplay: String(format: "$%.2f cap", budget),
+                            burnRateTPM: burnRateTPM,
+                            hoursRemaining: hoursLeft
+                        ))
+                }
             case "codex":
                 let codexTelemetry = CodexUsageAdapter.deepTelemetry(home: home)
                 let codexTokens: Int = {
@@ -312,6 +346,43 @@ public final class QuotaAxiTracker: Sendable {
                         burnRateTPM: burnRateTPM,
                         hoursRemaining: hoursLeft
                     ))
+            case "openrouter":
+                if let cached = OpenRouterUsageAdapter.cachedQuota {
+                    var quota = cached
+                    quota.burnRateTPM = burnRateTPM
+                    quota.hoursRemaining = hoursLeft
+                    results.append(quota)
+                } else {
+                    results.append(
+                        ProviderQuota(
+                            provider: "OpenRouter",
+                            remainingPercent: basePercent,
+                            resetHint: "Monthly credit limit",
+                            tier: "BYOK",
+                            usedDisplay: String(format: "$%.2f", costUSD),
+                            totalDisplay: "PayG",
+                            burnRateTPM: burnRateTPM,
+                            hoursRemaining: hoursLeft
+                        ))
+                }
+            case "ollama":
+                if let cached = OllamaUsageAdapter.cachedQuota {
+                    var quota = cached
+                    quota.burnRateTPM = burnRateTPM
+                    results.append(quota)
+                } else {
+                    results.append(
+                        ProviderQuota(
+                            provider: "Ollama",
+                            remainingPercent: 100.0,
+                            resetHint: "Unlimited (Local)",
+                            tier: "Local Models",
+                            usedDisplay: "Idle",
+                            totalDisplay: "Local VRAM",
+                            burnRateTPM: burnRateTPM,
+                            hoursRemaining: nil
+                        ))
+                }
             default:
                 results.append(
                     ProviderQuota(
@@ -341,6 +412,8 @@ public final class QuotaAxiTracker: Sendable {
         }
         if lower.contains("windsurf") || lower.contains("cascade") { return "windsurf" }
         if lower.contains("kilo") { return "kilo" }
+        if lower.contains("openrouter") { return "openrouter" }
+        if lower.contains("ollama") { return "ollama" }
         return lower
     }
 

@@ -8,6 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Universal Multi-Vendor Quota & BYOK Adapters** (`ClaudeUsageAdapter`,
+  `CodexUsageAdapter`, `CursorUsageAdapter`, `OpenRouterUsageAdapter`,
+  `OllamaUsageAdapter`): real-time rate limit hook ingestion from Claude Code
+  (`statusLine` pipe + `POST /telemetry/claude`), deep SQLite parsing for Codex
+  (`state_5.sqlite`) and Cursor (`state.vscdb`), OpenRouter BYOK key metadata,
+  and local Ollama zero-cost model tracking.
+- **Prompt Caching Economics & Savings** (`UsageTracker`, `UsageSnapshot`):
+  true 90% discount on cache read tokens ($0.30/1M vs $3.00/1M) preventing
+  artificial cost inflation, plus monetary savings tracking (`promptCacheSavingsUSD`).
+- **Dynamic Live Countdowns & Quota Failover** (`ProviderQuota`, `TaskDispatcher`):
+  minute-accurate live countdowns (`"Resets in 1h 24m"`) and automated fallback routing
+  across agent candidates (`claude` → `codex` → `antigravity` → `ollama`) when a provider
+  hits critical saturation or 429 quarantine backoff.
+- **Sanitized Semantic Activity Detection** (`AgentDetector`, `IslandMetrics`):
+  intelligent human-readable status extraction (`"Editing Notch.swift"`, `"Running tests"`),
+  stripping ANSI escapes and braille spinners.
 - **Live usage, cost & quota** (`KiloUsageAdapter`): reads kilo's SQLite
   ledger (`~/.local/share/kilo/kilo.db` — the source behind `kilo stats`)
   for real daily spend vs. your budget (quota badge + edge-glow) and a

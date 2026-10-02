@@ -105,6 +105,16 @@ struct ProviderQuotaView: View {
                         .padding(.vertical, 1)
                         .background(Color.white.opacity(0.06))
                         .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                    if quota.isCooldown {
+                        Text("COOLDOWN")
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundColor(BantayTheme.statusFailed)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(BantayTheme.statusFailed.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
                 }
 
                 Spacer()
@@ -146,10 +156,12 @@ struct ProviderQuotaView: View {
                 HStack(spacing: 3) {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 7.5))
-                    Text(quota.resetHint)
+                    Text(quota.dynamicResetDescription())
                         .font(.system(size: 8, weight: .medium))
                 }
-                .foregroundColor(BantayTheme.textTertiary)
+                .foregroundColor(
+                    quota.resetsAt != nil ? BantayTheme.statusQuota : BantayTheme.textTertiary
+                )
 
                 Spacer()
 
@@ -197,6 +209,12 @@ struct ProviderQuotaView: View {
                 .font(.system(size: 9, weight: .semibold))
         } else if p.contains("windsurf") || p.contains("cascade") {
             Image(systemName: "wind")
+                .font(.system(size: 9, weight: .semibold))
+        } else if p.contains("openrouter") {
+            Image(systemName: "network")
+                .font(.system(size: 9, weight: .semibold))
+        } else if p.contains("ollama") {
+            Image(systemName: "server.rack")
                 .font(.system(size: 9, weight: .semibold))
         } else {
             Image(systemName: "gauge.with.needle")

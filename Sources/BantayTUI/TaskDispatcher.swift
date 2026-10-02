@@ -20,6 +20,68 @@ public final class TaskDispatcher: ObservableObject {
         return cost < safeBudget
     }
 
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _quarantineMap: [String: Date] = [:]
+
+    /// Quarantined provider IDs whose cooldown has not yet expired.
+    public static var activeQuarantinedProviders: Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = Date()
+        _quarantineMap = _quarantineMap.filter { $0.value > now }
+        return Set(_quarantineMap.keys)
+    }
+
+    /// Records rate limit or 429 event to temporarily quarantine provider.
+    public static func recordRateLimitCooldown(
+        provider: String,
+        cooldownSeconds: TimeInterval = 300
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        let canonical = canonicalAgentAlias(provider)
+        _quarantineMap[canonical] = Date().addingTimeInterval(cooldownSeconds)
+    }
+
+    // Quota-aware fallback chains per agent
+    private static let fallbackChains: [String: [String]] = [
+        "claude": ["codex", "antigravity", "cursor", "ollama"],
+        "codex": ["claude", "antigravity", "cursor", "ollama"],
+        "cursor": ["claude", "codex", "antigravity", "ollama"],
+        "antigravity": ["claude", "codex", "cursor", "ollama"],
+        "cloudcode": ["antigravity", "codex", "claude", "ollama"],
+        "windsurf": ["cursor", "claude", "codex", "antigravity"],
+    ]
+
+    /// Resolves target agent respecting quota saturation and quarantine cooldowns.
+    public static func resolveQuotaAwareAgent(
+        preferredAgent: String,
+        quotas: [ProviderQuota],
+        quarantinedProviders: Set<String> = []
+    ) -> (agent: String, reroutedFrom: String?) {
+        let canonical = canonicalAgentAlias(preferredAgent)
+        func isBlocked(_ name: String) -> Bool {
+            if quarantinedProviders.contains(name) { return true }
+            if let q = quotas.first(where: { $0.id == name }), q.isCritical || q.isCooldown {
+                return true
+            }
+            return false
+        }
+
+        if !isBlocked(canonical) {
+            return (agent: canonical, reroutedFrom: nil)
+        }
+
+        let candidates = fallbackChains[canonical] ?? ["claude", "codex", "antigravity"]
+        for candidate in candidates {
+            if !isBlocked(candidate) {
+                return (agent: candidate, reroutedFrom: canonical)
+            }
+        }
+
+        return (agent: canonical, reroutedFrom: nil)
+    }
+
     /// Dispatches a task to its assigned agent and returns the linked pane/target ID if successful.
     @discardableResult
     public func dispatch(task: BantayTask) -> String? {
@@ -35,10 +97,21 @@ public final class TaskDispatcher: ObservableObject {
             task.assignedAgent
             ?? AgentDetector.canonicalNameFromCommand(task.title)
             ?? "claude"
-        let agentName = Self.canonicalAgentAlias(rawAgent)
+        let preferredAgent = Self.canonicalAgentAlias(rawAgent)
         let promptText = task.title
 
         let activeAgents = AgentEventManager.shared.agents
+        let liveQuotas = QuotaAxiTracker.probeLiveQuotas(
+            activeProviders: activeAgents.map(\.source),
+            costUSD: AgentEventManager.shared.usage.costUSD,
+            budgetUSD: NotchHUDConfig.shared.dailyBudgetUSD
+        )
+        let resolution = Self.resolveQuotaAwareAgent(
+            preferredAgent: preferredAgent,
+            quotas: liveQuotas,
+            quarantinedProviders: Self.activeQuarantinedProviders
+        )
+        let agentName = resolution.agent
 
         // 1. If task already had a linked pane, verify that it is still alive in the active roster
         if let previousPane = task.linkedPaneID, !previousPane.isEmpty {
@@ -137,6 +210,10 @@ public final class TaskDispatcher: ObservableObject {
             return "herdr"
         case "kilo", "kilocode", "kilo-cli":
             return "kilo"
+        case "openrouter", "open-router":
+            return "openrouter"
+        case "ollama", "ollama-cli":
+            return "ollama"
         default:
             return lower
         }
