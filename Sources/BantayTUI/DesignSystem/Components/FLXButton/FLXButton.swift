@@ -95,7 +95,7 @@ extension FLXButton where Label == SwiftUI.Label<Text, Image> {
         action: @escaping () -> Void
     ) {
         self.init(role: role, variant: variant, action: action) {
-            SwiftUI.Label(titleResource, systemImage: systemImage)
+            SwiftUI.Label(String(localized: titleResource), systemImage: systemImage)
         }
     }
 
