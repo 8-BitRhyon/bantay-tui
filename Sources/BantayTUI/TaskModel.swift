@@ -28,7 +28,7 @@ public enum TaskPriority: String, Codable, CaseIterable, Comparable, Sendable {
     }
 }
 
-/// Categorized section grouping matching the Barrie macOS app layout.
+/// Categorized section grouping.
 public enum TaskCategory: String, Codable, CaseIterable, Sendable {
     case overdue = "OVERDUE"
     case today = "TODAY"
@@ -45,6 +45,16 @@ public enum TaskCategory: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Execution lifecycle state for agent-dispatched tasks.
+public enum TaskExecutionState: String, Codable, CaseIterable, Sendable {
+    case pending = "pending"
+    case dispatched = "dispatched"
+    case working = "working"
+    case blocked = "blocked"
+    case completed = "completed"
+    case failed = "failed"
+}
+
 /// A human or agent task item managed by Bantay-TUI.
 public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
@@ -53,9 +63,13 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
     public var priority: TaskPriority
     public var tags: [String]
     public var assignedAgent: String?
+    public var executionState: TaskExecutionState
+    public var linkedPaneID: String?
+    public var dispatchedAt: Date?
     public var isCompleted: Bool
     public var createdAt: Date
     public var completedAt: Date?
+    public var externalID: String?
 
     public init(
         id: UUID = UUID(),
@@ -64,9 +78,13 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         priority: TaskPriority = .medium,
         tags: [String] = [],
         assignedAgent: String? = nil,
+        executionState: TaskExecutionState = .pending,
+        linkedPaneID: String? = nil,
+        dispatchedAt: Date? = nil,
         isCompleted: Bool = false,
         createdAt: Date = Date(),
-        completedAt: Date? = nil
+        completedAt: Date? = nil,
+        externalID: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -74,9 +92,13 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         self.priority = priority
         self.tags = tags
         self.assignedAgent = assignedAgent
+        self.executionState = isCompleted ? .completed : executionState
+        self.linkedPaneID = linkedPaneID
+        self.dispatchedAt = dispatchedAt
         self.isCompleted = isCompleted
         self.createdAt = createdAt
         self.completedAt = completedAt
+        self.externalID = externalID
     }
 
     /// Computes category dynamically based on completion and dueDate relative to today.
@@ -85,7 +107,7 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         guard let dueDate else { return .today }
 
         let calendar = Calendar.current
-        if calendar.isDateInToday(dueDate) {
+        if calendar.isDate(dueDate, inSameDayAs: now) {
             return .today
         } else if dueDate < calendar.startOfDay(for: now) {
             return .overdue

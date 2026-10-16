@@ -27,11 +27,6 @@ public enum ChoiceExtractor {
     }()
 
     /// Extracts numbered or radio-style choice options from raw text or log lines.
-    /// Supports patterns like:
-    /// - "1. Vintage star chart"
-    /// - "▸ 1. Vintage star chart"
-    /// - "( ) Painted brush stars"
-    /// - "[1] Cartoon/illustration stars"
     public static func extractChoices(from text: String) -> [ChoiceOption] {
         let lines = text.components(separatedBy: .newlines)
         return extractChoices(fromLines: lines)
@@ -54,7 +49,7 @@ public enum ChoiceExtractor {
 
             // Pattern 1: Digits followed by dot, paren, or colon (e.g. "1. Option", "1) Option")
             if let match = matchNumbered(cleanLine) {
-                if match.number < lastNumber {
+                if match.number <= lastNumber {
                     // A new prompt started: reset so we only ever surface the
                     // most recent prompt's contiguous options.
                     options.removeAll()
@@ -67,7 +62,7 @@ public enum ChoiceExtractor {
 
             // Pattern 2: Bracketed number (e.g. "[1] Option")
             if let match = matchBracketed(cleanLine) {
-                if match.number < lastNumber {
+                if match.number <= lastNumber {
                     options.removeAll()
                 }
                 options.append(

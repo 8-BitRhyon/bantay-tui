@@ -1,16 +1,6 @@
 import Foundation
 
-/// Pure focus routing (plan 017 WI-3): maps a composed `paneId` to (a) the
-/// multiplexer command that selects the pane and (b) the macOS terminal
-/// activation strategy. Everything here is deterministic and harness-safe —
-/// no process is ever spawned from this type; the caller (an adapter or the
-/// island's focus button) executes the returned command and terminal action.
-///
-/// Pane ids drift: tmux `%N` regenerates on server restart and zellij pane
-/// ids are session-scoped, so the composed id can stop resolving after the
-/// mux restarts. The drift fallback re-keys by `tty` (strongest signal)
-/// then `pid`, guarded against pid reuse (a pid that now belongs to a
-/// different pane loses to a matching tty).
+/// Focus routing: maps composed pane identifiers to multiplexer commands and terminal focus.
 enum PaneFocusRouter {
     /// What a focus gesture resolves to. `standalone` means no multiplexer
     /// is involved (plain terminal app); `none` means nothing to focus.
@@ -31,11 +21,7 @@ enum PaneFocusRouter {
         case none
     }
 
-    /// Parses a composed `paneId` into a `FocusTarget` for the given mux
-    /// kind. tmux ids are `session:window.pane`, zellij ids are
-    /// `session|pane` (the composition `ZellijAdapter.splitPaneId` already
-    /// owns), and herdr ids are raw pane ids that pass through unchanged.
-    /// A malformed id for the kind resolves to `.none`.
+    /// Parses a composed multiplexer pane identifier into a structured FocusTarget.
     static func resolveTarget(paneId: String, kind: PlexerKind) -> FocusTarget {
         switch kind {
         case .tmux:
@@ -49,44 +35,28 @@ enum PaneFocusRouter {
         }
     }
 
-    /// Drift-aware resolution for a focus gesture. A nil `kind` means no mux
-    /// is detected → `.standalone` (activate the terminal app only). herdr
-    /// ids are stable raw ids and pass through unchanged. tmux/zellij
-    /// compose ids that regenerate on mux restart: when the parsed id no
-    /// longer exists in the current pane list, re-key via tty/pid.
+    /// Resolves target multiplexer and pane taking drift into account.
     static func resolveForFocus(
         paneId: String, kind: PlexerKind?, tty: String?, pid: Int?, panes: [PaneInfo]
     ) -> FocusTarget {
         guard let kind else { return .standalone }
-        switch kind {
-        case .herdr:
-            return resolveTarget(paneId: paneId, kind: kind)
-        case .tmux, .zellij:
-            let direct = resolveTarget(paneId: paneId, kind: kind)
-            guard case .none = direct else {
-                // The composed id parses; without a pane list there is
-                // nothing to drift against, so the direct target stands.
-                guard !panes.isEmpty, !panes.contains(where: { $0.id == paneId }) else {
-                    return direct
-                }
-                guard
-                    let rekeyed = resolveDrifted(
-                        stalePaneId: paneId, tty: tty, pid: pid, panes: panes)
-                else {
-                    return .none
-                }
-                return resolveTarget(paneId: rekeyed, kind: kind)
-            }
+        if kind == .herdr { return resolveTarget(paneId: paneId, kind: kind) }
+
+        let direct = resolveTarget(paneId: paneId, kind: kind)
+        guard direct != .none else { return .none }
+        guard !panes.isEmpty, !panes.contains(where: { $0.id == paneId }) else {
+            return direct
+        }
+        guard
+            let rekeyed = resolveDrifted(
+                stalePaneId: paneId, tty: tty, pid: pid, panes: panes)
+        else {
             return .none
         }
+        return resolveTarget(paneId: rekeyed, kind: kind)
     }
 
-    /// Drift re-key: given a stale pane id plus the pane's last-known tty
-    /// and pid, and the current pane list, resolve the id the pane now
-    /// lives under. A live id wins verbatim; then the tty match (strongest
-    /// signal — a tty is not reused while a pane holds it); then the pid
-    /// match. A pid that maps to a *different* pane than the stale id is
-    /// only accepted when no tty evidence exists (pid reuse guard).
+    /// Re-resolves a pane identifier that may have drifted across mux restarts using tty or pid.
     static func resolveDrifted(
         stalePaneId: String, tty: String?, pid: Int?, panes: [PaneInfo]
     ) -> String? {
@@ -113,12 +83,7 @@ enum PaneFocusRouter {
         return panes.first { $0.pid == pid }?.id
     }
 
-    /// The fully executable command that selects the pane inside its mux,
-    /// binary name included (argv[0]) so the caller can launch it as-is.
-    /// tmux: `select-pane -t <s:w.p>` joined with `switch-client -t <s>`
-    /// (tmux's `;` command separator) so the client follows the session.
-    /// zellij: the 0.40+ `focus-pane-id` verb scoped to the session.
-    /// herdr: the CLI `agent focus` verb. standalone/none → nil.
+    /// Generates the CLI command to focus the targeted multiplexer pane.
     static func focusCommand(target: FocusTarget) -> [String]? {
         switch target {
         case .tmux(let session, let window, let pane):

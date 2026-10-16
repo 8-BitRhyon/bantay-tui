@@ -1,8 +1,7 @@
 import Foundation
 import Network
 
-/// A parsed pane record from the herdr push event stream, carrying the same
-/// fields `agent.list` returns so the roster can be rebuilt from events alone.
+/// Parsed pane record from the herdr push stream.
 struct HerdrStreamPane: Equatable, Sendable {
     let paneId: String
     let agent: String?
@@ -13,14 +12,7 @@ struct HerdrStreamPane: Equatable, Sendable {
     let focused: Bool
 }
 
-/// Persistent push-event subscription to the herdr socket. Replaces the
-/// 2-second `agent.list` poll for status transitions: `pane.updated` events
-/// carry the full pane record (agent, status, cwd, title), so the roster can
-/// stay live with sub-millisecond latency and zero polling processes.
-///
-/// Lifecycle: `start` opens the socket, sends `events.subscribe`, and drains
-/// NDJSON lines forever. On transport failure it backs off and reconnects.
-/// `stop` cancels everything. Parsed events are delivered on the main actor.
+/// Push-event subscription to the herdr Unix socket.
 @MainActor
 final class HerdrEventStream {
     enum StreamEvent {
@@ -56,7 +48,7 @@ final class HerdrEventStream {
                 guard let self else { return }
                 await self.runConnection()
                 if Task.isCancelled || self.stopped { break }
-                // Back off between reconnects: 0.5s → 1s → 2s → 4s (cap).
+                // Back off between reconnects: 0.5s → 4s cap.
                 let delay = min(pow(2.0, Double(self.reconnectAttempt)), 4.0)
                 try? await Task.sleep(for: .seconds(delay))
             }
@@ -77,9 +69,6 @@ final class HerdrEventStream {
         let path = HerdrSocketProtocol.socketPath(
             env: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
         guard FileManager.default.fileExists(atPath: path) else {
-            // herdr is absent: back off so a herdr-less launch doesn't spin a
-            // 1s probe forever. The reconnect backoff in `start` uses this
-            // counter, so advance it here (0.5s → 1s → 2s → 4s cap).
             reconnectAttempt += 1
             return
         }
@@ -89,10 +78,18 @@ final class HerdrEventStream {
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let settle = SendableFlag()
-            // Assign the handler BEFORE start so the `.ready` callback is not
-            // missed (NWConnection fires state updates once started).
-            connection.stateUpdateHandler = { state in
+            let onDisconnect: @Sendable () -> Void = {
+                if settle.markOnce() {
+                    continuation.resume()
+                }
+            }
+
+            connection.stateUpdateHandler = { [weak self, weak connection] state in
                 MainActor.assumeIsolated {
+                    guard let self, let connection else {
+                        onDisconnect()
+                        return
+                    }
                     switch state {
                     case .ready:
                         let sub = HerdrSocketProtocol.requestLine(
@@ -104,13 +101,12 @@ final class HerdrEventStream {
                             completion: .contentProcessed { _ in })
                         self.isSubscribed = true
                         self.reconnectAttempt = 0
-                        self.receiveLoop(connection)
-                        if settle.markOnce() { continuation.resume() }
+                        self.receiveLoop(connection, onDisconnect: onDisconnect)
                     case .failed, .cancelled:
                         self.connection = nil
                         self.isSubscribed = false
                         self.onEvent?(.disconnected)
-                        if settle.markOnce() { continuation.resume() }
+                        onDisconnect()
                     default:
                         break
                     }
@@ -120,10 +116,15 @@ final class HerdrEventStream {
         }
     }
 
-    private func receiveLoop(_ connection: NWConnection) {
+    private func receiveLoop(
+        _ connection: NWConnection, onDisconnect: @escaping @Sendable () -> Void
+    ) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) {
             [weak self] data, _, isComplete, error in
-            guard let self else { return }
+            guard let self else {
+                onDisconnect()
+                return
+            }
             MainActor.assumeIsolated {
                 if let data, !data.isEmpty {
                     self.buffer.append(data)
@@ -134,9 +135,10 @@ final class HerdrEventStream {
                     self.isSubscribed = false
                     self.reconnectAttempt += 1
                     self.onEvent?(.disconnected)
+                    onDisconnect()
                     return
                 }
-                self.receiveLoop(connection)
+                self.receiveLoop(connection, onDisconnect: onDisconnect)
             }
         }
     }
@@ -201,8 +203,7 @@ extension HerdrStreamPane {
     }
 }
 
-/// Thread-safe once-only flag for settling a CheckedContinuation exactly one
-/// time from a `@Sendable` state-update handler.
+/// Thread-safe once-only flag for settling a CheckedContinuation.
 private final class SendableFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var fired = false

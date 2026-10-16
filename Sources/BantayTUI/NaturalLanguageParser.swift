@@ -1,18 +1,6 @@
 import Foundation
 
-/// Barrie-style natural language task parser — pure, deterministic, and
-/// locale-agnostic, so it scales to any user without per-user state.
-///
-/// Handles (English):
-///   - Relative dates: today / tonight / tomorrow / day after tomorrow / in N
-///     days / next week / EOD / end of day / EOM
-///   - Weekday names: monday…sunday (this week, or next week when past)
-///   - Absolute dates: mar 5 / 5/20 / 2026-05-20 / may 20th
-///   - Times: at 5pm / at 5:30 / by 5 / 17:00
-///   - Priority: !! (high), ! (medium)
-///   - Tags: @work / @home (non-agent @tokens)
-///   - Agents: @claude @codex @kilo @herdr etc.
-///   - Everything parsed is REMOVED from the title; the remainder is the task.
+/// Natural language task parser extracting clean title, tags, priority, agent, and due date.
 public enum NaturalLanguageParser {
     public struct Parsed: Equatable, Sendable {
         public var cleanTitle: String
@@ -35,7 +23,7 @@ public enum NaturalLanguageParser {
 
     public static let knownAgents: Set<String> = [
         "claude", "codex", "herdr", "kilo", "freebuff", "opencode", "cursor", "aider",
-        "windsurf", "gemini",
+        "windsurf", "gemini", "pi", "antigravity",
     ]
 
     /// Weekday names → Calendar weekday (1 = Sunday, 2 = Monday…).
@@ -73,8 +61,9 @@ public enum NaturalLanguageParser {
             // @tokens → agents or tags.
             if raw.hasPrefix("@") && raw.count > 1 {
                 let tag = String(raw.dropFirst()).lowercased()
-                if knownAgents.contains(tag) {
-                    assignedAgent = tag
+                let canonical = TaskDispatcher.canonicalAgentAlias(tag)
+                if knownAgents.contains(tag) || knownAgents.contains(canonical) {
+                    assignedAgent = canonical
                 } else {
                     tags.append(tag)
                 }
@@ -82,8 +71,15 @@ public enum NaturalLanguageParser {
                 continue
             }
 
-            // Times (at/by 5pm, 17:00, at 5:30) — before dates so "at 5pm"
-            // isn't swallowed by the date introducer.
+            // #tokens → tags.
+            if raw.hasPrefix("#") && raw.count > 1 {
+                let tag = String(raw.dropFirst()).lowercased()
+                tags.append(tag)
+                i += 1
+                continue
+            }
+
+            // Parse times before dates.
             if let time = parseTime(tokens: tokens, at: &i, calendar: calendar) {
                 dueComponents.time = time
                 continue
@@ -101,8 +97,7 @@ public enum NaturalLanguageParser {
             i += 1
         }
 
-        // Combine date + time into one Date. A time without a date phrase
-        // defaults to today; a date without a time stays at start of day.
+        // Combine date + time components.
         var dueDate = dueComponents.date
         if dueDate == nil, dueComponents.time != nil {
             dueDate = calendar.startOfDay(for: now)
@@ -127,9 +122,7 @@ public enum NaturalLanguageParser {
         tokens: [String], at index: inout Int, now: Date, calendar: Calendar
     ) -> Date? {
         let startOfDay = calendar.startOfDay(for: now)
-        // "before" / "by" / "at" / "on" / "until" introduce a date phrase.
-        // Only consume the introducer if the NEXT token is actually a date
-        // token; otherwise leave it in the title (e.g. "at" in "look at this").
+        // Consume introducer only when followed by a date token.
         var idx = index
         var token = tokens[idx].lowercased()
         if ["before", "by", "at", "on", "until", "till"].contains(token),
@@ -190,20 +183,25 @@ public enum NaturalLanguageParser {
             let nextMonth = calendar.date(byAdding: .month, value: 1, to: startOfDay)!
             let comps = calendar.dateComponents([.year, .month], from: nextMonth)
             return calendar.date(from: comps)!
-        case "day", "days":
-            // "in 3 days" → prior token was a number.
-            if idx >= 1, let n = Int(tokens[idx - 1]) {
-                index = idx + 1
-                return calendar.date(byAdding: .day, value: n, to: startOfDay)
-            }
-            return nil
-        case "week":
-            if idx >= 1, tokens[idx - 1] == "next" {
-                index = idx + 1
-                return calendar.date(byAdding: .day, value: 7, to: startOfDay)
-            }
-            return nil
         case "next":
+            // Handle 'next week/month/weekday' atomically so 'next' does not leak.
+            if idx + 1 < tokens.count {
+                let nextToken = tokens[idx + 1].lowercased()
+                if nextToken == "week" || nextToken == "weeks" {
+                    index = idx + 2
+                    return calendar.date(byAdding: .day, value: 7, to: startOfDay)
+                }
+                if nextToken == "month" || nextToken == "months" {
+                    index = idx + 2
+                    return calendar.date(byAdding: .month, value: 1, to: startOfDay)
+                }
+                if let weekday = weekdayNames[nextToken] {
+                    var daysAhead = weekday - calendar.component(.weekday, from: startOfDay)
+                    if daysAhead <= 0 { daysAhead += 7 }
+                    index = idx + 2
+                    return calendar.date(byAdding: .day, value: daysAhead, to: startOfDay)
+                }
+            }
             return nil
         default:
             break
@@ -217,12 +215,21 @@ public enum NaturalLanguageParser {
             return calendar.date(byAdding: .day, value: daysAhead, to: startOfDay)
         }
 
-        // "in N days" where "in" is the current token.
+        // "in N days/weeks" or bare "N days/weeks"
         if token == "in", idx + 1 < tokens.count, let n = Int(tokens[idx + 1]),
-            idx + 2 < tokens.count, ["day", "days", "week", "weeks"].contains(tokens[idx + 2])
+            idx + 2 < tokens.count,
+            ["day", "days", "week", "weeks"].contains(tokens[idx + 2].lowercased())
         {
-            let isWeeks = tokens[idx + 2].hasPrefix("week")
+            let isWeeks = tokens[idx + 2].lowercased().hasPrefix("week")
             index = idx + 3
+            let value = isWeeks ? n * 7 : n
+            return calendar.date(byAdding: .day, value: value, to: startOfDay)
+        }
+        if let n = Int(token), idx + 1 < tokens.count,
+            ["day", "days", "week", "weeks"].contains(tokens[idx + 1].lowercased())
+        {
+            let isWeeks = tokens[idx + 1].lowercased().hasPrefix("week")
+            index = idx + 2
             let value = isWeeks ? n * 7 : n
             return calendar.date(byAdding: .day, value: value, to: startOfDay)
         }
@@ -230,8 +237,7 @@ public enum NaturalLanguageParser {
         return nil
     }
 
-    /// Consume a multi-token phrase (e.g. ["end","of","day"]) if it matches,
-    /// returning the index AFTER it; otherwise consume just the current token.
+    /// Consume a multi-token phrase if matching, returning next index.
     private static func consumePhrase(
         _ tokens: [String], from idx: Int, phrase: [String]
     ) -> Int {

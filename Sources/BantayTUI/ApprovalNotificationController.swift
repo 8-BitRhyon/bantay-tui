@@ -1,16 +1,7 @@
 import Foundation
 import UserNotifications
 
-/// Notification Center approval surface (Phase A A4): when an agent blocks,
-/// post a notification with Approve/Deny (or numbered choices) actions so an
-/// approval can be answered without touching the island or the terminal.
-///
-/// One shared instance. Registration is deferred to the first post because
-/// UNUserNotificationCenter requires a bundle proxy, which a bare binary
-/// launched from Application Support doesn't have at startup — registering
-/// too early crashes. The actions map to the same
-/// `AgentEventManager.performAction(paneId:)` path the inline roster controls
-/// use.
+/// Posts interactive approval notifications via UNUserNotificationCenter.
 @MainActor
 final class ApprovalNotificationController: NSObject,
     @preconcurrency UNUserNotificationCenterDelegate
@@ -19,9 +10,16 @@ final class ApprovalNotificationController: NSObject,
 
     static let categoryID = "BANTAY_APPROVAL"
     static let choiceCategoryID = "BANTAY_APPROVAL_CHOICE"
-    private static let approveActionID = "BANTAY_APPROVE"
-    private static let denyActionID = "BANTAY_DENY"
-    private static let choiceActionIDPrefix = "BANTAY_CHOICE_"
+    static let completedCategoryID = "BANTAY_COMPLETED"
+    static let failedCategoryID = "BANTAY_FAILED"
+
+    static let approveActionID = "BANTAY_APPROVE"
+    static let denyActionID = "BANTAY_DENY"
+    static let choiceActionIDPrefix = "BANTAY_CHOICE_"
+    static let viewSessionActionID = "BANTAY_VIEW_SESSION"
+    static let focusActionID = "BANTAY_FOCUS"
+    static let dismissActionID = "BANTAY_DISMISS"
+
     /// Fixed number of numbered choice actions registered up front so action
     /// sets never go stale across posts (the category is global).
     private static let maxChoiceActions = 4
@@ -33,12 +31,8 @@ final class ApprovalNotificationController: NSObject,
 
     private var installed = false
 
-    /// Whether this process can talk to UNUserNotificationCenter. A bare
-    /// binary launched from Application Support (the installed layout) does not
-    /// have an .app bundle proxy registered with macOS LaunchServices. Any call
-    /// to UNUserNotificationCenter.current() in a bare binary crashes the process
-    /// with `NSInternalInconsistencyException: bundleProxyForCurrentProcess is nil`.
-    static var hasBundleProxy: Bool {
+    /// Checks if the current process is running inside an application bundle.
+    nonisolated static var hasBundleProxy: Bool {
         guard let id = Bundle.main.bundleIdentifier, !id.isEmpty else { return false }
         return Bundle.main.bundleURL.pathExtension.lowercased() == "app"
     }
@@ -48,25 +42,33 @@ final class ApprovalNotificationController: NSObject,
     }
 
     /// Register the approval categories + install the delegate. Idempotent.
-    /// TWO categories: plain yes/no (Approve/Deny only) and choice (numbered
-    /// buttons), so a yes/no prompt never shows misleading numbered buttons.
     func install() {
         guard !installed, hasBundleProxy else { return }
         installed = true
         let approve = UNNotificationAction(
             identifier: Self.approveActionID, title: "Approve",
-            options: [.authenticationRequired, .foreground])
+            options: [.authenticationRequired])
         let deny = UNNotificationAction(
             identifier: Self.denyActionID, title: "Deny",
-            options: [.destructive, .authenticationRequired, .foreground])
+            options: [.destructive, .authenticationRequired])
         var choiceActions = [approve, deny]
         for index in 0..<Self.maxChoiceActions {
             choiceActions.append(
                 UNNotificationAction(
                     identifier: Self.choiceActionIDPrefix + String(index),
                     title: "\(index + 1)…",
-                    options: [.authenticationRequired, .foreground]))
+                    options: [.authenticationRequired]))
         }
+        let viewSession = UNNotificationAction(
+            identifier: Self.viewSessionActionID, title: "View in Browser",
+            options: [.foreground])
+        let dismiss = UNNotificationAction(
+            identifier: Self.dismissActionID, title: "Dismiss",
+            options: [])
+        let focus = UNNotificationAction(
+            identifier: Self.focusActionID, title: "Focus Agent",
+            options: [.foreground])
+
         UNUserNotificationCenter.current().setNotificationCategories([
             UNNotificationCategory(
                 identifier: Self.categoryID, actions: [approve, deny],
@@ -74,15 +76,23 @@ final class ApprovalNotificationController: NSObject,
             UNNotificationCategory(
                 identifier: Self.choiceCategoryID, actions: choiceActions,
                 intentIdentifiers: [], options: []),
+            UNNotificationCategory(
+                identifier: Self.completedCategoryID, actions: [viewSession, dismiss],
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
+                identifier: Self.failedCategoryID, actions: [focus, dismiss],
+                intentIdentifiers: [], options: []),
         ])
         UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) {
+            _, _ in
+        }
     }
 
-    /// Post an approval notification for a blocked event. The notification
-    /// identifier is the pane id so re-posts replace the old one; the choice
-    /// titles are carried in the body so the numbered buttons have context.
+    /// Post an approval notification for a blocked event.
     func postApproval(
-        source: String, paneId: String?, title: String?, choices: [String]?
+        source: String, paneId: String?, title: String?, choices: [String]?,
+        cwd: String? = nil, sessionPath: String? = nil
     ) {
         guard let paneId, hasBundleProxy else { return }
         install()
@@ -90,16 +100,91 @@ final class ApprovalNotificationController: NSObject,
         content.title = "\(source) needs approval"
         content.body = approvalBody(title: title, choices: choices)
         content.sound = .default
-        // Non-empty choices → the choice-action category; otherwise yes/no.
         let hasChoices = choices?.isEmpty == false
         content.categoryIdentifier = hasChoices ? Self.choiceCategoryID : Self.categoryID
-        content.userInfo = ["paneId": paneId]
+        var info: [String: String] = ["paneId": paneId, "source": source]
+        if let cwd { info["cwd"] = cwd }
+        if let sessionPath { info["sessionPath"] = sessionPath }
+        content.userInfo = info
 
         let request = UNNotificationRequest(
             identifier: paneId, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
                 NSLog("approval-notify: %@ failed: %@", paneId, String(describing: error))
+            }
+        }
+    }
+
+    /// Post a completion notification with actionable "View in Browser" button.
+    func postCompletion(
+        source: String, paneId: String?, title: String?, cwd: String? = nil,
+        sessionPath: String? = nil
+    ) {
+        guard hasBundleProxy else { return }
+        install()
+        let content = UNMutableNotificationContent()
+        content.title = "\(source) finished"
+        content.body = title ?? "Agent completed work."
+        content.sound = .default
+        content.categoryIdentifier = Self.completedCategoryID
+        var info: [String: String] = ["source": source]
+        if let paneId { info["paneId"] = paneId }
+        if let cwd { info["cwd"] = cwd }
+        if let sessionPath { info["sessionPath"] = sessionPath }
+        content.userInfo = info
+
+        let identifier = paneId ?? ("bantay-done-" + UUID().uuidString)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("approval-notify: completion failed: %@", String(describing: error))
+            }
+        }
+    }
+
+    /// Post a failure notification with actionable "Focus Agent" button.
+    func postFailure(
+        source: String, paneId: String?, title: String?, cwd: String? = nil
+    ) {
+        guard hasBundleProxy else { return }
+        install()
+        let content = UNMutableNotificationContent()
+        content.title = "\(source) failed"
+        content.body = title ?? "Agent encountered an error."
+        content.sound = .default
+        content.categoryIdentifier = Self.failedCategoryID
+        var info: [String: String] = ["source": source]
+        if let paneId { info["paneId"] = paneId }
+        if let cwd { info["cwd"] = cwd }
+        content.userInfo = info
+
+        let identifier = paneId ?? ("bantay-fail-" + UUID().uuidString)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("approval-notify: failure failed: %@", String(describing: error))
+            }
+        }
+    }
+
+    /// Post a system notification alert (e.g. budget exceeded or high burn rate).
+    func postAlert(title: String, subtitle: String, soundName: String?) {
+        guard hasBundleProxy else { return }
+        install()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = subtitle
+        if let soundName, !soundName.isEmpty {
+            content.sound = UNNotificationSound(named: UNNotificationSoundName(soundName))
+        } else {
+            content.sound = .default
+        }
+        let identifier = "bantay-alert-" + UUID().uuidString
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("approval-notify: alert failed: %@", String(describing: error))
             }
         }
     }
@@ -116,7 +201,7 @@ final class ApprovalNotificationController: NSObject,
     }
 
     /// Human body: the prompt plus the numbered choices (or a hint).
-    private func approvalBody(title: String?, choices: [String]?) -> String {
+    func approvalBody(title: String?, choices: [String]?) -> String {
         var body = title ?? "Approve or deny the request."
         if let choices, !choices.isEmpty {
             let shown = choices.prefix(Self.maxChoiceActions)
@@ -154,29 +239,51 @@ final class ApprovalNotificationController: NSObject,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        // Hop (not assumeIsolated): the SDK doesn't guarantee main-thread
-        // delivery, and assumeIsolated would trap the process if it ever
-        // arrives off-main. Always complete — never stall the delegate.
         Task { @MainActor in
             defer { completionHandler() }
-            guard
-                let paneId = response.notification.request.content.userInfo["paneId"]
-                    as? String
-            else { return }
-            let manager = AgentEventManager.shared
-            // Never double-fire: if this pane's approval is already being
-            // resolved (island / hotkey / another tap), drop the action.
-            guard !manager.isResolving(paneId: paneId) else { return }
+            let userInfo = response.notification.request.content.userInfo
+            let paneId = userInfo["paneId"] as? String
+            let source = userInfo["source"] as? String ?? "Agent"
+            let cwd = userInfo["cwd"] as? String
+            let sessionPath = userInfo["sessionPath"] as? String
+
             switch response.actionIdentifier {
             case Self.approveActionID:
+                guard let paneId else { return }
+                let manager = AgentEventManager.shared
+                guard !manager.isResolving(paneId: paneId) else { return }
                 manager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
             case Self.denyActionID:
+                guard let paneId else { return }
+                let manager = AgentEventManager.shared
+                guard !manager.isResolving(paneId: paneId) else { return }
                 manager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
-            case UNNotificationDefaultActionIdentifier:
-                // Tapping the body = focus the pane, not approve.
-                manager.performAction(paneId: paneId) { $0.focusPane(paneId: paneId) }
+            case Self.viewSessionActionID:
+                let slug = cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? source
+                RichSessionViewer.openInBrowser(
+                    agentName: source,
+                    projectSlug: slug,
+                    cwd: cwd,
+                    isWorking: false,
+                    sessionPath: sessionPath
+                )
+            case Self.focusActionID, UNNotificationDefaultActionIdentifier:
+                if let paneId, paneId.hasPrefix("standalone:") {
+                    let agent = AgentEventManager.shared.agents.first { $0.paneId == paneId }
+                    TerminalFocusser.focusStandalone(source: source, cwd: cwd ?? agent?.cwd)
+                } else if let paneId {
+                    let manager = AgentEventManager.shared
+                    manager.performAction(paneId: paneId) { $0.focusPane(paneId: paneId) }
+                } else {
+                    TerminalFocusser.focusStandalone(source: source, cwd: cwd)
+                }
+            case Self.dismissActionID:
+                break
             default:
                 if response.actionIdentifier.hasPrefix(Self.choiceActionIDPrefix) {
+                    guard let paneId else { return }
+                    let manager = AgentEventManager.shared
+                    guard !manager.isResolving(paneId: paneId) else { return }
                     let indexString = response.actionIdentifier.dropFirst(
                         Self.choiceActionIDPrefix.count)
                     guard let index = Int(indexString) else { return }

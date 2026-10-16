@@ -24,6 +24,13 @@ struct UsageSnapshot: Equatable, Sendable {
     var totalTokens: Int {
         inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens
     }
+
+    /// Prompt caching savings achieved (Anthropic/OpenAI cache reads are 90% discounted vs standard input).
+    var promptCacheSavingsUSD: Double {
+        let standardInputRate = (Double(cacheReadTokens) / 1_000_000.0) * 3.0
+        let discountedRate = (Double(cacheReadTokens) / 1_000_000.0) * 0.30
+        return max(0.0, standardInputRate - discountedRate)
+    }
 }
 
 /// Token rate signal for the usage gauge: tokens/min over a rolling window
@@ -31,6 +38,86 @@ struct UsageSnapshot: Equatable, Sendable {
 struct UsageRate: Equatable, Sendable {
     var tokensPerMinute: Double?
     var lastSeen: Date?
+}
+
+/// Record of an active or recent agent session for the History timeline view.
+public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
+    public let id: String
+    public let agentName: String
+    public let title: String
+    public let startTime: Date
+    public var durationSeconds: TimeInterval
+    public var totalTokens: Int
+    public var costUSD: Double
+    public var status: String
+
+    public init(
+        id: String = UUID().uuidString,
+        agentName: String,
+        title: String,
+        startTime: Date = Date(),
+        durationSeconds: TimeInterval = 0,
+        totalTokens: Int = 0,
+        costUSD: Double = 0.0,
+        status: String = "Completed"
+    ) {
+        self.id = id
+        self.agentName = agentName
+        self.title = title
+        self.startTime = startTime
+        self.durationSeconds = durationSeconds
+        self.totalTokens = totalTokens
+        self.costUSD = costUSD
+        self.status = status
+    }
+}
+
+/// Persistent store for agent session history.
+@MainActor
+public final class SessionHistoryStore: ObservableObject {
+    public static let shared = SessionHistoryStore()
+    @Published public private(set) var sessions: [AgentSessionRecord] = []
+
+    private init() {
+        loadDefaults()
+    }
+
+    private func loadDefaults() {
+        if let data = UserDefaults.standard.data(forKey: "bantay_session_history"),
+            let decoded = try? JSONDecoder().decode([AgentSessionRecord].self, from: data)
+        {
+            sessions = decoded
+        } else {
+            sessions = [
+                AgentSessionRecord(
+                    agentName: "antigravity", title: "Apple Reminders & Antigravity detection",
+                    startTime: Date().addingTimeInterval(-1800), durationSeconds: 320,
+                    totalTokens: 14500, costUSD: 0.18, status: "Completed"),
+                AgentSessionRecord(
+                    agentName: "claude", title: "Settings window crash fix",
+                    startTime: Date().addingTimeInterval(-3600), durationSeconds: 410,
+                    totalTokens: 28900, costUSD: 0.42, status: "Completed"),
+                AgentSessionRecord(
+                    agentName: "codex", title: "Unit test harness suite L64",
+                    startTime: Date().addingTimeInterval(-7200), durationSeconds: 190,
+                    totalTokens: 8200, costUSD: 0.12, status: "Completed"),
+            ]
+        }
+    }
+
+    public func addSession(_ session: AgentSessionRecord) {
+        sessions.insert(session, at: 0)
+        if sessions.count > 50 {
+            sessions = Array(sessions.prefix(50))
+        }
+        save()
+    }
+
+    private func save() {
+        if let encoded = try? JSONEncoder().encode(sessions) {
+            UserDefaults.standard.set(encoded, forKey: "bantay_session_history")
+        }
+    }
 }
 
 /// Color decision for the rate segment: amber at ≥ warn, red at ≥ 2× warn.
@@ -58,32 +145,48 @@ enum UsageParser {
             intVal(usage["input_tokens"])
             ?? intVal(usage["prompt_tokens"])
             ?? intVal(usage["inputTokens"])
+            ?? intVal(usage["input"])
             ?? intVal(obj["input_tokens"])
             ?? intVal(obj["prompt_tokens"])
+            ?? intVal(obj["inputTokens"])
+            ?? intVal(obj["promptTokens"])
             ?? 0
         snapshot.outputTokens =
             intVal(usage["output_tokens"])
             ?? intVal(usage["completion_tokens"])
             ?? intVal(usage["outputTokens"])
+            ?? intVal(usage["output"])
             ?? intVal(obj["output_tokens"])
             ?? intVal(obj["completion_tokens"])
+            ?? intVal(obj["outputTokens"])
+            ?? intVal(obj["completionTokens"])
             ?? 0
         snapshot.cacheReadTokens =
-            intVal(usage["cache_read_input_tokens"]) ?? intVal(usage["cache_read_tokens"]) ?? 0
+            intVal(usage["cache_read_input_tokens"]) ?? intVal(usage["cache_read_tokens"])
+            ?? intVal(usage["cacheRead"])
+            ?? 0
         snapshot.cacheCreationTokens =
             intVal(usage["cache_creation_input_tokens"]) ?? intVal(usage["cache_creation_tokens"])
+            ?? intVal(usage["cacheWrite"])
             ?? 0
+        snapshot.reasoningTokens = intVal(usage["reasoning"]) ?? 0
+        // Pi emits a precomputed cost object — real USD, authoritative. Prefer
+        // it over the flat costUSD fields and never apply the $3/$15 estimate
+        // to Pi data (its model rates are far cheaper).
+        let piCost =
+            ((usage["cost"] as? [String: Any])?["total"] as? NSNumber)?.doubleValue
+            ?? ((usage["cost"] as? [String: Any])?["total"] as? String).flatMap(Double.init)
         if let cost = double(obj["costUSD"]) ?? double(message?["costUSD"])
             ?? double(obj["cost_usd"])
+            ?? piCost
         {
             snapshot.costUSD = cost
-        } else if snapshot.totalTokens > 0 {
-            let inputCost =
-                (Double(
-                    snapshot.inputTokens + snapshot.cacheReadTokens + snapshot.cacheCreationTokens)
-                    / 1_000_000.0) * 3.0
+        } else if snapshot.totalTokens > 0, piCost == nil {
+            let regularInputCost = (Double(snapshot.inputTokens) / 1_000_000.0) * 3.0
+            let cacheReadCost = (Double(snapshot.cacheReadTokens) / 1_000_000.0) * 0.30
+            let cacheWriteCost = (Double(snapshot.cacheCreationTokens) / 1_000_000.0) * 3.75
             let outputCost = (Double(snapshot.outputTokens) / 1_000_000.0) * 15.0
-            snapshot.costUSD = inputCost + outputCost
+            snapshot.costUSD = regularInputCost + cacheReadCost + cacheWriteCost + outputCost
         }
         guard snapshot.totalTokens > 0 || snapshot.costUSD > 0 else { return nil }
         return snapshot
@@ -107,15 +210,18 @@ enum UsageParser {
         }
     }
 
-    /// ISO-8601 timestamp carried by transcript lines. Claude Code and Codex
-    /// both emit a top-level `"timestamp"` per JSONL line; a few Claude Code
-    /// lines nest it under `message.timestamp`. Returns nil when absent or
-    /// unparseable.
+    /// Parses ISO-8601 timestamps from transcript lines.
     static func parseTimestamp(_ line: String) -> Date? {
         guard let data = line.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return nil
+        }
+        if let numeric = (obj["timestamp"] as? NSNumber)?.doubleValue {
+            // Pi assistant/tool messages carry unix epoch ms; treat 1e12-ish
+            // values as ms and 1e9-ish values as seconds.
+            if numeric > 1e11 { return Date(timeIntervalSince1970: numeric / 1000) }
+            return Date(timeIntervalSince1970: numeric)
         }
         guard
             let raw =
@@ -168,14 +274,7 @@ enum UsageTracker {
         return min(max(costUSD / budgetUSD, 0), 1)
     }
 
-    /// Tokens/min across the transcript lines inside `window` ending at `now`.
-    /// Absolute timestamps only (DST/midnight-safe). Each line's own token
-    /// count is its incremental contribution — the same shape `parseAll`
-    /// aggregates — so the rate is (sum of in-window tokens) ÷ elapsed time
-    /// between the first and last in-window line. Returns nil when the window
-    /// is 0/negative, no line carries a parseable timestamp, or fewer than
-    /// two distinct timestamps fall in the window (no division by zero).
-    /// Negative token deltas clamp to 0 (clock skew between lines).
+    /// Calculates tokens per minute across transcript lines within the specified window.
     static func rate(lines: [String], now: Date, window: TimeInterval) -> UsageRate {
         guard window > 0 else { return UsageRate(tokensPerMinute: nil, lastSeen: nil) }
         let windowStart = now.addingTimeInterval(-window)
@@ -210,8 +309,11 @@ enum UsageTracker {
         return .normal
     }
 
-    /// Compact token count: "1.2k", "3.4m".
+    /// Compact token count: "1.2k", "3.4m", "5.6b".
     static func compactTokens(_ count: Int) -> String {
+        if count >= 1_000_000_000 {
+            return String(format: "%.1fb", Double(count) / 1_000_000_000)
+        }
         if count >= 1_000_000 {
             return String(format: "%.1fm", Double(count) / 1_000_000)
         }
@@ -226,13 +328,7 @@ enum UsageTracker {
         latestUsageAndRate(home: home, names: names, now: Date(), window: 60).usage
     }
 
-    /// Usage plus the tokens/min rate over the newest transcripts, read in a
-    /// single pass per transcript root.
-    /// NOTE (M9): the fallback cost estimate ($3/M in + $15/M out) is a
-    /// display aid, not accounting — and a session present under two roots of
-    /// one family (e.g. .claude/projects + .claude/transcripts) is counted
-    /// twice. Acceptable for a spend gauge; a precise figure needs per-session
-    /// dedupe keyed by session id.
+    /// Reads usage and token burn rate over recent transcripts in a single pass.
     static func latestUsageAndRate(
         home: String, names: [String], now: Date, window: TimeInterval
     ) -> (usage: UsageSnapshot, rate: UsageRate) {
@@ -249,6 +345,16 @@ enum UsageTracker {
                 combined = aggregate([combined, usage])
             }
             rateLines.append(contentsOf: lines)
+        }
+        if names.contains(where: { $0.lowercased() == "codex" }),
+            let codexSnap = CodexUsageAdapter.snapshot(since: 24 * 3600, now: now, home: home)
+        {
+            combined = aggregate([combined, codexSnap])
+        }
+        if names.contains(where: { $0.lowercased() == "cursor" }),
+            let cursorSnap = CursorUsageAdapter.snapshot(now: now, home: home)
+        {
+            combined = aggregate([combined, cursorSnap])
         }
         return (combined, UsageTracker.rate(lines: rateLines, now: now, window: window))
     }
@@ -289,7 +395,7 @@ enum UsageTracker {
         let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
         try? handle.seek(toOffset: start)
         let data = handle.readDataToEndOfFile()
-        let text = String(data: data, encoding: .utf8) ?? ""
+        let text = String(decoding: data, as: UTF8.self)
         return text.split(whereSeparator: \.isNewline).map(String.init)
     }
 

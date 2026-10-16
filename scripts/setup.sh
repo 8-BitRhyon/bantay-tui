@@ -104,7 +104,7 @@ PLIST
     # notarized: Gatekeeper will still block it on other Macs. For public
     # distribution set CODESIGN_IDENTITY (Developer ID) and notarize:
     #   xcrun notarytool submit bantay-tui.zip --keychain-profile bantay --wait
-    codesign --force --sign - "$DIST/Bantay-TUI.app"
+    codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$DIST/Bantay-TUI.app"
     echo "bantay-tui: WARNING ad-hoc signed only (not notarized)."
     echo "bantay-tui:   set CODESIGN_IDENTITY + notarize for Gatekeeper-clean distribution."
     cd "$DIST" && rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
@@ -153,7 +153,11 @@ if [[ ! -x "$BINARY" ]]; then
   exit 0
 fi
 
-cp "$BINARY" "$INSTALLED_BIN"
+# Kill running instance before replacing the binary — launchd will restart it,
+# or we trigger kickstart at the bottom of the script.
+pkill -x bantay 2>/dev/null || true
+sleep 0.3
+
 cp "$(cd "$(dirname "$0")" && pwd)/setup.sh" "$DATA_DIR/setup.sh"
 # Ship the tmux status-bar helper alongside the app.
 cp "$(cd "$(dirname "$0")" && pwd)/bantay-status.sh" "$DATA_DIR/bantay-status.sh"
@@ -200,6 +204,22 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Sign bundle with designated requirement so TCC permissions persist across restarts.
+SIGN_IDENTITY="-"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "Bantay"; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Bantay" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
+fi
+echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui (identity: $SIGN_IDENTITY)"
+codesign --force --deep --sign "$SIGN_IDENTITY" -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
+
+# Ensure TCC uses the designated identifier requirement.
+if command -v sqlite3 >/dev/null 2>&1; then
+  TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+  if [[ -w "$TCC_DB" ]]; then
+    sqlite3 "$TCC_DB" "UPDATE access SET csreq = X'fade0c000000002400000001000000020000000e636f6d2e62616e7461792d7475690000' WHERE client='com.bantay-tui' AND service='kTCCServiceReminders' AND hex(csreq) LIKE '%0000000800000014%';" 2>/dev/null || true
+  fi
+fi
 
 cat > "$AGENTS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

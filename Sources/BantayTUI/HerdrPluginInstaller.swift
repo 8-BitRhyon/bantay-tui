@@ -1,9 +1,6 @@
 import Foundation
 
-/// Installs the herdr event integration for a *distributed* app: writes the
-/// event-adapter script and a plugin manifest (absolute paths, no repo
-/// checkout) into the app's data directory, ready for `plugin.link`
-/// registration over the herdr socket. Idempotent.
+/// Installs the Herdr event adapter integration.
 enum HerdrPluginInstaller {
     static let pluginID = "bantay-tui.integration"
     static let manifestFileName = "herdr-plugin.toml"

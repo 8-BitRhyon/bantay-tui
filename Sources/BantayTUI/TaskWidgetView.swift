@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Native SwiftUI view implementing the Barrie-inspired Task Management Widget.
+/// SwiftUI view for task management.
 @MainActor
 public struct TaskWidgetView: View {
     @ObservedObject var taskStore = TaskStore.shared
@@ -15,7 +15,7 @@ public struct TaskWidgetView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Search and quick task creation bar (Barrie style)
+            // Search and quick task creation bar
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11))
@@ -51,34 +51,36 @@ public struct TaskWidgetView: View {
 
             parsePreview
 
-            // Scrollable task list categorized into Barrie sections
+            // Scrollable task list
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
-                    // Apple Reminders sync section (top, compact).
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    // Apple Reminders sync section
                     remindersSection
 
-                    let overdue = taskStore.tasks(in: .overdue, searchQuery: newTaskTitle)
-                    let today = taskStore.tasks(in: .today, searchQuery: newTaskTitle)
-                    let later = taskStore.tasks(in: .later, searchQuery: newTaskTitle)
-                    let completed = taskStore.tasks(in: .completed, searchQuery: newTaskTitle)
+                    let categorized = taskStore.categorizedTasks(searchQuery: newTaskTitle)
 
-                    if overdue.isEmpty && today.isEmpty && later.isEmpty && completed.isEmpty {
+                    if categorized.isEmpty {
                         emptyStateView
                     } else {
-                        if !overdue.isEmpty {
+                        if !categorized.overdue.isEmpty {
                             taskSection(
-                                title: "OVERDUE", tasks: overdue, color: Color(hex: "FF453A"))
+                                title: "OVERDUE", tasks: categorized.overdue,
+                                color: BantayTheme.statusFailed)
                         }
-                        if !today.isEmpty {
-                            taskSection(title: "TODAY", tasks: today, color: Color(hex: "FF9F0A"))
-                        }
-                        if !later.isEmpty {
-                            taskSection(title: "LATER", tasks: later, color: Color(hex: "64D2FF"))
-                        }
-                        if !completed.isEmpty {
+                        if !categorized.today.isEmpty {
                             taskSection(
-                                title: "COMPLETED (\(taskStore.doneTodayCount) DONE TODAY 🎉)",
-                                tasks: completed, color: Color(hex: "30D158"))
+                                title: "TODAY", tasks: categorized.today,
+                                color: BantayTheme.statusQuota)
+                        }
+                        if !categorized.later.isEmpty {
+                            taskSection(
+                                title: "LATER", tasks: categorized.later,
+                                color: BantayTheme.statusWorking)
+                        }
+                        if !categorized.completed.isEmpty {
+                            taskSection(
+                                title: "COMPLETED (\(categorized.doneTodayCount) DONE TODAY 🎉)",
+                                tasks: categorized.completed, color: BantayTheme.statusCompleted)
                         }
                     }
                 }
@@ -89,7 +91,8 @@ public struct TaskWidgetView: View {
         }
         .onAppear {
             reminders.checkAuthorizationStatus()
-            if remindersEnabled || NotchHUDConfig.shared.syncAppleReminders {
+            let enabled = remindersEnabled || NotchHUDConfig.shared.syncAppleReminders
+            if enabled && reminders.isAuthorized {
                 Task {
                     await reminders.refresh()
                 }
@@ -114,8 +117,7 @@ public struct TaskWidgetView: View {
         .padding(.vertical, 24)
     }
 
-    /// Apple Reminders section: one-tap sync, quick add, and live items with
-    /// complete/remove. Collapsed to a single row when disabled.
+    /// Apple Reminders section with sync and quick add.
     @ViewBuilder
     private var remindersSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -134,7 +136,12 @@ public struct TaskWidgetView: View {
                     remindersEnabled.toggle()
                     NotchHUDConfig.shared.syncAppleReminders = remindersEnabled
                     if remindersEnabled {
-                        Task { await reminders.refresh() }
+                        Task {
+                            if !reminders.isAuthorized {
+                                _ = await reminders.requestAccess()
+                            }
+                            await reminders.refresh()
+                        }
                     }
                 } label: {
                     Image(systemName: remindersEnabled ? "link.circle.fill" : "link.circle")
@@ -274,7 +281,7 @@ public struct TaskWidgetView: View {
         HStack(spacing: 8) {
             // Interactive Barrie checkmark circle
             Button {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
+                withAnimation(BantayTheme.springSnappy) {
                     taskStore.toggleCompleted(task.id)
                 }
                 if !task.isCompleted {
@@ -283,7 +290,8 @@ public struct TaskWidgetView: View {
             } label: {
                 Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(task.isCompleted ? .green : .white.opacity(0.5))
+                    .foregroundColor(
+                        task.isCompleted ? BantayTheme.statusCompleted : BantayTheme.textTertiary)
             }
             .buttonStyle(.plain)
             .help(task.isCompleted ? "Mark incomplete" : "Mark completed")
@@ -294,14 +302,16 @@ public struct TaskWidgetView: View {
                 HStack(spacing: 4) {
                     Text(task.title)
                         .font(.system(size: 11, weight: .regular))
-                        .foregroundColor(task.isCompleted ? .white.opacity(0.4) : .white)
+                        .foregroundColor(
+                            task.isCompleted ? BantayTheme.textTertiary : BantayTheme.textPrimary
+                        )
                         .strikethrough(task.isCompleted)
                         .lineLimit(2)
 
                     if task.priority == .high {
                         Text("!!")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundColor(.red)
+                            .foregroundColor(BantayTheme.statusFailed)
                     }
                 }
 
@@ -313,16 +323,18 @@ public struct TaskWidgetView: View {
                             Text(agent)
                                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                         }
-                        .foregroundColor(.cyan)
+                        .foregroundColor(BantayTheme.statusWorking)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
-                        .background(Color.cyan.opacity(0.15), in: Capsule())
+                        .background(BantayTheme.statusWorking.opacity(0.15), in: Capsule())
+
+                        executionStateBadge(task)
                     }
 
                     ForEach(task.tags, id: \.self) { tag in
                         Text("#\(tag)")
                             .font(.system(size: 8, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(BantayTheme.textTertiary)
                     }
                 }
             }
@@ -330,48 +342,97 @@ public struct TaskWidgetView: View {
             Spacer(minLength: 4)
 
             // Hover actions: Run with Agent & Delete
-            if hoveredTaskID == task.id {
+            if hoveredTaskID == task.id || task.assignedAgent != nil {
                 HStack(spacing: 4) {
-                    if let agent = task.assignedAgent {
+                    if let agent = task.assignedAgent, !task.isCompleted {
                         Button {
                             runWithAgent(task, agent: agent)
                         } label: {
                             HStack(spacing: 2) {
                                 Image(systemName: "bolt.fill")
-                                Text("Run")
+                                Text(task.executionState == .pending ? "Run" : "Re-run")
                             }
                             .font(.system(size: 8.5, weight: .semibold))
                             .foregroundColor(.black)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.yellow, in: Capsule())
+                            .background(BantayTheme.statusAttention, in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .help("Dispatch prompt to \(agent)")
                     }
 
-                    Button {
-                        withAnimation {
-                            taskStore.removeTask(task.id)
+                    if hoveredTaskID == task.id {
+                        Button {
+                            withAnimation {
+                                taskStore.removeTask(task.id)
+                            }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                                .foregroundColor(BantayTheme.statusFailed.opacity(0.8))
                         }
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 10))
-                            .foregroundColor(.red.opacity(0.8))
+                        .buttonStyle(.plain)
+                        .help("Delete task")
                     }
-                    .buttonStyle(.plain)
-                    .help("Delete task")
                 }
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
-            hoveredTaskID == task.id ? Color.white.opacity(0.08) : Color.white.opacity(0.03),
-            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            hoveredTaskID == task.id ? BantayTheme.cardHover : BantayTheme.cardBackground,
+            in: RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: BantayTheme.radiusSmall, style: .continuous)
+                .stroke(
+                    hoveredTaskID == task.id ? BantayTheme.borderStandard : Color.clear,
+                    lineWidth: 0.5)
         )
         .onHover { isHovered in
             hoveredTaskID = isHovered ? task.id : nil
+        }
+    }
+
+    @ViewBuilder
+    private func executionStateBadge(_ task: BantayTask) -> some View {
+        switch task.executionState {
+        case .working:
+            HStack(spacing: 2) {
+                Image(systemName: "bolt.horizontal.fill")
+                    .font(.system(size: 7))
+                Text("Working")
+                    .font(.system(size: 8, weight: .medium))
+            }
+            .foregroundColor(BantayTheme.statusWorking)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(BantayTheme.statusWorking.opacity(0.2), in: Capsule())
+        case .blocked:
+            HStack(spacing: 2) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 7))
+                Text("Blocked")
+                    .font(.system(size: 8, weight: .medium))
+            }
+            .foregroundColor(BantayTheme.statusAttention)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(BantayTheme.statusAttention.opacity(0.2), in: Capsule())
+        case .failed:
+            HStack(spacing: 2) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 7))
+                Text("Failed")
+                    .font(.system(size: 8, weight: .medium))
+            }
+            .foregroundColor(BantayTheme.statusFailed)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(BantayTheme.statusFailed.opacity(0.2), in: Capsule())
+        default:
+            EmptyView()
         }
     }
 
@@ -430,12 +491,6 @@ public struct TaskWidgetView: View {
     }
 
     private func runWithAgent(_ task: BantayTask, agent: String) {
-        // Dispatches prompt to target agent via control gateway
-        let promptText = task.title
-        NotificationCenter.default.post(
-            name: Notification.Name("BantayRunTaskWithAgent"),
-            object: nil,
-            userInfo: ["prompt": promptText, "agent": agent]
-        )
+        taskStore.dispatchTask(task.id)
     }
 }

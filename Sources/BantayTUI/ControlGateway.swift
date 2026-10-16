@@ -1,11 +1,7 @@
 import Foundation
 import Network
 
-/// Control-gateway wire contract (W1, plan 017 WI-4): versioned NDJSON
-/// request/response over a Unix domain socket. Unknown fields are ignored,
-/// unknown methods rejected — the server enforces that server-side. The pure
-/// framing/parsing/route helpers live here so the CLI harness can spec-check
-/// them without a live socket.
+/// Control gateway wire contract: versioned NDJSON over Unix domain socket.
 enum ControlGateway {
     /// Method catalog verb for routing.
     enum GatewayMethod {
@@ -18,10 +14,7 @@ enum ControlGateway {
         case unknown
     }
 
-    /// One NDJSON request envelope: `{"id":...,"method":...,"params":{...}}`.
-    /// `[String: Any]` has no Decodable conformance, so `params` is bridged
-    /// through a JSON box; a `params` value that is not a JSON object makes
-    /// the whole decode fail (→ `parseRequest` returns nil).
+    /// NDJSON request envelope: {"id":...,"method":...,"params":{...}}.
     struct GatewayRequest: Decodable {
         let id: String
         let method: String
@@ -171,11 +164,7 @@ enum ControlGateway {
     }
 }
 
-/// Control gateway listener on a Unix domain socket (W1). One connection,
-/// one request line, one response line, then close — the same request/response
-/// model as `HerdrSocketClient.perform`. A stale socket file left by a crash
-/// is probed and unlinked before binding; a live socket (second app instance)
-/// is preserved so the bind fails rather than stealing the control plane.
+/// Control gateway listener accepting NDJSON commands over a Unix domain socket.
 final class ControlGatewayServer: @unchecked Sendable {
     private let socketPath: String
     private let adapter: any PlexerAdapter

@@ -1,12 +1,7 @@
 import AppKit
 import Foundation
 
-/// tmux pane adapter (plan 017 WI-1), mirroring `HerdrSocketAdapter`'s
-/// structure: executable discovery via PATH, CLI verb construction, and
-/// fire-and-forget sends from detached tasks. Every verb is a pure client
-/// command (`list-panes`, `select-pane`, `send-keys`, `capture-pane`, ...) —
-/// a machine with no tmux server simply reports no panes, and listing never
-/// auto-starts a server (`new-session`/`start-server` are never used).
+/// PlexerAdapter implementation for the tmux terminal multiplexer.
 struct TmuxAdapter: Sendable, PlexerAdapter {
     private let tmuxBinPath: String
 
@@ -85,16 +80,7 @@ struct TmuxAdapter: Sendable, PlexerAdapter {
         ]
     }
 
-    /// Parse `tmux list-panes -a -F ...` output into `PaneInfo` values.
-    ///
-    /// Two template shapes are accepted: the full 8-field shape and the
-    /// minimal 4-field shape. tmux emits the literal `%N` pane id, which
-    /// regenerates on server restart, so the stable `PaneInfo.id` is composed
-    /// as `session:window.pane`. A tab inside the trailing `currentPath`
-    /// field widens the line past 8 columns — the remainder is rejoined so
-    /// the value survives. Quoted fields (`#{q:...}` style or hand-quoted)
-    /// are unquoted. Empty output is `[]`; any line that matches neither
-    /// template shape (or fewer than 4 fields) is skipped.
+    /// Parses tmux pane listing output into `PaneInfo` structs.
     static func parsePaneLines(_ output: String) -> [PaneInfo] {
         var panes: [PaneInfo] = []
         for line in output.split(whereSeparator: \.isNewline) {
@@ -173,11 +159,7 @@ struct TmuxAdapter: Sendable, PlexerAdapter {
         return []
     }
 
-    /// Sync protocol seam (PlexerAdapter) — the D2 boundary shared by all
-    /// adapters, so its signature must stay put. No app caller today; the
-    /// fetch runs on a background task and the calling thread waits on the
-    /// result, so a hypothetical main-actor caller never holds
-    /// `waitUntilExit` on the main thread.
+    /// Synchronously lists panes across all tmux sessions.
     func listPanes() -> [PaneInfo] {
         final class Box: @unchecked Sendable {
             var panes: [PaneInfo] = []
@@ -232,11 +214,19 @@ struct TmuxAdapter: Sendable, PlexerAdapter {
 
     /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter).
     func approve(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+            return
+        }
         sendKeys(paneId: paneId, keys: ["y", "enter"])
     }
 
     /// Denies a yes-no "Need approval" prompt (e.g. "n" + Enter).
     func deny(paneId: String) {
+        if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
+            return
+        }
         sendKeys(paneId: paneId, keys: ["n", "enter"])
     }
 

@@ -1,10 +1,7 @@
 import Foundation
 
-/// Non-blocking subprocess runner shared across the control plane (plan 016
-/// 1c). Every call is async or fire-and-forget, so no main-actor path ever
-/// blocks on `waitUntilExit`. Stdout/stderr are drained concurrently with
-/// execution so >64KB of output cannot fill the pipe and deadlock.
-nonisolated enum ProcessRunner {
+/// Non-blocking async subprocess runner for the control plane.
+enum ProcessRunner {
     struct ProcessResult: Sendable {
         let status: Int32
         let stdout: String
@@ -18,11 +15,7 @@ nonisolated enum ProcessRunner {
         min(max(timeout, 0.5), 120.0)
     }
 
-    /// Run to completion and return status + output. Output is drained
-    /// concurrently on detached readers while the process executes. On
-    /// timeout the process is terminated, reaped, and the partial output
-    /// collected so far is returned. A launch failure (nonexistent
-    /// executable) returns status -1 with empty output — never a hang.
+    /// Runs a process to completion, draining stdout/stderr with timeout enforcement.
     static func run(
         executableURL: URL,
         arguments: [String] = [],
