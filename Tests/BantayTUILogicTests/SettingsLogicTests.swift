@@ -37,6 +37,7 @@
         @Test("SettingsView can be instantiated and hosted")
         @MainActor
         func settingsViewHosting() {
+            _ = NSApplication.shared
             let view = SettingsView()
             let controller = NSHostingController(rootView: view)
             let window = NSWindow(
@@ -53,15 +54,17 @@
         @Test("AppDelegate does not terminate when last window closes")
         @MainActor
         func appDelegateTerminationBehavior() {
+            let app = NSApplication.shared
             let delegate = AppDelegate()
-            #expect(delegate.applicationShouldTerminateAfterLastWindowClosed(NSApp) == false)
+            #expect(delegate.applicationShouldTerminateAfterLastWindowClosed(app) == false)
         }
 
         @Test("AppDelegate reopen with visible windows returns true")
         @MainActor
         func appDelegateReopenBehavior() {
+            let app = NSApplication.shared
             let delegate = AppDelegate()
-            #expect(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true))
+            #expect(delegate.applicationShouldHandleReopen(app, hasVisibleWindows: true))
         }
     }
 #endif
