@@ -190,6 +190,7 @@
                 .appendingPathComponent("bantay-tui-tests-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: dir) }
+            let file = dir.appendingPathComponent("agent-events.jsonl")
             let text =
                 event("completed", title: "a-very-long-title-that-makes-the-file-big-1234567890")
                 + "\n"

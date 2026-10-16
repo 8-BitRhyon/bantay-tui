@@ -10,6 +10,12 @@
         @Test("defaults, persistence, and snooze boundaries")
         func lifecycleControls() {
             let defaults = UserDefaults.standard
+            defer {
+                NotchHUDConfig.shared.islandEnabled = true
+                NotchHUDConfig.shared.snoozedUntil = nil
+                defaults.set(true, forKey: "islandEnabled")
+                defaults.removeObject(forKey: "snoozedUntil")
+            }
             defaults.removeObject(forKey: "islandEnabled")
             defaults.removeObject(forKey: "snoozedUntil")
 
