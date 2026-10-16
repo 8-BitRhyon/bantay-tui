@@ -185,13 +185,13 @@
             #expect(!item.isWarning)
             #expect(!item.isCritical)
 
-            // Malformed JSON falls back gracefully without crash
+            // Malformed JSON falls back gracefully to empty list without crash
             let fallbackMalformed = QuotaAxiTracker.parseQuotaJSON("{ not valid json }")
-            #expect(!fallbackMalformed.isEmpty)
+            #expect(fallbackMalformed.isEmpty)
 
-            // Empty string falls back gracefully
+            // Empty string falls back gracefully to empty list
             let fallbackEmpty = QuotaAxiTracker.parseQuotaJSON("")
-            #expect(!fallbackEmpty.isEmpty)
+            #expect(fallbackEmpty.isEmpty)
         }
 
         @Test("AgentDetector covers Cursor, Codex, and Cloud Code paths")
