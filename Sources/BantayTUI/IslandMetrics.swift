@@ -575,11 +575,15 @@ public enum IslandMetrics: Sendable {
             with: "",
             options: .regularExpression)
         s = s.replacingOccurrences(
-            of: "(?:level|lvl)=(?:INFO|WARN|ERROR|DEBUG|TRACE)\\s*",
+            of: "(?:level|lvl)=[a-zA-Z0-9_-]+\\s*",
             with: "",
             options: [.regularExpression, .caseInsensitive])
         s = s.replacingOccurrences(
-            of: "^(?:INFO|WARN|ERROR|DEBUG|TRACE)\\s+",
+            of: "^\\[?(?:INFO|WARN|ERROR|DEBUG|TRACE)\\]?\\s*",
+            with: "",
+            options: [.regularExpression, .caseInsensitive])
+        s = s.replacingOccurrences(
+            of: "\\[(?:INFO|WARN|ERROR|DEBUG|TRACE)\\]\\s*",
             with: "",
             options: [.regularExpression, .caseInsensitive])
         s = s.replacingOccurrences(
@@ -694,6 +698,19 @@ public enum IslandMetrics: Sendable {
 
         // Multiplexer hostnames (e.g. MacBook.local)
         if lower.hasSuffix(".local") || lower.hasSuffix(".lan") || lower.hasSuffix(".internal") {
+            return true
+        }
+
+        // Shell prompts (e.g. user@host:~$, user@host:~#, host% )
+        if trimmed.contains("@")
+            && (trimmed.hasSuffix("$") || trimmed.hasSuffix("#")
+                || trimmed.hasSuffix("%") || trimmed.contains(":~"))
+        {
+            return true
+        }
+        if trimmed.hasSuffix(" %") || trimmed.hasSuffix(" $") || trimmed.hasSuffix(" #")
+            || trimmed == "$" || trimmed == "#" || trimmed == "%"
+        {
             return true
         }
 

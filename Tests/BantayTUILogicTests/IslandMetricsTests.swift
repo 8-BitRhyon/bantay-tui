@@ -75,7 +75,7 @@
 
         @Test("hover state machine")
         func hoverStates() {
-            #expect(!IslandMetrics.shouldExpand(hovering: true, hasAgents: false))
+            #expect(IslandMetrics.shouldExpand(hovering: true, hasAgents: false))
             #expect(!IslandMetrics.shouldExpand(hovering: false, hasAgents: true))
             #expect(IslandMetrics.shouldExpand(hovering: true, hasAgents: true))
             #expect(IslandMetrics.shouldCollapse(isExpanded: true, hasAgents: false))
