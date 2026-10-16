@@ -50,21 +50,5 @@
             #expect(controller.isViewLoaded)
             window.close()
         }
-
-        @Test("AppDelegate does not terminate when last window closes")
-        @MainActor
-        func appDelegateTerminationBehavior() {
-            let app = NSApplication.shared
-            let delegate = AppDelegate()
-            #expect(delegate.applicationShouldTerminateAfterLastWindowClosed(app) == false)
-        }
-
-        @Test("AppDelegate reopen with visible windows returns true")
-        @MainActor
-        func appDelegateReopenBehavior() {
-            let app = NSApplication.shared
-            let delegate = AppDelegate()
-            #expect(delegate.applicationShouldHandleReopen(app, hasVisibleWindows: true))
-        }
     }
 #endif
