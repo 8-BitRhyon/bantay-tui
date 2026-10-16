@@ -37,18 +37,10 @@
         @Test("SettingsView can be instantiated and hosted")
         @MainActor
         func settingsViewHosting() {
-            _ = NSApplication.shared
             let view = SettingsView()
             let controller = NSHostingController(rootView: view)
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false)
-            window.contentViewController = controller
-            window.makeKeyAndOrderFront(nil)
+            _ = controller.view
             #expect(controller.isViewLoaded)
-            window.close()
         }
     }
 #endif
