@@ -147,6 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             Self.pendingWelcome = true
         }
         let config = NotchHUDConfig.shared
+        if AgentEventManager.shared.agents.isEmpty {
+            config.panelPinned = false
+        }
         if config.hideAtStartup && !config.showIslandWhenIdle {
             Self.dbg("launch: hideAtStartup set, island stays hidden until an event")
         } else {

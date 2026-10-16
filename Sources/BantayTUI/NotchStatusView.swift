@@ -163,8 +163,8 @@ struct NotchStatusView: View {
         if hasActiveNotification {
             return IslandMetrics.notificationWidth
         }
-        if isCenteredIdle {
-            return min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
+        if isCenteredClosed {
+            return IslandMetrics.windowSize().width
         }
         return closedPillWidth
     }
@@ -340,6 +340,17 @@ struct NotchStatusView: View {
             radius: isExpanded ? 16 : 0,
             x: 0,
             y: isExpanded ? 8 : 0
+        )
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        IslandHitTracker.interactiveRect = geo.frame(in: .global)
+                    }
+                    .onChange(of: geo.frame(in: .global)) { newFrame in
+                        IslandHitTracker.interactiveRect = newFrame
+                    }
+            }
         )
         .onHover { hovering in
             eventManager.setActive(hovering)
@@ -758,16 +769,19 @@ struct NotchStatusView: View {
             .mask(islandMask)
             .frame(width: islandWidth + cornerRad * 2, height: islandHeight)
             .overlay {
-                RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
-                    .strokeBorder(
-                        hotkeyBlink
-                            ? .white.opacity(0.55)
-                            : spendStrokeColor,
-                        lineWidth: hotkeyBlink ? 1.5 : 1
-                    )
-                    .frame(width: islandWidth, height: islandHeight)
-                    .animation(.easeOut(duration: 0.12), value: hotkeyBlink)
+                if isExpanded || !isCenteredClosed {
+                    RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
+                        .strokeBorder(
+                            hotkeyBlink
+                                ? .white.opacity(0.55)
+                                : spendStrokeColor,
+                            lineWidth: hotkeyBlink ? 1.5 : 1
+                        )
+                        .frame(width: islandWidth, height: islandHeight)
+                        .animation(.easeOut(duration: 0.12), value: hotkeyBlink)
+                }
             }
+            .opacity(isCenteredClosed && !isExpanded ? 0 : 1)
             .overlay {
                 if isExpanded {
                     RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
@@ -840,22 +854,9 @@ struct NotchStatusView: View {
             approvalPill(event: event, paneId: paneId)
                 .transition(contentTransition)
         } else if isCenteredClosed {
-            if eventManager.agents.isEmpty && eventManager.currentEvent == nil {
-                // True empty idle: nothing to show, but the pill must stay
-                // tappable to expand.
-                Color.clear
-                    .frame(width: islandWidth, height: islandHeight)
-                    .contentShape(Rectangle())
-                    .onTapGesture { expandTo(true) }
-            } else {
-                // Center-docked idle with agents/events: leak details to BOTH
-                // sides of the physical notch (working → left, needs-you +
-                // failures → right). Hidden-behind-the-notch was a regression
-                // that made the app look dead at idle.
-                centeredSplitStrip
-                    .transition(contentTransition)
-                    .onTapGesture { expandTo(true) }
-            }
+            centeredSplitStrip
+                .transition(contentTransition)
+                .onTapGesture { expandTo(true) }
         } else if let event = eventManager.currentEvent {
             closedPill(
                 color: event.kind.color,
@@ -951,6 +952,20 @@ struct NotchStatusView: View {
                     .padding(.horizontal, IslandMetrics.idleChipHPad)
                     .frame(height: 20)
                     .background(Color.white.opacity(0.10), in: Capsule())
+                } else {
+                    HStack(spacing: IslandMetrics.idleChipDotGap) {
+                        Circle()
+                            .fill(Color(hex: "34D399"))
+                            .frame(
+                                width: IslandMetrics.idleDotSize,
+                                height: IslandMetrics.idleDotSize)
+                        Text("Bantay")
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.85))
+                    }
+                    .padding(.horizontal, IslandMetrics.idleChipHPad)
+                    .frame(height: 20)
+                    .background(Color.white.opacity(0.10), in: Capsule())
                 }
             }
             .frame(maxWidth: sideWidth, alignment: .leading)
@@ -974,13 +989,15 @@ struct NotchStatusView: View {
                         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white)
                 }
+                if needsYou.isEmpty && failed.isEmpty {
+                    Text("Idle")
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.55))
+                }
             }
             .padding(.horizontal, IslandMetrics.idleChipHPad)
             .frame(height: 20)
-            .background(
-                (needsYou.isEmpty && failed.isEmpty)
-                    ? Color.clear : Color.white.opacity(0.10), in: Capsule()
-            )
+            .background(Color.white.opacity(0.08), in: Capsule())
             .frame(maxWidth: sideWidth, alignment: .trailing)
             .padding(.trailing, notchPad)
         }

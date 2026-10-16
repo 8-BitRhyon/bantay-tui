@@ -10,6 +10,12 @@ private enum FileDropTypes {
     ]
 }
 
+/// Tracks the active on-screen interactive bounds of the island.
+@MainActor
+public enum IslandHitTracker {
+    public static var interactiveRect: NSRect = .zero
+}
+
 /// AppKit drag destination hosting SwiftUI island content.
 final class FileDropContentView<Content: View>: NSView {
     let hosting: NSHostingView<Content>
@@ -36,6 +42,16 @@ final class FileDropContentView<Content: View>: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         registerForDraggedTypes(FileDropTypes.all)
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let activeRect = MainActor.assumeIsolated { IslandHitTracker.interactiveRect }
+        guard activeRect != .zero else { return super.hitTest(point) }
+        let hitTarget = activeRect.insetBy(dx: -12, dy: -12)
+        guard hitTarget.contains(point) else { return nil }
+        return super.hitTest(point)
     }
 
     // MARK: - NSDraggingDestination

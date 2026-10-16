@@ -125,5 +125,16 @@
             _ = field
             #expect(value == "Initial text")
         }
+
+        @Test("IslandHitTracker bounds and hit-testing targets")
+        @MainActor
+        func islandHitTrackerBounds() {
+            IslandHitTracker.interactiveRect = NSRect(x: 100, y: 0, width: 300, height: 40)
+            #expect(IslandHitTracker.interactiveRect.width == 300)
+            #expect(IslandHitTracker.interactiveRect.height == 40)
+            let hitTarget = IslandHitTracker.interactiveRect.insetBy(dx: -12, dy: -12)
+            #expect(hitTarget.contains(NSPoint(x: 105, y: 5)))
+            #expect(!hitTarget.contains(NSPoint(x: 105, y: 100)))
+        }
     }
 #endif
