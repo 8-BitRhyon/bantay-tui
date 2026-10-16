@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **swiftui-flx In-Source Design System** (`DesignSystem/`): full native SwiftUI
+  tokens (`FLXSpacing`, `FLXRadius`, `FLXBorderWidth`, `FLXOpacity`, `FLXTypography`,
+  `FLXColors`), theme management (`FLXTheme`, `FLXThemeEnvironment`), adaptive
+  `FLXTheme+Bantay` OLED Glass preset, and composable primitives (`FLXButton`, `FLXCard`,
+  `FLXTextField`) following the shadcn/ui distribution model.
 - **Universal Multi-Vendor Quota & BYOK Adapters** (`ClaudeUsageAdapter`,
   `CodexUsageAdapter`, `CursorUsageAdapter`, `OpenRouterUsageAdapter`,
   `OllamaUsageAdapter`): real-time rate limit hook ingestion from Claude Code

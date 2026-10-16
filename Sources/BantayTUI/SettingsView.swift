@@ -797,7 +797,7 @@ struct SettingsView: View {
                         sound?.play()
                     }
                     #if DEBUG
-                        Button("Send test notification") {
+                        FLXButton("Send test notification", variant: .secondary) {
                             AgentEventManager.shared.publishForTesting()
                         }
                     #else
@@ -810,8 +810,7 @@ struct SettingsView: View {
         Group {
             if selectedCategory == .notifications && matchesSearch("Push notifications (ntfy.sh)") {
                 Section("Push notifications (ntfy.sh)") {
-                    TextField("Topic", text: $ntfyTopic)
-                        .textFieldStyle(.roundedBorder)
+                    FLXTextField("Topic", text: $ntfyTopic)
                         .help(
                             "Leave empty to disable. Any ntfy topic works — "
                                 + "create a private one at ntfy.sh first."
@@ -819,14 +818,12 @@ struct SettingsView: View {
                         .onChange(of: ntfyTopic) { newValue in
                             NotchHUDConfig.shared.ntfyTopic = newValue
                         }
-                    TextField("Server", text: $ntfyServer)
-                        .textFieldStyle(.roundedBorder)
+                    FLXTextField("Server", text: $ntfyServer)
                         .help("Default https://ntfy.sh — override for self-hosted.")
                         .onChange(of: ntfyServer) { newValue in
                             NotchHUDConfig.shared.ntfyServer = newValue
                         }
-                    TextField("Callback URL", text: $ntfyCallbackURL)
-                        .textFieldStyle(.roundedBorder)
+                    FLXTextField("Callback URL", text: $ntfyCallbackURL)
                         .help("Public/Tailscale URL for approvals (e.g. http://my-mac:41817).")
                         .onChange(of: ntfyCallbackURL) { newValue in
                             NotchHUDConfig.shared.ntfyCallbackURL = newValue

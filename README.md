@@ -50,6 +50,13 @@ Hover (or `⌥Space`) to expand the island into a control plane:
 - **Tasks tab** — a Barrie-style task manager: natural-language quick-add with a live parse preview ("deploy by friday 5pm !! @work @claude" → date, priority, tags, agent), categorized Overdue/Today/Later/Completed sections, and optional **Apple Reminders sync** (EventKit) so your tasks are real Reminders you can edit from the notch.
 - **Usage in the header** — a live spend badge (`$X / $budget`) that turns amber ≥70% / red ≥100% (driving the island edge-glow) and a tokens-per-minute badge, both fed by the kilo ledger.
 
+### Design system & tokens
+
+Bantay embeds **`swiftui-flx`** (the shadcn-inspired component model for SwiftUI) directly in `Sources/BantayTUI/DesignSystem/`:
+- **Tokens**: `FLXSpacing`, `FLXRadius`, `FLXBorderWidth`, `FLXOpacity`, `FLXTypography`, `FLXColors`.
+- **Theme**: `FLXTheme.bantay` provides Translucent OLED Glass styling (`Color.white.opacity(0.04)` with subtle hairline borders) and adaptive brand accents (Neon Cyan `#64D2FF`, Emerald `#30D158`, Silver `#8E8E93`).
+- **Components**: Native composable controls (`FLXButton`, `FLXCard`, `FLXTextField`) with zero external package dependencies.
+
 ## Reliability engineering
 
 Bantay ships fixes for the five hard problems that plague notch apps:

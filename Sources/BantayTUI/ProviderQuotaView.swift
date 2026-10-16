@@ -8,29 +8,27 @@ struct ProviderQuotaView: View {
     @State private var isRefreshing = false
 
     var body: some View {
-        VStack(spacing: 8) {
-            headerBar
+        FLXCard {
+            FLXCardHeader {
+                headerBar
+            }
 
-            if quotas.isEmpty {
-                emptyQuotasView
-            } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 6) {
-                        ForEach(quotas) { quota in
-                            providerQuotaRow(quota)
+            FLXCardContent {
+                if quotas.isEmpty {
+                    emptyQuotasView
+                } else {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVStack(spacing: 6) {
+                            ForEach(quotas) { quota in
+                                providerQuotaRow(quota)
+                            }
                         }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
                     }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: BantayTheme.radiusCard, style: .continuous)
-                .fill(BantayTheme.cardBackground)
-        )
         .onAppear {
             refreshQuotas()
         }
@@ -42,28 +40,18 @@ struct ProviderQuotaView: View {
                 Image(systemName: "gauge.with.needle.fill")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(BantayTheme.statusQuota)
-                Text("Provider Quotas & Limits")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(BantayTheme.textPrimary)
+                FLXCardTitle("Provider Quotas & Limits")
             }
 
             Spacer()
 
-            Button(action: refreshQuotas) {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 8.5, weight: .semibold))
-                        .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                    Text("Refresh")
-                        .font(.system(size: 8.5, weight: .medium))
-                }
-                .foregroundColor(BantayTheme.textSecondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2.5)
-                .background(Color.white.opacity(0.06))
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
+            FLXButton(
+                "Refresh",
+                systemImage: "arrow.clockwise",
+                variant: .ghost,
+                action: refreshQuotas
+            )
+            .controlSize(.small)
         }
     }
 

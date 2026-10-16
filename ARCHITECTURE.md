@@ -29,6 +29,7 @@ The terminal is where agents live but not where you always are. Bantay bridges t
 | `ShelfModel.swift` | Pure clipboard-history + shelf-file logic (dedup, ordering, limits) |
 | `TerminalFocusser.swift` | Terminal-agnostic focus: ordered bundle-ID registry (Ghostty/Warp/WezTerm/Alacritty/iTerm2/Terminal/VSCode/IntelliJ) + app activation |
 | `LaunchAgent.swift` | Launch-agent plist management |
+| `DesignSystem/` | In-source `swiftui-flx` token system (`FLXSpacing`, `FLXRadius`, `FLXTypography`, `FLXColors`), theme management (`FLXTheme`, `FLXTheme+Bantay`), and composable primitives (`FLXButton`, `FLXCard`, `FLXTextField`) |
 | `SettingsView.swift` | Settings form (all facets), welcome/onboarding sheet |
 
 ## Event pipeline
