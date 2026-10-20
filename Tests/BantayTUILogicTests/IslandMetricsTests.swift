@@ -142,6 +142,16 @@
             #expect(IslandMetrics.cleanHUDText(logLine) == "Building project")
         }
 
+        @Test("strips syslog and Apple log timestamps")
+        func stripsSyslogTimestamps() {
+            let syslog = "2026-10-16 09:12:48.169514-0500 bantay: Running task"
+            #expect(IslandMetrics.cleanHUDText(syslog) == "Running task")
+
+            let bareSyslog = "2026-10-16 09:12:48.169514-0500 bantay"
+            #expect(IslandMetrics.isSuppressedGarbage(bareSyslog))
+            #expect(IslandMetrics.cleanHUDText(bareSyslog) == "")
+        }
+
         @Test("suppresses raw JSON blobs")
         func suppressesRawJSON() {
             let json = "{\"role\":\"assistant\",\"content\":\"Working\"}"

@@ -11,6 +11,7 @@ enum ControlGateway {
         case sendKeys
         case focus
         case prompt
+        case openSettings
         case unknown
     }
 
@@ -65,7 +66,7 @@ enum ControlGateway {
         ]
 
         static func isKnown(_ method: String) -> Bool {
-            catalog.contains(method)
+            catalog.contains(method) || method == "settings.open"
         }
     }
 
@@ -102,6 +103,7 @@ enum ControlGateway {
         case "pane.send_keys": return .sendKeys
         case "pane.focus": return .focus
         case "agent.prompt": return .prompt
+        case "settings.open": return .openSettings
         default: return .unknown
         }
     }
@@ -229,6 +231,13 @@ final class ControlGatewayServer: @unchecked Sendable {
             return handleFocus(id: request.id, params: request.params)
         case .prompt:
             return handlePrompt(id: request.id, params: request.params)
+        case .openSettings:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["opened": true])
         case .unknown:
             return ControlGateway.GatewayResponse.error(
                 id: request.id, code: "unknown_method", message: request.method)
@@ -357,27 +366,42 @@ final class ControlGatewayServer: @unchecked Sendable {
         return state.live
     }
 
+    private static func log(_ message: String) {
+        guard getenv("BANTAY_DEBUG") != nil else { return }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let line = "[bantay] [\(pid)] \(message)\n"
+        fputs(line, stderr)
+        fflush(stderr)
+    }
+
     private static func accept(_ connection: NWConnection, server: ControlGatewayServer) {
-        // Request handling can block on subprocess verbs, so the connection
-        // runs on its own queue rather than the main actor.
+        log("gateway: accept starting connection")
         connection.start(queue: DispatchQueue(label: "bantay.control.connection"))
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             data, _, isComplete, error in
+            let byteCount = data?.count ?? 0
+            let errDesc = String(describing: error)
+            log("gateway: receive called, bytes=\(byteCount) err=\(errDesc)")
             if error != nil && !isComplete {
                 connection.cancel()
                 return
             }
             guard let data, let line = ControlGateway.extractLines(from: data).first else {
+                log("gateway: extractLines failed")
                 connection.cancel()
                 return
             }
+            log("gateway: handling line: \(line)")
             guard let response = server.handle(line: line) else {
+                log("gateway: server.handle returned nil")
                 connection.cancel()
                 return
             }
+            log("gateway: sending response: \(response)")
             connection.send(
                 content: Data((response + "\n").utf8),
-                completion: .contentProcessed { _ in
+                completion: .contentProcessed { err in
+                    log("gateway: send completed, err=\(String(describing: err))")
                     connection.cancel()
                 })
         }

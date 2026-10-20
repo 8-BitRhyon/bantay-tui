@@ -330,7 +330,7 @@ struct NotchStatusView: View {
         .overlay(edgeGlow)
         .overlay(systemHUDOverlay, alignment: .bottom)
         .frame(
-            width: islandWidth + cornerRad * 2,
+            width: isExpanded ? islandWidth : (islandWidth + cornerRad * 2),
             height: islandHeight,
             alignment: .top
         )
@@ -767,7 +767,10 @@ struct NotchStatusView: View {
                     )
             )
             .mask(islandMask)
-            .frame(width: islandWidth + cornerRad * 2, height: islandHeight)
+            .frame(
+                width: isExpanded ? islandWidth : (islandWidth + cornerRad * 2),
+                height: islandHeight
+            )
             .overlay {
                 if isExpanded || !isCenteredClosed {
                     RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
@@ -798,19 +801,25 @@ struct NotchStatusView: View {
             }
     }
 
+    @ViewBuilder
     private var islandMask: some View {
-        Rectangle()
-            .fill(.black)
-            .frame(width: islandWidth, height: islandHeight)
-            .clipShape(.rect(bottomLeadingRadius: cornerRad, bottomTrailingRadius: cornerRad))
-            .overlay(alignment: .topTrailing) {
-                cornerCutout(topLeading: true)
-                    .offset(x: cornerRad + IslandMetrics.contentSpacing - 0.5, y: -0.5)
-            }
-            .overlay(alignment: .topLeading) {
-                cornerCutout(topLeading: false)
-                    .offset(x: -cornerRad - IslandMetrics.contentSpacing + 0.5, y: -0.5)
-            }
+        if isExpanded {
+            RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
+                .frame(width: islandWidth, height: islandHeight)
+        } else {
+            Rectangle()
+                .fill(.black)
+                .frame(width: islandWidth, height: islandHeight)
+                .clipShape(.rect(bottomLeadingRadius: cornerRad, bottomTrailingRadius: cornerRad))
+                .overlay(alignment: .topTrailing) {
+                    cornerCutout(topLeading: true)
+                        .offset(x: cornerRad + IslandMetrics.contentSpacing - 0.5, y: -0.5)
+                }
+                .overlay(alignment: .topLeading) {
+                    cornerCutout(topLeading: false)
+                        .offset(x: -cornerRad - IslandMetrics.contentSpacing + 0.5, y: -0.5)
+                }
+        }
     }
 
     /// Path silhouette rendering the notch-hugging corner cutout wings.
@@ -899,13 +908,13 @@ struct NotchStatusView: View {
         let failed = agents.filter { $0.kind == .failed }
         let left = working.prefix(3)
         let windowW = IslandMetrics.windowSize().width
-        let sideWidth =
+        let sideWidth = max(
             (windowW
                 - IslandMetrics.notchWidth(
                     screenWidth: AppDelegate.islandScreen()?.frame.width ?? windowW,
                     auxLeft: AppDelegate.auxLeftWidth,
                     auxRight: AppDelegate.auxRightWidth,
-                    safeTop: AppDelegate.topInset)) / 2
+                    safeTop: AppDelegate.topInset)) / 2, 0)
         let notchPad: CGFloat = 8
 
         HStack(spacing: 0) {
@@ -968,8 +977,8 @@ struct NotchStatusView: View {
                     .background(Color.white.opacity(0.10), in: Capsule())
                 }
             }
-            .frame(maxWidth: sideWidth, alignment: .leading)
-            .padding(.leading, notchPad)
+            .padding(.trailing, notchPad)
+            .frame(width: sideWidth, alignment: .trailing)
 
             Spacer(minLength: 0)
 
@@ -998,8 +1007,8 @@ struct NotchStatusView: View {
             .padding(.horizontal, IslandMetrics.idleChipHPad)
             .frame(height: 20)
             .background(Color.white.opacity(0.08), in: Capsule())
-            .frame(maxWidth: sideWidth, alignment: .trailing)
-            .padding(.trailing, notchPad)
+            .padding(.leading, notchPad)
+            .frame(width: sideWidth, alignment: .leading)
         }
         .frame(width: islandWidth, height: islandHeight, alignment: .top)
         .contentShape(Rectangle())
@@ -2841,7 +2850,7 @@ struct NotchStatusView: View {
                             }
                         }
                         Spacer(minLength: 4)
-                        if let title = agent.title, !agent.kind.isOngoing {
+                        if let title = agent.title, agent.kind != .idle, !agent.kind.isOngoing {
                             let clean = cleanHUDText(title)
                             if !clean.isEmpty {
                                 Text(clean)

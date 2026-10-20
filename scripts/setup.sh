@@ -146,7 +146,11 @@ chmod 600 "$EVENTS_FILE"
 
 echo "bantay-tui: data directory ready at $DATA_DIR"
 
-BINARY="$(cd "$(dirname "$0")/.." && pwd)/.build/debug/bantay"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BINARY="$ROOT/.build/release/bantay"
+if [[ ! -x "$BINARY" ]]; then
+  BINARY="$ROOT/.build/debug/bantay"
+fi
 if [[ ! -x "$BINARY" ]]; then
   echo "bantay-tui: binary not found at $BINARY -- build with 'swift build' first"
   echo "bantay-tui: skipping launch agent install"
@@ -237,6 +241,13 @@ cat > "$AGENTS_PLIST" <<PLIST
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BANTAY_DEBUG</key>
+        <string>1</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>$DATA_DIR/bantay.log</string>
     <key>StandardErrorPath</key>

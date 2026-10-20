@@ -603,9 +603,17 @@ public enum IslandMetrics: Sendable {
             with: "",
             options: .regularExpression)
 
-        // 4. Strip bare ISO timestamps (\d{4}-\d{2}-\d{2}T...) and relative time (+40ms)
+        // 4. Strip bare ISO and syslog timestamps (\d{4}-\d{2}-\d{2}[ T]...) and relative time (+40ms)
         s = s.replacingOccurrences(
-            of: "\\b\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z?\\b\\s*",
+            of: "\\b\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "\\b\\d{4}-\\d{2}-\\d{2}\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "^[a-zA-Z0-9_.-]+\\[\\d+(?::\\d+)?\\]:\\s*",
             with: "",
             options: .regularExpression)
         s = s.replacingOccurrences(
@@ -675,11 +683,12 @@ public enum IslandMetrics: Sendable {
             return true
         }
 
-        // Git diff chunks or compiler trace markers
+        // Git diff chunks, compiler trace markers, or raw syslog dates
         if trimmed.hasPrefix("@@") || trimmed.hasPrefix("diff --git")
             || trimmed.hasPrefix("[diff_block") || trimmed.hasPrefix("::error")
             || trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:")
             || trimmed.hasPrefix("Completed At:")
+            || trimmed.range(of: "^\\d{4}-\\d{2}-\\d{2}", options: .regularExpression) != nil
         {
             return true
         }
@@ -745,6 +754,7 @@ public enum IslandMetrics: Sendable {
         case approveTop
         case denyTop
         case snooze15
+        case openSettings
     }
 
     /// Map a key-down event to a global hotkey action. Requires Option and
@@ -765,6 +775,7 @@ public enum IslandMetrics: Sendable {
         case 16: return .approveTop
         case 45: return .denyTop
         case 1: return .snooze15
+        case 43: return .openSettings
         default: return nil
         }
     }

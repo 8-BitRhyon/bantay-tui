@@ -49,8 +49,9 @@ final class FileDropContentView<Content: View>: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let activeRect = MainActor.assumeIsolated { IslandHitTracker.interactiveRect }
         guard activeRect != .zero else { return super.hitTest(point) }
+        let localPoint = convert(point, from: superview)
         let hitTarget = activeRect.insetBy(dx: -12, dy: -12)
-        guard hitTarget.contains(point) else { return nil }
+        guard hitTarget.contains(localPoint) else { return nil }
         return super.hitTest(point)
     }
 

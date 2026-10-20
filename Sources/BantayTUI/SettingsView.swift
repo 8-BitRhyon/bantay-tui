@@ -38,6 +38,7 @@ struct SettingsView: View {
     @State private var autoClearTTL = Int(NotchHUDConfig.shared.autoClearTTL)
     @State private var stickyTTL = Int(NotchHUDConfig.shared.stickyApprovalTTL)
     @State private var launchAtLogin = false
+    @State private var isRefreshingConfig = false
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
     @State private var showIslandWhenIdle = NotchHUDConfig.shared.showIslandWhenIdle
     @State private var muteInTerminal = NotchHUDConfig.shared.muteInTerminal
@@ -291,24 +292,28 @@ struct SettingsView: View {
                 ForEach(Category.allCases) { category in
                     sidebarRow(
                         category,
-                        matches: categoryHasMatch(category))
+                        matches: categoryHasMatch(category)
+                    )
+                    .padding(.horizontal, 8)
                 }
                 Spacer(minLength: 0)
             }
             .frame(width: 195)
-            .padding(.top, 14)
+            .padding(.top, 40)
             .background(BantayTheme.sidebarBackground)
 
             Divider()
                 .overlay(BantayTheme.borderSubtle)
 
             // Right content panel.
-            ScrollView {
+            Group {
                 if searchText.isEmpty || categoryHasMatch(selectedCategory) {
                     Form {
                         settingsSections
                     }
                     .formStyle(.grouped)
+                    .scrollContentBackground(.hidden)
+                    .padding(.top, 16)
                 } else {
                     VStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
@@ -318,18 +323,21 @@ struct SettingsView: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(BantayTheme.textSecondary)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 320)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(maxWidth: .infinity)
-            .background(BantayTheme.deepBackground)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(BantayTheme.panelBackground)
         }
         .frame(width: 760, height: 620)
         .preferredColorScheme(.dark)
-        .background(BantayTheme.deepBackground)
-        .onAppear { refreshFromConfig() }
+        .background(BantayTheme.panelBackground)
+        .onAppear {
+            AppDelegate.dbg("SettingsView.onAppear")
+            refreshFromConfig()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWillOpen)) { _ in
-            // Defer state refresh to avoid modifying state during view update.
+            AppDelegate.dbg("SettingsView: settingsWillOpen received")
             DispatchQueue.main.async { refreshFromConfig() }
         }
     }
@@ -1023,6 +1031,7 @@ struct SettingsView: View {
                     Toggle("Launch at login", isOn: $launchAtLogin)
                         .help("Runs the app at login; installs the launch agent on first enable.")
                         .onChange(of: launchAtLogin) { newValue in
+                            guard !isRefreshingConfig else { return }
                             if !LaunchAgent.setLaunchAtLogin(newValue) {
                                 launchAtLogin = false
                                 let alert = NSAlert()
@@ -1194,6 +1203,7 @@ struct SettingsView: View {
     /// status, hook installs) so a persisted Settings window never shows
     /// stale toggles.
     private func refreshFromConfig() {
+        isRefreshingConfig = true
         captureEnabled = NotchHUDConfig.shared.captureEnabled
         enableAlerts = NotchHUDConfig.shared.enableAgentAlerts
         notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
@@ -1202,11 +1212,22 @@ struct SettingsView: View {
         claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
         herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
             manifestPath: Self.herdrManifestPath)
+        DispatchQueue.main.async {
+            isRefreshingConfig = false
+        }
         // `launchctl print` is slow; probe off the main thread so opening
         // Settings can never beachball.
         Task.detached(priority: .utility) {
             let loaded = LaunchAgent.isLoaded()
-            await MainActor.run { launchAtLogin = loaded }
+            await MainActor.run {
+                if launchAtLogin != loaded {
+                    isRefreshingConfig = true
+                    launchAtLogin = loaded
+                    DispatchQueue.main.async {
+                        isRefreshingConfig = false
+                    }
+                }
+            }
         }
     }
 
@@ -1377,6 +1398,7 @@ struct WelcomeView: View {
     /// so probe it off the main thread and default to off until it resolves —
     /// a beachball on the welcome screen is a non-starter.
     @State private var launchAtLogin = false
+    @State private var isRefreshingConfig = false
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
     @Environment(\.dismiss) private var dismiss
 
@@ -1393,6 +1415,7 @@ struct WelcomeView: View {
                     + "island feeds live agent events.")
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { newValue in
+                    guard !isRefreshingConfig else { return }
                     LaunchAgent.setLaunchAtLogin(newValue)
                 }
             Toggle("Hide island at startup", isOn: $hideAtStartup)
@@ -1415,7 +1438,15 @@ struct WelcomeView: View {
         .onAppear {
             Task.detached(priority: .utility) {
                 let loaded = LaunchAgent.isLoaded()
-                await MainActor.run { launchAtLogin = loaded }
+                await MainActor.run {
+                    if launchAtLogin != loaded {
+                        isRefreshingConfig = true
+                        launchAtLogin = loaded
+                        DispatchQueue.main.async {
+                            isRefreshingConfig = false
+                        }
+                    }
+                }
             }
         }
     }

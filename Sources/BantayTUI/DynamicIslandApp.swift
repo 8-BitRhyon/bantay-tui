@@ -1,13 +1,55 @@
 import AppKit
+import Network
 import SwiftUI
 
 @main
 struct DynamicIslandApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() {
+        Self.handleEarlyCommandLineArguments()
+    }
+
+    private static func handleEarlyCommandLineArguments() {
+        if CommandLine.arguments.contains("--mcp") || CommandLine.arguments.contains("mcp") {
+            BantayMCPServer.runStdioLoop()
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--settings")
+            || CommandLine.arguments.contains("settings")
+        {
+            let socketPath = ControlGateway.socketPath()
+            if FileManager.default.fileExists(atPath: socketPath) {
+                let sema = DispatchSemaphore(value: 0)
+                let id = "cli:settings:open"
+                let line = "{\"id\":\"\(id)\",\"method\":\"settings.open\",\"params\":{}}\n"
+                let endpoint = NWEndpoint.unix(path: socketPath)
+                let connection = NWConnection(to: endpoint, using: .tcp)
+                let queue = DispatchQueue(label: "bantay.cli.socket", qos: .userInitiated)
+                connection.stateUpdateHandler = { state in
+                    if case .ready = state {
+                        connection.send(
+                            content: Data(line.utf8),
+                            completion: .contentProcessed { _ in })
+                        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) {
+                            _, _, _, _ in
+                            sema.signal()
+                        }
+                    } else if case .failed = state {
+                        sema.signal()
+                    }
+                }
+                connection.start(queue: queue)
+                _ = sema.wait(timeout: .now() + 2.0)
+                connection.cancel()
+                exit(0)
+            }
+        }
+    }
+
     var body: some Scene {
         Settings {
-            SettingsView()
+            EmptyView()
         }
     }
 }
@@ -20,9 +62,14 @@ final class KeyablePanel: NSPanel {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+    override init() {
+        super.init()
+        Self.dbg("AppDelegate.init called")
+    }
+
     @MainActor static var window: NSWindow?
     /// The live app-delegate instance, for non-main-actor callbacks.
-    @MainActor static weak var shared: AppDelegate?
+    @MainActor static var shared: AppDelegate?
     /// Set once the island has shown at least once; un-gates `hideAtStartup`.
     @MainActor static var didShowOnce = false
     /// True while the user has forced the island visible via the tray menu.
@@ -50,11 +97,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// script runs so the action can't double-fire.
     @MainActor private var uninstallMenuItem: NSMenuItem?
 
-    /// Diagnostic trace written to stderr (landld captures it in bantay.err).
+    /// Diagnostic trace written to stderr (launchd captures it in bantay.err).
     static func dbg(_ message: String) {
-        let line = "[bantay] \(message)\n"
-        FileHandle.standardError.write(Data(line.utf8))
-        FileHandle.standardError.synchronizeFile()
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let line = "[bantay] [\(pid)] \(message)\n"
+        fputs(line, stderr)
+        fflush(stderr)
     }
 
     @MainActor
@@ -122,10 +170,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if CommandLine.arguments.contains("--mcp") || CommandLine.arguments.contains("mcp") {
-            BantayMCPServer.runStdioLoop()
-            exit(0)
-        }
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
         // Data dir + events file always exist (setup.sh parity) so the
@@ -141,6 +185,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         startBadgeTimer()
         updateIngestServer()
         updateControlGateway()
+        NotificationCenter.default.addObserver(
+            forName: .openSettingsRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                Self.dbg("Notification openSettingsRequested received, calling showSettings")
+                AppDelegate.showSettings()
+            }
+        }
         Self.dbg(
             "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
@@ -149,6 +203,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let config = NotchHUDConfig.shared
         if AgentEventManager.shared.agents.isEmpty {
             config.panelPinned = false
+        }
+        if CommandLine.arguments.contains("--settings")
+            || CommandLine.arguments.contains("settings")
+        {
+            openSettings()
         }
         if config.hideAtStartup && !config.showIslandWhenIdle {
             Self.dbg("launch: hideAtStartup set, island stays hidden until an event")
@@ -408,12 +467,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             (16, .approveTop),
             (45, .denyTop),
             (1, .snooze15),
+            (43, .openSettings),
         ].filter { keyCode, action in
             switch action {
             case .toggleIsland: return true
             case .approveTop: return config.globalHotkeyApproveEnabled
             case .denyTop: return config.globalHotkeyDenyEnabled
             case .snooze15: return config.globalHotkeySnoozeEnabled
+            case .openSettings: return true
             }
         }
         for (_, action) in enabledActions {
@@ -466,6 +527,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             config.snoozeUntilRestart = false
             config.snoozedUntil = Date().addingTimeInterval(900)
             NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+        case .openSettings:
+            showSettings()
         }
     }
 
@@ -993,38 +1056,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @MainActor
     @objc func openSettings() {
+        Self.dbg("openSettings: 1 start")
         let window = settingsWindowInstance ?? makeSettingsWindow()
+        Self.dbg("openSettings: 2 window obtained")
         settingsWindowInstance = window
         NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
-        window.center()
-        NSApp.setActivationPolicy(.regular)
+        Self.dbg("openSettings: 3 settingsWillOpen posted")
+        if let targetScreen = Self.islandScreen() ?? NSScreen.main {
+            let screenRect = targetScreen.visibleFrame
+            let x = screenRect.midX - window.frame.width / 2
+            let y = screenRect.midY - window.frame.height / 2
+            window.setFrameOrigin(NSPoint(x: x, y: y))
+        } else {
+            window.center()
+        }
+        Self.dbg("openSettings: 4 frame set")
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        Self.dbg("openSettings: 5 makeKeyAndOrderFront")
         window.makeKeyAndOrderFront(nil)
+        Self.dbg("openSettings: 6 orderFrontRegardless")
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+        Self.dbg("openSettings: 7 done")
     }
 
     @MainActor
     private func makeSettingsWindow() -> NSWindow {
+        Self.dbg("makeSettingsWindow: 1 creating window")
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
         window.title = "Bantay-TUI Settings"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        Self.dbg("makeSettingsWindow: 2 creating NSHostingController")
         window.contentViewController = NSHostingController(rootView: SettingsView())
+        Self.dbg("makeSettingsWindow: 3 NSHostingController created")
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 640, height: 480)
         window.delegate = self
-        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        window.level = .floating
+        Self.dbg("makeSettingsWindow: 4 done")
         return window
     }
 
     func windowWillClose(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window == settingsWindowInstance {
-            Task { @MainActor in
-                NSApp.setActivationPolicy(.accessory)
-            }
-        }
+        Self.dbg("AppDelegate: windowWillClose called: \(notification.name)")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Self.dbg("AppDelegate: applicationWillTerminate called!")
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

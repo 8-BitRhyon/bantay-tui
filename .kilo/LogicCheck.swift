@@ -7288,6 +7288,9 @@ struct LogicCheckMain {
                     && TaskDispatcher.canonicalAgentAlias("github-copilot") == "copilot",
                 "L148 canonicalAgentAlias maps cursor, cloudcode, windsurf, and copilot aliases"
             )
+            let prevSynthesis = StandaloneAgentDispatcher.enableInputSynthesis
+            StandaloneAgentDispatcher.enableInputSynthesis = false
+            defer { StandaloneAgentDispatcher.enableInputSynthesis = prevSynthesis }
             let cursorDispatch = TaskDispatcher.shared.dispatch(
                 task: BantayTask(title: "Cursor review", assignedAgent: "cursor")
             )

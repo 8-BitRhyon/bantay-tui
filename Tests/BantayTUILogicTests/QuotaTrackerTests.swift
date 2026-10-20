@@ -237,6 +237,10 @@
             #expect(TaskDispatcher.canonicalAgentAlias("github-copilot") == "copilot")
             #expect(TaskDispatcher.canonicalAgentAlias("antigravity-ide") == "antigravity")
 
+            let prevSynthesis = StandaloneAgentDispatcher.enableInputSynthesis
+            StandaloneAgentDispatcher.enableInputSynthesis = false
+            defer { StandaloneAgentDispatcher.enableInputSynthesis = prevSynthesis }
+
             let cursorDispatch = TaskDispatcher.shared.dispatch(
                 task: BantayTask(title: "Cursor review", assignedAgent: "cursor")
             )
