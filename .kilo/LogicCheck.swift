@@ -7674,6 +7674,121 @@ struct LogicCheckMain {
             )
         }
 
+        // =========================================================================
+        // LAYER 152: Strip Layout Engine & Critically-Damped Spring Physics (Bantay Strip)
+        // =========================================================================
+        do {
+            let win1 = StripWindowInfo(id: "w1", title: "Terminal", agentStatus: .working)
+            let win2 = StripWindowInfo(id: "w2", title: "Claude Code", agentStatus: .needsApproval)
+            let win3 = StripWindowInfo(id: "w3", title: "Codex", agentStatus: .idle)
+
+            var cols = [
+                StripColumn(id: "c1", windows: [win1], widthFraction: 0.5),
+                StripColumn(id: "c2", windows: [win2], widthFraction: 0.5),
+                StripColumn(id: "c3", windows: [win3], widthFraction: 0.5),
+            ]
+
+            let viewport = StripViewport(
+                screenOriginX: 0.0,
+                screenOriginY: 0.0,
+                screenWidth: 1000.0,
+                screenHeight: 600.0,
+                gap: 10.0,
+                inset: 10.0,
+                scrollOffset: 0.0
+            )
+
+            // 1. Column and Window Placement
+            let layout = StripLayoutEngine.computeLayout(columns: cols, viewport: viewport)
+            check(
+                layout.columnFrames.count == 3,
+                "L152 computeLayout produces 3 column frames"
+            )
+            check(
+                layout.totalStripWidth > viewport.screenWidth,
+                "L152 computeLayout total strip width extends beyond screen"
+            )
+            check(
+                layout.maxScrollOffset > 0.0,
+                "L152 computeLayout maxScrollOffset accommodates endless strip"
+            )
+            check(
+                layout.visibleWindowIDs.contains("w1") && layout.visibleWindowIDs.contains("w2"),
+                "L152 visibleWindowIDs contains initially visible windows"
+            )
+
+            // 2. Minimal Reveal Target Calculation
+            let reveal0 = StripLayoutEngine.revealTarget(columnIndex: 0, columns: cols, viewport: viewport)
+            check(
+                reveal0 == 0.0,
+                "L152 revealTarget for first column requires 0 scroll"
+            )
+            let reveal2 = StripLayoutEngine.revealTarget(columnIndex: 2, columns: cols, viewport: viewport)
+            check(
+                reveal2 > 0.0 && reveal2 <= layout.maxScrollOffset,
+                "L152 revealTarget scrolls just enough to reveal last column"
+            )
+
+            // 3. Center Target Calculation
+            let center1 = StripLayoutEngine.centerTarget(columnIndex: 1, columns: cols, viewport: viewport)
+            check(
+                center1 >= 0.0,
+                "L152 centerTarget centers target column"
+            )
+
+            // 4. Width Presets and Cycling
+            let nextW = StripLayoutEngine.cycleWidth(currentFraction: 0.5)
+            check(
+                abs(nextW - (2.0 / 3.0)) < 0.01,
+                "L152 cycleWidth advances 0.5 to 0.667"
+            )
+            let wrapW = StripLayoutEngine.cycleWidth(currentFraction: 1.0)
+            check(
+                abs(wrapW - 0.25) < 0.01,
+                "L152 cycleWidth wraps 1.0 to 0.25"
+            )
+
+            // 5. Agent Approval Discovery
+            let approvalCol = StripLayoutEngine.findApprovalColumnIndex(columns: cols)
+            check(
+                approvalCol == 1,
+                "L152 findApprovalColumnIndex identifies column 1 needing approval"
+            )
+
+            // 6. Critically Damped Spring Physics
+            var spring = DampedSpring(initialValue: 0.0)
+            spring.target = 400.0
+            for _ in 0..<120 {
+                _ = spring.step(dt: 0.016, omega: 13.0)
+            }
+            check(
+                abs(spring.x - 400.0) < 1.0,
+                "L152 DampedSpring converges accurately to target"
+            )
+            let rubber = DampedSpring.rubberBand(offset: -50.0, maxOffset: 500.0, screenWidth: 1000.0)
+            check(
+                rubber < 0.0 && rubber > -50.0,
+                "L152 rubberBand applies asymptotic resistance to overscroll"
+            )
+
+            // 7. Topology Mutations (Stack, Unstack, Reorder)
+            let stacked = StripLayoutEngine.stack(sourceColIndex: 0, targetColIndex: 1, columns: &cols)
+            check(
+                stacked && cols.count == 2 && cols[0].windows.count == 2,
+                "L152 stack merges column 0 into column 1"
+            )
+            let unstacked = StripLayoutEngine.unstack(columnIndex: 0, popToRight: true, columns: &cols)
+            check(
+                unstacked && cols.count == 3,
+                "L152 unstack pops window back into dedicated column"
+            )
+            let reordered = StripLayoutEngine.reorder(fromIndex: 0, toIndex: 1, columns: &cols)
+            check(
+                reordered,
+                "L152 reorder swaps column order"
+            )
+        }
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 

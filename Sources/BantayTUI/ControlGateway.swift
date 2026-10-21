@@ -12,6 +12,12 @@ enum ControlGateway {
         case focus
         case prompt
         case openSettings
+        case stripToggle
+        case stripFocus
+        case stripCenter
+        case stripWidth
+        case stripApproval
+        case stripStatus
         case unknown
     }
 
@@ -65,8 +71,13 @@ enum ControlGateway {
             "pane.send_keys", "pane.focus", "agent.prompt",
         ]
 
+        static let stripCatalog: [String] = [
+            "strip.toggle", "strip.focus", "strip.center",
+            "strip.width", "strip.approval", "strip.status",
+        ]
+
         static func isKnown(_ method: String) -> Bool {
-            catalog.contains(method) || method == "settings.open"
+            catalog.contains(method) || method == "settings.open" || stripCatalog.contains(method)
         }
     }
 
@@ -104,6 +115,12 @@ enum ControlGateway {
         case "pane.focus": return .focus
         case "agent.prompt": return .prompt
         case "settings.open": return .openSettings
+        case "strip.toggle": return .stripToggle
+        case "strip.focus": return .stripFocus
+        case "strip.center": return .stripCenter
+        case "strip.width": return .stripWidth
+        case "strip.approval": return .stripApproval
+        case "strip.status": return .stripStatus
         default: return .unknown
         }
     }
@@ -238,6 +255,59 @@ final class ControlGatewayServer: @unchecked Sendable {
             return ControlGateway.GatewayResponse.ok(
                 id: request.id,
                 result: ["opened": true])
+        case .stripToggle:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripToggleRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["toggled": true])
+        case .stripFocus:
+            let direction = stringParam(request.params, "direction") ?? "right"
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripFocusRequested,
+                    object: nil,
+                    userInfo: ["direction": direction])
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["focused": direction])
+        case .stripCenter:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripCenterRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["centered": true])
+        case .stripWidth:
+            let mode = stringParam(request.params, "mode") ?? "cycle"
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripWidthRequested,
+                    object: nil,
+                    userInfo: ["mode": mode])
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["mode": mode])
+        case .stripApproval:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripApprovalRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["jumped": true])
+        case .stripStatus:
+            let config = StripConfiguration.load()
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: [
+                    "enabled": config.isEnabled,
+                    "defaultWidthPreset": config.defaultWidthPreset,
+                    "gap": config.gap,
+                    "inset": config.inset,
+                ])
         case .unknown:
             return ControlGateway.GatewayResponse.error(
                 id: request.id, code: "unknown_method", message: request.method)

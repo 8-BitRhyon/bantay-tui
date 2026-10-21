@@ -10,6 +10,42 @@ struct DynamicIslandApp: App {
         Self.handleEarlyCommandLineArguments()
     }
 
+    private static func sendSocketCommand(method: String, params: [String: Any]) {
+        let socketPath = ControlGateway.socketPath()
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            fputs("[bantay] Daemon socket not found at \(socketPath)\n", stderr)
+            exit(1)
+        }
+        let sema = DispatchSemaphore(value: 0)
+        let id = "cli:\(method)"
+        let paramsData = (try? JSONSerialization.data(withJSONObject: params)) ?? Data("{}".utf8)
+        let paramsString = String(data: paramsData, encoding: .utf8) ?? "{}"
+        let line = "{\"id\":\"\(id)\",\"method\":\"\(method)\",\"params\":\(paramsString)}\n"
+        let endpoint = NWEndpoint.unix(path: socketPath)
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        let queue = DispatchQueue(label: "bantay.cli.socket", qos: .userInitiated)
+        connection.stateUpdateHandler = { state in
+            if case .ready = state {
+                connection.send(
+                    content: Data(line.utf8),
+                    completion: .contentProcessed { _ in })
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) {
+                    data, _, _, _ in
+                    if let data = data, let str = String(data: data, encoding: .utf8) {
+                        print(str.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                    sema.signal()
+                }
+            } else if case .failed = state {
+                sema.signal()
+            }
+        }
+        connection.start(queue: queue)
+        _ = sema.wait(timeout: .now() + 2.0)
+        connection.cancel()
+        exit(0)
+    }
+
     private static func handleEarlyCommandLineArguments() {
         if CommandLine.arguments.contains("--mcp") || CommandLine.arguments.contains("mcp") {
             BantayMCPServer.runStdioLoop()
@@ -18,31 +54,35 @@ struct DynamicIslandApp: App {
         if CommandLine.arguments.contains("--settings")
             || CommandLine.arguments.contains("settings")
         {
-            let socketPath = ControlGateway.socketPath()
-            if FileManager.default.fileExists(atPath: socketPath) {
-                let sema = DispatchSemaphore(value: 0)
-                let id = "cli:settings:open"
-                let line = "{\"id\":\"\(id)\",\"method\":\"settings.open\",\"params\":{}}\n"
-                let endpoint = NWEndpoint.unix(path: socketPath)
-                let connection = NWConnection(to: endpoint, using: .tcp)
-                let queue = DispatchQueue(label: "bantay.cli.socket", qos: .userInitiated)
-                connection.stateUpdateHandler = { state in
-                    if case .ready = state {
-                        connection.send(
-                            content: Data(line.utf8),
-                            completion: .contentProcessed { _ in })
-                        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) {
-                            _, _, _, _ in
-                            sema.signal()
-                        }
-                    } else if case .failed = state {
-                        sema.signal()
-                    }
-                }
-                connection.start(queue: queue)
-                _ = sema.wait(timeout: .now() + 2.0)
-                connection.cancel()
-                exit(0)
+            sendSocketCommand(method: "settings.open", params: [:])
+        }
+        if let stripIdx = CommandLine.arguments.firstIndex(where: {
+            $0 == "strip" || $0 == "--strip"
+        }) {
+            let sub =
+                CommandLine.arguments.indices.contains(stripIdx + 1)
+                ? CommandLine.arguments[stripIdx + 1] : "toggle"
+            switch sub {
+            case "toggle":
+                sendSocketCommand(method: "strip.toggle", params: [:])
+            case "focus":
+                let dir =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? CommandLine.arguments[stripIdx + 2] : "right"
+                sendSocketCommand(method: "strip.focus", params: ["direction": dir])
+            case "center":
+                sendSocketCommand(method: "strip.center", params: [:])
+            case "width":
+                let mode =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? CommandLine.arguments[stripIdx + 2] : "cycle"
+                sendSocketCommand(method: "strip.width", params: ["mode": mode])
+            case "approval":
+                sendSocketCommand(method: "strip.approval", params: [:])
+            case "status":
+                sendSocketCommand(method: "strip.status", params: [:])
+            default:
+                sendSocketCommand(method: "strip.toggle", params: [:])
             }
         }
     }
@@ -195,6 +235,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 AppDelegate.showSettings()
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: .stripToggleRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.toggle()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripFocusRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let dir = (note.userInfo?["direction"] as? String) ?? "right"
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.focusColumn(direction: dir)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripCenterRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.centerActiveColumn()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripWidthRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let mode = (note.userInfo?["mode"] as? String) ?? "cycle"
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.cycleWidth(mode: mode)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripApprovalRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.jumpToApprovalAgent()
+            }
+        }
+        StripWindowManager.shared.start()
         Self.dbg(
             "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {

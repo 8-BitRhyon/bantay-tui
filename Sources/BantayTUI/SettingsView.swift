@@ -10,6 +10,7 @@ struct SettingsView: View {
         case general = "General"
         case appearance = "Appearance"
         case agents = "Agents"
+        case strip = "Infinite Strip"
         case notifications = "Notifications"
         case integrations = "Integrations"
         case advanced = "Advanced"
@@ -21,6 +22,7 @@ struct SettingsView: View {
             case .general: "gearshape"
             case .appearance: "paintbrush"
             case .agents: "terminal"
+            case .strip: "rectangle.split.3x1"
             case .notifications: "bell"
             case .integrations: "link"
             case .advanced: "wrench.and.screwdriver"
@@ -106,6 +108,16 @@ struct SettingsView: View {
     @State private var autoDispatchTasks = NotchHUDConfig.shared.autoDispatchTasks
     @State private var focusTerminalOnDispatch = NotchHUDConfig.shared.focusTerminalOnDispatch
 
+    @State private var stripEnabled = StripConfiguration.load().isEnabled
+    @State private var stripGap = StripConfiguration.load().gap
+    @State private var stripInset = StripConfiguration.load().inset
+    @State private var stripAutoCenter = StripConfiguration.load().autoCenterOnApproval
+    @State private var stripHalos = StripConfiguration.load().statusHalosEnabled
+    @State private var stripHotkeys = StripConfiguration.load().hotkeysEnabled
+    @State private var stripWidthPreset = StripConfiguration.load().defaultWidthPreset
+    @State private var stripSpringOmega = StripConfiguration.load().springOmega
+    @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
+
     private static let sectionKeywords: [String: [String]] = [
         "Startup": [
             "launch at login", "hide island at startup", "show island when idle", "idle position",
@@ -140,6 +152,17 @@ struct SettingsView: View {
         ],
         "Tasks & Dispatching": [
             "auto-run tasks", "dispatch", "focus terminal or app", "reminders", "apple reminders",
+        ],
+        "Infinite Strip": [
+            "strip", "canvas", "scrolling", "window manager", "tiling", "paperwm",
+            "niri", "chainyourmac", "halos", "columns", "hotkeys", "shortcuts",
+            "approval", "jump", "stack", "unstack", "gap", "inset", "spring",
+        ],
+        "Strip Canvas": [
+            "strip", "gap", "margin", "inset", "width", "columns", "tiling", "canvas",
+        ],
+        "Navigation & Shortcuts": [
+            "hotkey", "shortcut", "h", "l", "f", "r", "c", "a", "vim", "navigation",
         ],
         "Shelf": [
             "shelf tab", "clipboard history", "dropped files", "shelf limit", "expire", "duration",
@@ -357,6 +380,8 @@ struct SettingsView: View {
             ["Pill behavior", "Expanded panel", "Displays", "Mascot & Pet Companion"]
         case .agents:
             ["Muted sources", "Tasks & Dispatching", "Shelf", "Expanded panel"]
+        case .strip:
+            ["Infinite Strip", "Strip Canvas", "Navigation & Shortcuts"]
         case .notifications:
             ["Alerts", "Push notifications (ntfy.sh)", "Quiet hours", "tmux status bar"]
         case .integrations:
@@ -617,6 +642,111 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.shelfKeepDuration = newValue
                         ShelfStore.shared.cleanExpired()
                     }
+                }
+            }
+
+            if selectedCategory == .strip && matchesSearch("Strip Canvas") {
+                Section("Strip Canvas (Infinite Scrolling)") {
+                    Toggle("Enable infinite strip layout", isOn: $stripEnabled)
+                        .help("Tiles all active windows side-by-side on an endless horizontal strip without shrinking.")
+                        .onChange(of: stripEnabled) { newValue in
+                            stripEnabled = newValue
+                            updateStripConfig()
+                            StripWindowManager.shared.toggle(enabled: newValue)
+                        }
+
+                    if !hasAccessibility {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.yellow)
+                            Text("Accessibility permissions required to move and tile windows.")
+                                .font(.system(size: 11))
+                            Spacer()
+                            Button("Grant Access") {
+                                StripWindowRegistry.promptAccessibilityPermission()
+                                hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                        .padding(8)
+                        .background(Color.yellow.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+
+                    Stepper("Window gap: \(Int(stripGap)) pt", value: $stripGap, in: 0...48, step: 2)
+                        .onChange(of: stripGap) { _ in updateStripConfig() }
+
+                    Stepper("Edge margins: \(Int(stripInset)) pt", value: $stripInset, in: 0...64, step: 2)
+                        .onChange(of: stripInset) { _ in updateStripConfig() }
+
+                    Picker("Default column width", selection: $stripWidthPreset) {
+                        Text("33% (One Third)").tag(1.0 / 3.0)
+                        Text("50% (Half Screen)").tag(0.5)
+                        Text("66% (Two Thirds)").tag(2.0 / 3.0)
+                        Text("100% (Full Display)").tag(1.0)
+                    }
+                    .onChange(of: stripWidthPreset) { _ in updateStripConfig() }
+
+                    Stepper("Spring physics omega: \(Int(stripSpringOmega))", value: $stripSpringOmega, in: 8...26, step: 1)
+                        .help("Stiffness of the smooth spring animation when scrolling.")
+                        .onChange(of: stripSpringOmega) { _ in updateStripConfig() }
+                }
+            }
+
+            if selectedCategory == .strip && matchesSearch("Infinite Strip") {
+                Section("Agent Awareness & Halos") {
+                    Toggle("Agent status border halos", isOn: $stripHalos)
+                        .help("Displays floating border halos: Amber for approval, Cyan for working, Green for finished.")
+                        .onChange(of: stripHalos) { _ in updateStripConfig() }
+
+                    Toggle("Auto-jump to agent when approval needed (⌃⌥A)", isOn: $stripAutoCenter)
+                        .help("Smoothly spring-scrolls the viewport directly to the blocked agent window.")
+                        .onChange(of: stripAutoCenter) { _ in updateStripConfig() }
+                }
+            }
+
+            if selectedCategory == .strip && matchesSearch("Navigation & Shortcuts") {
+                Section("Keyboard Shortcuts (hold ⌃⌥)") {
+                    Toggle("Enable strip global hotkeys", isOn: $stripHotkeys)
+                        .onChange(of: stripHotkeys) { _ in updateStripConfig() }
+
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                        GridRow {
+                            Text("⌃⌥H / ⌃⌥L").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Focus previous / next column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥⇧H / ⌃⌥⇧L").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Move column left / right").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥R").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Cycle column width (25% → 100%)").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥F").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Toggle full width / restored width").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥C").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Center current column in display").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥A").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Jump directly to agent requesting approval").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥]").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Stack window into adjacent column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥[").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Pop focused window out of stack").foregroundColor(.secondary)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .padding(.vertical, 4)
                 }
             }
 
@@ -1212,6 +1342,16 @@ struct SettingsView: View {
         claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
         herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
             manifestPath: Self.herdrManifestPath)
+        let stripCfg = StripConfiguration.load()
+        stripEnabled = stripCfg.isEnabled
+        stripGap = stripCfg.gap
+        stripInset = stripCfg.inset
+        stripAutoCenter = stripCfg.autoCenterOnApproval
+        stripHalos = stripCfg.statusHalosEnabled
+        stripHotkeys = stripCfg.hotkeysEnabled
+        stripWidthPreset = stripCfg.defaultWidthPreset
+        stripSpringOmega = stripCfg.springOmega
+        hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
         DispatchQueue.main.async {
             isRefreshingConfig = false
         }
@@ -1229,6 +1369,20 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func updateStripConfig() {
+        var cfg = StripConfiguration.load()
+        cfg.isEnabled = stripEnabled
+        cfg.gap = stripGap
+        cfg.inset = stripInset
+        cfg.autoCenterOnApproval = stripAutoCenter
+        cfg.statusHalosEnabled = stripHalos
+        cfg.hotkeysEnabled = stripHotkeys
+        cfg.defaultWidthPreset = stripWidthPreset
+        cfg.springOmega = stripSpringOmega
+        cfg.save()
+        StripWindowManager.shared.config = cfg
     }
 
     private func terminalLabel(_ bundleID: String) -> String {

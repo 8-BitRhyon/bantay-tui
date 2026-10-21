@@ -6,6 +6,11 @@ extension Notification.Name {
     static let settingsWillOpen = Notification.Name("settingsWillOpen")
     static let openSettingsRequested = Notification.Name("openSettingsRequested")
     static let mascotLeveledUp = Notification.Name("mascotLeveledUp")
+    static let stripToggleRequested = Notification.Name("stripToggleRequested")
+    static let stripFocusRequested = Notification.Name("stripFocusRequested")
+    static let stripCenterRequested = Notification.Name("stripCenterRequested")
+    static let stripWidthRequested = Notification.Name("stripWidthRequested")
+    static let stripApprovalRequested = Notification.Name("stripApprovalRequested")
 }
 
 @MainActor
