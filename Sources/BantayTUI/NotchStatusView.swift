@@ -18,16 +18,6 @@ struct NotchStatusView: View {
     @State private var queueSelections: [String: Set<Int>] = [:]
     @State private var showWelcome = false
     @State private var now = Date()
-    enum ShelfTab: String, CaseIterable, Identifiable {
-        case agents = "Agents"
-        case tasks = "Tasks"
-        case attention = "Attention"
-        case history = "History"
-        case shelf = "Shelf"
-        case media = "Media"
-        case notes = "Notes"
-        var id: String { rawValue }
-    }
     @State private var selectedTab: ShelfTab = .agents
 
     private var showTasks: Bool { selectedTab == .tasks }
@@ -37,14 +27,7 @@ struct NotchStatusView: View {
     private var showMedia: Bool { selectedTab == .media }
     private var showNotes: Bool { selectedTab == .notes }
 
-    private enum HistoryMode: String, CaseIterable {
-        case timeline = "Timeline"
-        case spend = "Spend"
-        case quotas = "Quotas"
-        case sessions = "Sessions"
-    }
     @State private var historyMode: HistoryMode = .timeline
-    @State private var copiedNotes = false
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
     /// icon stays reactive; the config is the single behavioral source of
     /// truth (all logic reads it, and it is the only writer of the defaults).
@@ -61,6 +44,7 @@ struct NotchStatusView: View {
     @State private var shelfDropGlow = false
     /// The persisted, thumbnail-rendering shelf (ShelfStore owns files).
     @ObservedObject private var shelfStore = ShelfStore.shared
+    @ObservedObject private var stripManager = StripWindowManager.shared
     @State private var lastChangeCount = NSPasteboard.general.changeCount
     @State private var legacyKeyMonitor: Any?
     /// Keyboard-navigation cursor over `mergedRoster` (plan 016 4b). Nil means
@@ -203,7 +187,7 @@ struct NotchStatusView: View {
                 let itemCount =
                     showShelf
                     ? max(shelfStore.files.count + clipboardItems.count, 2)
-                    : (showHistory ? max(historyStore.sessions.count, 2) : 3)
+                    : (showHistory ? max(SessionHistoryStore.shared.sessions.count, 2) : 3)
                 return IslandMetrics.expandedSize(
                     topInset: chipTopOffset, agentCount: itemCount,
                     queueCount: 0,
@@ -247,7 +231,7 @@ struct NotchStatusView: View {
             let itemCount =
                 showShelf
                 ? max(shelfStore.files.count + clipboardItems.count, 2)
-                : (showHistory ? max(historyStore.sessions.count, 2) : 3)
+                : (showHistory ? max(SessionHistoryStore.shared.sessions.count, 2) : 3)
             return IslandMetrics.contentHeight(
                 isExpanded: isExpanded, topInset: chipTopOffset,
                 agentCount: itemCount, queueCount: 0,
@@ -328,7 +312,7 @@ struct NotchStatusView: View {
                 .offset(y: chipTopOffset)
         }
         .overlay(edgeGlow)
-        .overlay(systemHUDOverlay, alignment: .bottom)
+        .overlay(SystemHUDOverlayView(), alignment: .bottom)
         .frame(
             width: isExpanded ? islandWidth : (islandWidth + cornerRad * 2),
             height: islandHeight,
@@ -658,34 +642,6 @@ struct NotchStatusView: View {
         peekTask = nil
     }
 
-    /// Cancels composing on Escape. `.onKeyPress` is macOS 14+; on older
-    /// systems the compose row's ✕ button remains the cancel affordance.
-    private struct EscapeCancelsModifier: ViewModifier {
-        var onEscape: () -> Void
-        @ViewBuilder
-        func body(content: Content) -> some View {
-            if #available(macOS 14.0, *) {
-                content.onKeyPress(.escape) {
-                    onEscape()
-                    return .handled
-                }
-            } else {
-                content
-            }
-        }
-    }
-
-    /// Hides the focus ring around the island (macOS 14+).
-    private struct FocusEffectDisabledCompat: ViewModifier {
-        @ViewBuilder
-        func body(content: Content) -> some View {
-            if #available(macOS 14.0, *) {
-                content.focusEffectDisabled()
-            } else {
-                content
-            }
-        }
-    }
 
     /// Single-key roster shortcuts via `.onKeyPress` on macOS 14+. On older
     /// systems the local key monitor (installed in onAppear) covers them.
@@ -863,14 +819,21 @@ struct NotchStatusView: View {
             approvalPill(event: event, paneId: paneId)
                 .transition(contentTransition)
         } else if isCenteredClosed {
-            centeredSplitStrip
-                .transition(contentTransition)
-                .onTapGesture { expandTo(true) }
+            CenteredSplitStripView(
+                eventManager: eventManager,
+                islandWidth: islandWidth,
+                islandHeight: islandHeight
+            )
+            .transition(contentTransition)
+            .onTapGesture { expandTo(true) }
         } else if let event = eventManager.currentEvent {
-            closedPill(
+            ClosedPillView(
                 color: event.kind.color,
                 label: event.kind.label,
                 title: showDetail ? event.title : nil,
+                mascotState: currentMascotState,
+                islandWidth: islandWidth,
+                islandHeight: islandHeight,
                 action: {
                     if let paneId = event.paneId { adapter.paneFocus(paneId: paneId) }
                 }
@@ -883,9 +846,14 @@ struct NotchStatusView: View {
                 }
             }
         } else if !eventManager.agents.isEmpty {
-            agentStrip
-                .transition(contentTransition)
-                .onTapGesture { expandTo(true) }
+            AgentIdleStripView(
+                eventManager: eventManager,
+                islandWidth: islandWidth,
+                islandHeight: islandHeight,
+                idleShownCount: idleShownCount
+            )
+            .transition(contentTransition)
+            .onTapGesture { expandTo(true) }
         } else if isExpanded {
             expandedList
                 .transition(contentTransition)
@@ -897,248 +865,6 @@ struct NotchStatusView: View {
 
     private var emptyBar: some View {
         Rectangle().fill(.clear).frame(width: islandWidth, height: IslandMetrics.pillHeight)
-    }
-
-    /// Live status strip splitting active agents and alerts into left and right wings.
-    @ViewBuilder
-    private var centeredSplitStrip: some View {
-        let agents = eventManager.agents
-        let needsYou = agents.filter { $0.kind == .accessRequest || $0.kind == .waiting }
-        let working = agents.filter { $0.kind.isOngoing && $0.kind != .accessRequest }
-        let failed = agents.filter { $0.kind == .failed }
-        let left = working.prefix(3)
-        let windowW = IslandMetrics.windowSize().width
-        let sideWidth = max(
-            (windowW
-                - IslandMetrics.notchWidth(
-                    screenWidth: AppDelegate.islandScreen()?.frame.width ?? windowW,
-                    auxLeft: AppDelegate.auxLeftWidth,
-                    auxRight: AppDelegate.auxRightWidth,
-                    safeTop: AppDelegate.topInset)) / 2, 0)
-        let notchPad: CGFloat = 8
-
-        HStack(spacing: 0) {
-            // Left wing: working agents OR transient ongoing progress (e.g. "Working").
-            // ALWAYS stays to the left of the physical camera notch cutout.
-            HStack(spacing: IslandMetrics.idleChipGap) {
-                if !left.isEmpty {
-                    ForEach(Array(left.enumerated()), id: \.element.id) { _, agent in
-                        HStack(spacing: IslandMetrics.idleChipDotGap) {
-                            Circle()
-                                .fill(Color(hex: agent.kind.color))
-                                .frame(
-                                    width: IslandMetrics.idleDotSize,
-                                    height: IslandMetrics.idleDotSize)
-                            Text(agent.source)
-                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, IslandMetrics.idleChipHPad)
-                        .frame(height: 20)
-                        .background(Color.white.opacity(0.10), in: Capsule())
-                    }
-                    if working.count > left.count {
-                        Text("+\(working.count - left.count)")
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                } else if let event = eventManager.currentEvent, event.kind.isOngoing {
-                    HStack(spacing: IslandMetrics.idleChipDotGap) {
-                        Circle()
-                            .fill(Color(hex: event.kind.color))
-                            .frame(
-                                width: IslandMetrics.idleDotSize,
-                                height: IslandMetrics.idleDotSize)
-                        Text(
-                            event.title.map { IslandMetrics.cleanHUDText($0, maxCharacters: 40) }
-                                .flatMap { $0.isEmpty ? nil : $0 } ?? event.kind.label
-                        )
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                    }
-                    .padding(.horizontal, IslandMetrics.idleChipHPad)
-                    .frame(height: 20)
-                    .background(Color.white.opacity(0.10), in: Capsule())
-                } else {
-                    HStack(spacing: IslandMetrics.idleChipDotGap) {
-                        Circle()
-                            .fill(Color(hex: "34D399"))
-                            .frame(
-                                width: IslandMetrics.idleDotSize,
-                                height: IslandMetrics.idleDotSize)
-                        Text("Bantay")
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.85))
-                    }
-                    .padding(.horizontal, IslandMetrics.idleChipHPad)
-                    .frame(height: 20)
-                    .background(Color.white.opacity(0.10), in: Capsule())
-                }
-            }
-            .padding(.trailing, notchPad)
-            .frame(width: sideWidth, alignment: .trailing)
-
-            Spacer(minLength: 0)
-
-            // Right wing: needs-you count (amber) and failed count (red).
-            HStack(spacing: 5) {
-                if !needsYou.isEmpty {
-                    Circle().fill(Color(hex: AgentEventKind.accessRequest.color))
-                        .frame(width: 7, height: 7)
-                    Text("\(needsYou.count) need you")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-                if !failed.isEmpty {
-                    Circle().fill(Color(hex: AgentEventKind.failed.color))
-                        .frame(width: 7, height: 7)
-                    Text("\(failed.count) failed")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-                if needsYou.isEmpty && failed.isEmpty {
-                    Text("Idle")
-                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.55))
-                }
-            }
-            .padding(.horizontal, IslandMetrics.idleChipHPad)
-            .frame(height: 20)
-            .background(Color.white.opacity(0.08), in: Capsule())
-            .padding(.leading, notchPad)
-            .frame(width: sideWidth, alignment: .leading)
-        }
-        .frame(width: islandWidth, height: islandHeight, alignment: .top)
-        .contentShape(Rectangle())
-    }
-
-    private func closedPill(
-        color: String, label: String, title: String?,
-        dots: [AgentEventKind] = [], action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if NotchHUDConfig.shared.showNotchMascot {
-                    MascotView(
-                        archetype: NotchHUDConfig.shared.selectedMascotArchetype,
-                        state: currentMascotState,
-                        size: 13
-                    )
-                } else {
-                    Circle().fill(Color(hex: color)).frame(width: 7, height: 7)
-                }
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-                if let title {
-                    Text("·").foregroundStyle(.secondary)
-                    Text(title)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if !dots.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(Array(dots.prefix(5).enumerated()), id: \.offset) { _, kind in
-                            Circle().fill(Color(hex: kind.color)).frame(width: 4, height: 4)
-                        }
-                        if dots.count > 5 {
-                            Text("+\(dots.count - 5)")
-                                .font(.system(size: 8, weight: .medium))
-                                .foregroundColor(.white.opacity(0.5))
-                        }
-                    }
-                }
-            }
-            .frame(width: islandWidth, height: islandHeight)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Idle (closed) live strip: per-agent chips beside the notch, in the style
-    /// the user picked. Tap to expand the full roster. Clipped strictly to
-    /// islandWidth so chips never overflow container boundaries (fixes UI leak).
-    @ViewBuilder
-    private var agentStrip: some View {
-        let agents = eventManager.agents
-        let shown = idleShownCount
-        let overflow = max(agents.count - shown, 0)
-        ZStack {
-            switch NotchHUDConfig.shared.idleStyle {
-            case .dots:
-                HStack(spacing: 4) {
-                    ForEach(Array(agents.prefix(shown).enumerated()), id: \.offset) { _, agent in
-                        Circle()
-                            .fill(Color(hex: agent.kind.color))
-                            .frame(
-                                width: IslandMetrics.idleDotSize, height: IslandMetrics.idleDotSize)
-                    }
-                    if overflow > 0 {
-                        Text("+\(overflow)")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.55))
-                    }
-                }
-                .padding(.horizontal, IslandMetrics.idleChipHPad)
-            case .summary:
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color(hex: AgentEventKind.idle.color))
-                        .frame(width: 7, height: 7)
-                    Text("\(agents.count) agent\(agents.count == 1 ? "" : "s")")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-            case .names:
-                HStack(spacing: IslandMetrics.idleChipGap) {
-                    ForEach(Array(agents.prefix(shown).enumerated()), id: \.offset) { _, agent in
-                        HStack(spacing: IslandMetrics.idleChipDotGap) {
-                            Circle()
-                                .fill(Color(hex: agent.kind.color))
-                                .frame(
-                                    width: IslandMetrics.idleDotSize,
-                                    height: IslandMetrics.idleDotSize)
-                            Text(agent.source)
-                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        .padding(.horizontal, IslandMetrics.idleChipHPad)
-                        .frame(height: 20)
-                        .background(Color.white.opacity(0.10), in: Capsule())
-                    }
-                    if overflow > 0 {
-                        Text("+\(overflow)")
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                }
-            }
-        }
-        .frame(width: islandWidth, height: islandHeight)
-        .clipped()
-        .contentShape(Rectangle())
-        .overlay(alignment: .topTrailing) { recentCompletionBadge }
-    }
-
-    @ViewBuilder
-    private var recentCompletionBadge: some View {
-        if !eventManager.recentCompletions.isEmpty {
-            Text("\(eventManager.recentCompletions.count) recent")
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 5)
-                .frame(height: 16)
-                .background(Color.teal.opacity(0.85), in: Capsule())
-                .offset(x: -5, y: -4)
-                .accessibilityLabel(
-                    "\(eventManager.recentCompletions.count) recent agent completions")
-        }
     }
 
     @ViewBuilder
@@ -1455,69 +1181,53 @@ struct NotchStatusView: View {
         }
     }
 
-    private func approvalActionButton(
-        systemName: String, color: Color, help: String, disabled: Bool = false,
-        label: String? = nil, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: {
-            #if os(macOS)
-                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-            #endif
-            action()
-        }) {
-            Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(disabled ? color.opacity(0.3) : color)
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(label ?? help)
-        .disabled(disabled)
-    }
-
-    private func approvalActionButton(
-        label: Text, color: Color, help: String, disabled: Bool = false,
-        accessibilityLabel: String? = nil, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: {
-            #if os(macOS)
-                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-            #endif
-            action()
-        }) {
-            label
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .monospacedDigit()
-                .foregroundColor(disabled ? color.opacity(0.3) : color)
-                .padding(.horizontal, 6)
-                .frame(minWidth: 24, minHeight: 24)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(accessibilityLabel ?? help)
-        .disabled(disabled)
-    }
-
     /// Affordance that opens the full-log + diff preview overlay (plan 016
-    /// 3a). One overlay at a time; the controller cancels any in-flight fetch
-    /// when the overlay is dismissed.
-    private func peekButton(agent: AgentSnapshot) -> some View {
-        TactileRowButton(
-            systemName: "eye",
-            helpText: "View live output + git diff"
-        ) {
-            PeekPanelController.shared.show(agent: agent, adapter: adapter)
-        }
+
+    private var isQuotaLow: Bool {
+        let config = NotchHUDConfig.shared
+        let cost = eventManager.usage.costUSD
+        let budget = max(config.dailyBudgetUSD, 0.5)
+        let isBudgetExceeded = (cost / budget) >= 1.0
+        let tpm = eventManager.usageRate.tokensPerMinute ?? 0
+        let isHighBurn = tpm >= config.highBurnThresholdTPM
+        return isBudgetExceeded || isHighBurn
+    }
+
+    private var currentMascotState: MascotState {
+        MascotEvaluator.evaluate(
+            agents: mergedRoster,
+            quotaLow: isQuotaLow,
+            recentCompletion: eventManager.currentEvent?.kind == .completed
+        )
     }
 
     private var expandedList: some View {
         let counts = IslandMetrics.agentCounts(
             kinds: visibleAgents.map(\.kind))
         return VStack(spacing: 0) {
-            headerBar(counts: counts)
+            NotchHeaderBarView(
+                eventManager: eventManager,
+                counts: counts,
+                mascotState: currentMascotState,
+                selectedTab: $selectedTab,
+                historyMode: $historyMode,
+                showThoughtBubble: $showThoughtBubble,
+                panelPinned: panelPinned,
+                onTogglePin: {
+                    if NotchHUDConfig.shared.panelPinned {
+                        NotchHUDConfig.shared.panelPinned = IslandMetrics.pinAfterCollapse(
+                            reason: .explicitUnpin,
+                            wasPinned: true,
+                            persistAcrossCollapse: true)
+                    } else {
+                        NotchHUDConfig.shared.panelPinned = true
+                    }
+                },
+                onOpenSettings: {
+                    AppDelegate.showSettings()
+                },
+                onExpandTo: { expandTo($0) }
+            )
 
             if let digest = AwayDigestStore.shared.currentDigest {
                 AwayDigestCardView(digest: digest) {
@@ -1525,8 +1235,23 @@ struct NotchStatusView: View {
                 }
             }
 
+            if stripManager.config.isEnabled && !stripManager.columns.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    StripMiniMapHUD(
+                        columns: stripManager.columns,
+                        activeColumnIndex: stripManager.activeColumnIndex,
+                        visibleWindowIDs: stripManager.layoutResult.visibleWindowIDs,
+                        onSelectColumn: { index in
+                            stripManager.jumpToColumn(index: index)
+                        }
+                    )
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+            }
+
             if NotchHUDConfig.shared.showShelfTab {
-                shelfTabBar
+                NotchTabBarView(selectedTab: $selectedTab)
             }
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
@@ -1534,76 +1259,58 @@ struct NotchStatusView: View {
             if showTasks {
                 TaskWidgetView()
             } else if showAttention {
-                attentionContent
+                NotchAttentionView(
+                    mergedRoster: mergedRoster,
+                    adapter: adapter,
+                    hoveredRow: $hoveredRow,
+                    composingPaneId: $composingPaneId,
+                    promptText: $promptText,
+                    promptFocused: $promptFocused,
+                    queueSelections: $queueSelections,
+                    reduceMotion: reduceMotion,
+                    now: now,
+                    onFocus: { focusAgent($0) },
+                    onSubmitPrompt: { submitPrompt() },
+                    onCancelComposing: { cancelComposing() },
+                    onBeginComposing: { beginComposing($0) }
+                )
             } else if showHistory {
                 historyContent
             } else if showShelf {
-                shelfContent
+                NotchShelfView(
+                    shelfStore: shelfStore,
+                    clipboardItems: clipboardItems,
+                    shelfDropGlow: shelfDropGlow
+                )
             } else if showMedia {
-                mediaContent
+                NotchMediaView()
             } else if showNotes {
-                notesContent
+                NotchNotesView()
             } else {
-                rosterContent
+                NotchRosterView(
+                    visibleAgents: visibleAgents,
+                    mergedRoster: mergedRoster,
+                    recentCompletions: eventManager.recentCompletions,
+                    rosterScrollHeight: rosterScrollHeight,
+                    focusedRow: focusedRow,
+                    adapter: adapter,
+                    hoveredRow: $hoveredRow,
+                    composingPaneId: $composingPaneId,
+                    promptText: $promptText,
+                    promptFocused: $promptFocused,
+                    queueSelections: $queueSelections,
+                    reduceMotion: reduceMotion,
+                    now: now,
+                    onFocus: { focusAgent($0) },
+                    onSubmitPrompt: { submitPrompt() },
+                    onCancelComposing: { cancelComposing() },
+                    onBeginComposing: { beginComposing($0) }
+                )
             }
         }
         .frame(width: islandWidth, height: contentHeight, alignment: .top)
     }
 
-    /// One list: blocked agents render as rows with inline approve/deny
-    /// controls, everything else as plain rows. No separate queue section.
-    @ViewBuilder
-    private var rosterContent: some View {
-        ScrollView(.vertical) {
-            VStack(spacing: 0) {
-                if visibleAgents.isEmpty {
-                    // Item 4: structured empty state for new users. Lives
-                    // inside the scroll viewport so it isn't clipped by the
-                    // panel height when the roster is empty.
-                    VStack(spacing: 8) {
-                        Image(systemName: "terminal.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(.white.opacity(0.25))
-                        Text("No agents detected")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.55))
-                        Text("Start Claude Code, Codex, or opencode\nand they'll appear here.")
-                            .font(.system(size: 9, weight: .regular))
-                            .foregroundColor(.white.opacity(0.3))
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(2)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: rosterScrollHeight)
-                } else if NotchHUDConfig.shared.expandedGroupByState {
-                    groupedAgentRows
-                } else {
-                    flatAgentRows
-                }
-            }
-        }
-        .frame(height: rosterScrollHeight)
-        .scrollIndicators(.hidden)
-    }
-
-    /// F8 triage view: only agents that need you (blocked) or failed.
-    /// Reuses the merged roster so approval variance/choices render.
-    private var attentionContent: some View {
-        let rows = IslandMetrics.attentionFilter(mergedRoster)
-        return VStack(spacing: 0) {
-            if rows.isEmpty {
-                Text("Nothing needs you")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.4))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: IslandMetrics.rowHeight)
-            }
-            ForEach(rows) { agent in
-                agentRow(agent: agent)
-            }
-            Spacer(minLength: 0)
-        }
-    }
 
     /// Calculates scroll viewport height for the agent roster.
     private var rosterScrollHeight: CGFloat {
@@ -1628,855 +1335,15 @@ struct NotchStatusView: View {
         IslandMetrics.cleanHUDText(text)
     }
 
-    /// Item 11: underline tab bar with matchedGeometryEffect for a sliding
-    /// indicator, replacing the capsule pills. Feels more native on macOS.
-    private var shelfTabBar: some View {
-        HStack(spacing: 4) {
-            if NotchHUDConfig.shared.showAgentsTab {
-                shelfTabButton(
-                    title: "Agents",
-                    selected: selectedTab == .agents
-                ) {
-                    selectedTab = .agents
-                }
-                .keyboardShortcut("1", modifiers: .command)
-            }
-            if NotchHUDConfig.shared.showTasksTab {
-                shelfTabButton(title: "Tasks", selected: selectedTab == .tasks) {
-                    selectedTab = .tasks
-                }
-                .keyboardShortcut("2", modifiers: .command)
-            }
-            if NotchHUDConfig.shared.attentionFilterEnabled {
-                shelfTabButton(
-                    title: "Attention", selected: selectedTab == .attention
-                ) {
-                    selectedTab = .attention
-                }
-                .keyboardShortcut("3", modifiers: .command)
-            }
-            if NotchHUDConfig.shared.showHistoryTab {
-                shelfTabButton(title: "History", selected: selectedTab == .history) {
-                    selectedTab = .history
-                }
-                .keyboardShortcut("4", modifiers: .command)
-            }
-            if NotchHUDConfig.shared.showShelfTab {
-                shelfTabButton(title: "Shelf", selected: selectedTab == .shelf) {
-                    selectedTab = .shelf
-                }
-                .keyboardShortcut("5", modifiers: .command)
-            }
-            if NotchHUDConfig.shared.showMediaTab {
-                shelfTabButton(title: "Media", selected: selectedTab == .media) {
-                    selectedTab = .media
-                }
-                .keyboardShortcut("6", modifiers: .command)
-            }
-            if NotchHUDConfig.shared.showNotesTab {
-                shelfTabButton(title: "Notes", selected: selectedTab == .notes) {
-                    selectedTab = .notes
-                }
-                .keyboardShortcut("7", modifiers: .command)
-            }
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 22)
-    }
 
-    private func shelfTabButton(title: String, selected: Bool, action: @escaping () -> Void)
-        -> some View
-    {
-        Button(action: action) {
-            VStack(spacing: 2) {
-                Text(title)
-                    .font(.system(size: 10, weight: selected ? .bold : .medium))
-                    .foregroundColor(selected ? BantayTheme.textPrimary : BantayTheme.textTertiary)
-                    .padding(.horizontal, 4)
-                Capsule()
-                    .fill(selected ? BantayTheme.statusWorking : Color.clear)
-                    .frame(height: 2)
-            }
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityValue(selected ? "selected" : "not selected")
-    }
-
-    private var shelfContent: some View {
-        VStack(spacing: 0) {
-            if shelfStore.files.isEmpty && clipboardItems.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "tray.and.arrow.down.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.white.opacity(0.35))
-                    Text("Drop files here to keep them")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.55))
-                    Text(retentionHint)
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.white.opacity(0.35))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 92)
-            }
-            if !shelfStore.files.isEmpty {
-                // Thumbnail card strip — the actual "shelf" feel.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(shelfStore.files) { file in
-                            shelfCard(file)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                }
-                .frame(height: 84)
-            }
-            ForEach(clipboardItems) { item in
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.on.clipboard.fill").font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.6))
-                    Text(item.text)
-                        .font(.system(size: 10, weight: .regular, design: .monospaced))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .layoutPriority(0)
-                    Spacer(minLength: 4)
-                    Button(action: {
-                        let pb = NSPasteboard.general
-                        pb.clearContents()
-                        pb.setString(item.text, forType: .string)
-                    }) {
-                        Image(systemName: "arrow.uturn.left").font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Copy to clipboard")
-                    .accessibilityLabel("Copy text to clipboard")
-                    .layoutPriority(1)
-                }
-                .padding(.horizontal, 16)
-                .frame(height: IslandMetrics.rowHeight)
-            }
-            Spacer(minLength: 0)
-        }
-        // Glow feedback when a drop lands.
-        .overlay {
-            if shelfDropGlow {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.blue.opacity(0.8), lineWidth: 2)
-                    .padding(2)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeOut(duration: 0.4), value: shelfDropGlow)
-        // Drops are handled at the window level (KeyablePanel posts
-        // .notchFilesDropped → handleFilesDropped). No SwiftUI .dropDestination
-        // here: registering it alongside the window's NSDraggingDestination
-        // creates two competing targets and the drop gets refused.
-    }
-
-    /// "kept for X" hint driven by the configured retention.
-    private var retentionHint: String {
-        let keep = ShelfKeepDuration.from(
-            configRaw: NotchHUDConfig.shared.shelfKeepDuration)
-        switch keep {
-        case .forever: return "Files stay until you remove them."
-        default: return "Files auto-expire after \(keep.rawValue.lowercased())."
-        }
-    }
-
-    @ObservedObject private var historyStore = SessionHistoryStore.shared
 
     private var historyContent: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                ForEach(HistoryMode.allCases, id: \.self) { mode in
-                    Button(action: {
-                        #if os(macOS)
-                            NSHapticFeedbackManager.defaultPerformer.perform(
-                                .generic, performanceTime: .now)
-                        #endif
-                        withAnimation(BantayTheme.springSnappy) {
-                            historyMode = mode
-                        }
-                    }) {
-                        Text(mode.rawValue)
-                            .font(.system(size: 9.5, weight: historyMode == mode ? .bold : .medium))
-                            .foregroundColor(
-                                historyMode == mode
-                                    ? BantayTheme.textPrimary
-                                    : BantayTheme.textTertiary
-                            )
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(
-                                historyMode == mode
-                                    ? BantayTheme.cardSelected
-                                    : Color.clear
-                            )
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 4)
-
-            switch historyMode {
-            case .timeline:
-                MultiAgentTimelineView()
-            case .spend:
-                SpendHistoryView()
-            case .quotas:
-                ProviderQuotaView()
-            case .sessions:
-                sessionsListView
-            }
-        }
+        NotchHistoryView(historyMode: $historyMode)
     }
 
-    private var sessionsListView: some View {
-        VStack(spacing: 0) {
-            if historyStore.sessions.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 18))
-                        .foregroundColor(.white.opacity(0.35))
-                    Text("No agent sessions recorded yet")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.55))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 92)
-            } else {
-                ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(historyStore.sessions) { session in
-                            HStack(spacing: 8) {
-                                Image(systemName: "terminal.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.cyan)
 
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(session.title)
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundColor(.white)
-                                        .lineLimit(1)
 
-                                    HStack(spacing: 6) {
-                                        Text(session.agentName.capitalized)
-                                            .font(.system(size: 8, weight: .semibold))
-                                            .foregroundColor(.cyan)
-                                        Text("•")
-                                            .font(.system(size: 8))
-                                            .foregroundColor(.white.opacity(0.3))
-                                        Text("\(session.totalTokens) tok")
-                                            .font(.system(size: 8, design: .monospaced))
-                                            .foregroundColor(.white.opacity(0.6))
-                                        Text("•")
-                                            .font(.system(size: 8))
-                                            .foregroundColor(.white.opacity(0.3))
-                                        Text(String(format: "$%.2f", session.costUSD))
-                                            .font(
-                                                .system(
-                                                    size: 8, weight: .bold, design: .monospaced)
-                                            )
-                                            .foregroundColor(.green.opacity(0.8))
-                                    }
-                                }
-                                Spacer()
 
-                                Text(session.status)
-                                    .font(.system(size: 8, weight: .bold))
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.green.opacity(0.2)))
-                                    .foregroundColor(.green)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                }
-            }
-        }
-    }
-
-    @ObservedObject private var mediaController = MediaController.shared
-
-    private var mediaContent: some View {
-        VStack(spacing: 8) {
-            if let track = mediaController.currentTrack {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.white.opacity(0.1))
-                            .frame(width: 48, height: 48)
-                        Image(
-                            systemName: track.playerSource == "Spotify"
-                                ? "music.note.house.fill" : "music.note"
-                        )
-                        .font(.system(size: 20))
-                        .foregroundColor(.green)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(track.title)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-
-                        Text(track.artist)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
-                            .lineLimit(1)
-
-                        Text(track.playerSource)
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundColor(track.playerSource == "Spotify" ? .green : .pink)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-
-                HStack(spacing: 20) {
-                    Button(action: { mediaController.previousTrack() }) {
-                        Image(systemName: "backward.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.white)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: { mediaController.togglePlayPause() }) {
-                        Image(
-                            systemName: mediaController.isPlaying
-                                ? "pause.circle.fill" : "play.circle.fill"
-                        )
-                        .font(.system(size: 28))
-                        .foregroundColor(.cyan)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: { mediaController.nextTrack() }) {
-                        Image(systemName: "forward.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.white)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.top, 4)
-            } else {
-                VStack(spacing: 6) {
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 20))
-                        .foregroundColor(.white.opacity(0.35))
-                    Text("No media playing")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.55))
-                    Text("Start Apple Music or Spotify")
-                        .font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.35))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 92)
-            }
-        }
-        .padding(.vertical, 8)
-    }
-
-    @ObservedObject private var systemHUDMonitor = SystemHUDMonitor.shared
-
-    private var systemHUDOverlay: some View {
-        Group {
-            if let hud = systemHUDMonitor.activeHUD {
-                HStack(spacing: 8) {
-                    Image(systemName: hud.type.iconName)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.cyan)
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.white.opacity(0.2))
-                            Capsule()
-                                .fill(Color.cyan)
-                                .frame(width: geo.size.width * CGFloat(hud.type.percentage))
-                        }
-                    }
-                    .frame(height: 4)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color.black.opacity(0.85)))
-                .padding(.bottom, 6)
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-    }
-
-    @ObservedObject private var notesStore = NotesStore.shared
-
-    private var notesContent: some View {
-        let words = notesStore.noteText
-            .split(whereSeparator: \.isWhitespace).count
-        let chars = notesStore.noteText.count
-
-        return VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(BantayTheme.statusWorking)
-                        .frame(width: 5, height: 5)
-                    Text("Scratchpad")
-                        .font(.system(size: 9.5, weight: .bold))
-                        .foregroundColor(BantayTheme.textPrimary)
-                    Text("•")
-                        .font(.system(size: 8.5))
-                        .foregroundColor(BantayTheme.textTertiary)
-                    Text("\(words)w, \(chars)c")
-                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                        .foregroundColor(BantayTheme.textTertiary)
-                    Text("•")
-                        .font(.system(size: 8.5))
-                        .foregroundColor(BantayTheme.textTertiary)
-                    Text("Autosaved")
-                        .font(.system(size: 8.5))
-                        .foregroundColor(BantayTheme.textTertiary.opacity(0.8))
-                }
-
-                Spacer(minLength: 4)
-
-                if !notesStore.noteText.isEmpty {
-                    Button(action: {
-                        copyToClipboard(notesStore.noteText)
-                        withAnimation(BantayTheme.springSnappy) {
-                            copiedNotes = true
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            withAnimation(.easeOut) {
-                                copiedNotes = false
-                            }
-                        }
-                    }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: copiedNotes ? "checkmark" : "doc.on.doc")
-                                .font(.system(size: 8.5))
-                            Text(copiedNotes ? "Copied" : "Copy")
-                                .font(.system(size: 8.5, weight: .medium))
-                        }
-                        .foregroundColor(
-                            copiedNotes ? BantayTheme.statusCompleted : BantayTheme.textSecondary
-                        )
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.white.opacity(0.08), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Copy notes to clipboard")
-
-                    Button(action: {
-                        notesStore.noteText = ""
-                    }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 8.5))
-                            Text("Clear")
-                                .font(.system(size: 8.5, weight: .medium))
-                        }
-                        .foregroundColor(BantayTheme.textTertiary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.white.opacity(0.05), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Clear scratchpad")
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 4)
-
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.04))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-
-                if notesStore.noteText.isEmpty {
-                    Text(
-                        "Type quick scratch notes, prompt drafts, or snippets here...\nAutosaved to disk."
-                    )
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundColor(BantayTheme.textTertiary.opacity(0.6))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
-                    .allowsHitTesting(false)
-                }
-
-                TextEditor(text: $notesStore.noteText)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.white)
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-            }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .frame(maxHeight: .infinity)
-    }
-
-    /// One thumbnail card: icon, name, hover actions (QuickLook / open /
-    /// remove), draggable back out. Mirrors NotchDrop's DropItemView.
-    private func shelfCard(_ file: ShelfFile) -> some View {
-        VStack(spacing: 3) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                    )
-                if let icon = file.icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 34, height: 34)
-                } else {
-                    Image(systemName: "doc.fill").font(.system(size: 16))
-                        .foregroundColor(.white.opacity(0.5))
-                }
-            }
-            .frame(width: 48, height: 48)
-            .overlay(alignment: .topTrailing) {
-                // Remove (⌥-style): a small ✕ always present, like NotchDrop's
-                // option-key reveal but simpler to discover.
-                Button(action: { shelfStore.remove(file) }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.7))
-                        .background(Color.black.opacity(0.6).clipShape(Circle()))
-                }
-                .buttonStyle(.plain)
-                .help("Remove from shelf")
-                .offset(x: 4, y: -4)
-            }
-            Text(file.name)
-                .font(.system(size: 8, weight: .medium))
-                .foregroundColor(.white.opacity(0.75))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 64)
-        }
-        .frame(width: 68)
-        .contentShape(Rectangle())
-        .draggable(file.url)
-        .onTapGesture(count: 2) { NSWorkspace.shared.open(file.url) }
-        .onTapGesture(count: 1) { ShelfQuickLook.show(file.url) }
-        .help("Click: preview · Double-click: open")
-        // Item 9: right-click context menu for shelf cards.
-        .contextMenu {
-            Button("Quick Look Preview") { ShelfQuickLook.show(file.url) }
-            Button("Open") { NSWorkspace.shared.open(file.url) }
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([file.url])
-            }
-            Divider()
-            Button("Copy Path") { shelfStore.copyPath(file) }
-            Button("Copy Content") { shelfStore.copyContent(file) }
-            Divider()
-            Button("Remove") { shelfStore.remove(file) }
-            Button("Clear All Shelf") { shelfStore.removeAll() }
-        }
-    }
-
-    private var spendGaugeBadge: some View {
-        let cost = eventManager.usage.costUSD
-        let budget = max(NotchHUDConfig.shared.dailyBudgetUSD, 0.5)
-        let ratio = cost / budget
-        let formattedCost = String(format: "$%.2f", cost)
-        let formattedBudget =
-            budget >= 10 && budget.truncatingRemainder(dividingBy: 1) == 0
-            ? String(format: "$%.0f", budget)
-            : String(format: "$%.2f", budget)
-        let color: Color =
-            ratio >= 1.0
-            ? BantayTheme.statusFailed
-            : (ratio >= 0.7 ? BantayTheme.statusQuota : BantayTheme.statusWorking)
-        return HStack(spacing: BantayTheme.space4) {
-            Circle().fill(color).frame(width: 4, height: 4)
-            Text("\(formattedCost)/\(formattedBudget)")
-                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                .lineLimit(1)
-                .monospacedDigit()
-                .foregroundColor(color)
-        }
-        .padding(.horizontal, BantayTheme.space6)
-        .padding(.vertical, BantayTheme.space2)
-        .background(color.opacity(0.14), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
-        .fixedSize(horizontal: true, vertical: true)
-        .help("Daily AI Spend: \(formattedCost) of \(formattedBudget) limit")
-    }
-
-    private var tokenRateBadge: some View {
-        // Use the manager's already-published rate (computed off-main with an
-        // mtime memo). Scanning transcripts synchronously in the body would
-        // beachball the expanded panel on every 1s clock tick.
-        let tpm = Int(eventManager.usageRate.tokensPerMinute ?? 0)
-        let rateText: String = {
-            if tpm >= 1000 {
-                return String(format: "⚡%.1fk/m", Double(tpm) / 1000.0)
-            } else {
-                return "⚡\(tpm)/m"
-            }
-        }()
-        let color = BantayTheme.statusWorking
-        return HStack(spacing: BantayTheme.space2) {
-            Text(rateText)
-                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                .lineLimit(1)
-                .monospacedDigit()
-                .foregroundColor(color)
-        }
-        .padding(.horizontal, BantayTheme.space6)
-        .padding(.vertical, BantayTheme.space2)
-        .background(color.opacity(0.14), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
-        .fixedSize(horizontal: true, vertical: true)
-        .help("Live token processing rate over the last minute")
-        .accessibilityLabel("Token rate \(tpm) tokens per minute")
-    }
-
-    /// True when a real usage/cost source is live (kilo's SQLite ledger is
-    /// the only one the app reads for real numbers today). Gates badges that
-    /// would otherwise show fabricated zeros/percentages.
-    private var hasUsageData: Bool {
-        KiloUsageAdapter.detect() || eventManager.usage.totalTokens > 0
-            || (eventManager.usageRate.tokensPerMinute ?? 0) > 0
-    }
-
-    private var quotaAxiBadge: some View {
-        let active = Array(Set(eventManager.agents.map(\.source)))
-        let quotas = QuotaAxiTracker.probeLiveQuotas(
-            activeProviders: active,
-            costUSD: eventManager.usage.costUSD,
-            budgetUSD: NotchHUDConfig.shared.dailyBudgetUSD,
-            burnRateTPM: eventManager.usageRate.tokensPerMinute ?? 0.0
-        )
-        let minQuota = quotas.min(by: { $0.remainingPercent < $1.remainingPercent })
-        let percentInt = Int(minQuota?.remainingPercent ?? 100)
-        let color: Color =
-            percentInt <= 20
-            ? BantayTheme.statusFailed
-            : (percentInt <= 50 ? BantayTheme.statusQuota : BantayTheme.statusCompleted)
-
-        return Button {
-            expandTo(true)
-            selectedTab = .history
-            historyMode = .quotas
-        } label: {
-            HStack(spacing: BantayTheme.space4) {
-                Circle().fill(color).frame(width: 4, height: 4)
-                Text("Q:\(percentInt)%")
-                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-                    .monospacedDigit()
-                    .foregroundColor(color)
-            }
-            .padding(.horizontal, BantayTheme.space6)
-            .padding(.vertical, BantayTheme.space2)
-            .background(color.opacity(0.14), in: Capsule())
-            .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
-            .fixedSize(horizontal: true, vertical: true)
-        }
-        .buttonStyle(.plain)
-        .help("Live Provider Quotas: Click to view details (\(percentInt)% remaining)")
-        .accessibilityLabel("Quota remaining \(percentInt) percent")
-    }
-
-    private var isQuotaLow: Bool {
-        let config = NotchHUDConfig.shared
-        let cost = eventManager.usage.costUSD
-        let budget = max(config.dailyBudgetUSD, 0.5)
-        let isBudgetExceeded = (cost / budget) >= 1.0
-        let tpm = eventManager.usageRate.tokensPerMinute ?? 0
-        let isHighBurn = tpm >= config.highBurnThresholdTPM
-        return isBudgetExceeded || isHighBurn
-    }
-
-    private var currentMascotState: MascotState {
-        MascotEvaluator.evaluate(
-            agents: mergedRoster,
-            quotaLow: isQuotaLow,
-            recentCompletion: eventManager.currentEvent?.kind == .completed
-        )
-    }
-
-    private func headerBar(counts: IslandMetrics.AgentCounts) -> some View {
-        HStack(spacing: BantayTheme.space8) {
-            if NotchHUDConfig.shared.showNotchMascot {
-                Button {
-                    withAnimation(BantayTheme.springSnappy) {
-                        showThoughtBubble.toggle()
-                    }
-                } label: {
-                    MascotView(
-                        archetype: NotchHUDConfig.shared.selectedMascotArchetype,
-                        state: currentMascotState,
-                        size: 16
-                    )
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showThoughtBubble, arrowEdge: .top) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 6) {
-                            Text(NotchHUDConfig.shared.selectedMascotArchetype.displayName)
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(BantayTheme.color(for: currentMascotState))
-                            Spacer(minLength: 0)
-                            Text("Lv.\(NotchHUDConfig.shared.mascotLevel)")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .foregroundColor(BantayTheme.textTertiary)
-                        }
-                        Text(
-                            "“\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: currentMascotState))”"
-                        )
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundColor(BantayTheme.textPrimary)
-                        .lineLimit(3)
-                    }
-                    .padding(10)
-                    .frame(width: 200)
-                    .background(BantayTheme.panelBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: BantayTheme.radiusMedium)
-                            .stroke(
-                                BantayTheme.color(for: currentMascotState).opacity(0.35),
-                                lineWidth: 1)
-                    )
-                }
-                .help(
-                    "\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): “\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: currentMascotState))”"
-                )
-                .accessibilityLabel(
-                    "\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): \(currentMascotState.statusText)"
-                )
-            }
-            if counts.needsInput > 0 {
-                Text("\(counts.needsInput) need you")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .lineLimit(1)
-                    .monospacedDigit()
-                    .foregroundColor(BantayTheme.statusAttention)
-            }
-            if counts.working > 0 {
-                Text("\(counts.working) working")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .lineLimit(1)
-                    .monospacedDigit()
-                    .foregroundColor(BantayTheme.statusWorking)
-            }
-            if counts.needsInput == 0 && counts.working == 0 {
-                Text("Agents")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundColor(BantayTheme.textPrimary)
-            }
-            if NotchHUDConfig.shared.enableSpendGlow {
-                spendGaugeBadge
-            }
-            let liveRate = eventManager.usageRate.tokensPerMinute ?? 0
-            if NotchHUDConfig.shared.showTokenRate, liveRate > 0 {
-                tokenRateBadge
-            }
-            // Quota badge only when a real usage source exists — a synthetic
-            // "Q:100%" from fallbackQuotas with no ledger is a lie.
-            if NotchHUDConfig.shared.enableQuotaAxiGauge, hasUsageData {
-                quotaAxiBadge
-            }
-            Spacer(minLength: 4)
-            if let rawTitle = eventManager.currentEvent?.title,
-                !rawTitle.hasPrefix("Created At:"),
-                !rawTitle.contains("timestamp="),
-                !rawTitle.contains("level=")
-            {
-                let cleanedTitle = cleanHUDText(rawTitle)
-                if !cleanedTitle.isEmpty {
-                    HStack(spacing: 3) {
-                        Circle()
-                            .fill(BantayTheme.statusWorking)
-                            .frame(width: 4, height: 4)
-                        Text(cleanedTitle)
-                            .font(.system(size: 8.5, weight: .medium))
-                            .foregroundColor(BantayTheme.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.white.opacity(0.06), in: Capsule())
-                    .frame(maxWidth: 130, alignment: .trailing)
-                    .help("Active Event: \(cleanedTitle)")
-                }
-            }
-            Button {
-                if NotchHUDConfig.shared.panelPinned {
-                    NotchHUDConfig.shared.panelPinned = IslandMetrics.pinAfterCollapse(
-                        reason: .explicitUnpin,
-                        wasPinned: true,
-                        persistAcrossCollapse: true)
-                } else {
-                    NotchHUDConfig.shared.panelPinned = true
-                }
-            } label: {
-                Image(systemName: panelPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(
-                        panelPinned ? BantayTheme.statusWorking : BantayTheme.textTertiary
-                    )
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(panelPinned ? "Unpin panel" : "Pin panel open")
-            .accessibilityLabel(panelPinned ? "Unpin panel" : "Pin panel open")
-            .accessibilityValue(panelPinned ? "pinned" : "unpinned")
-
-            Button {
-                AppDelegate.showSettings()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(BantayTheme.textTertiary)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Open Settings")
-            .accessibilityLabel("Open Settings")
-        }
-        .padding(.horizontal, 14)
-        .frame(height: IslandMetrics.headerHeight)
-    }
-
-    private func copyToClipboard(_ text: String) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-    }
 
     /// Watch the system pasteboard; new non-empty text lands on the shelf.
     private func pollClipboard(at date: Date) {
@@ -2490,494 +1357,6 @@ struct NotchStatusView: View {
             limit: NotchHUDConfig.shared.clampedShelfLimit)
     }
 
-    private var groupedAgentRows: some View {
-        let grouped = Dictionary(grouping: mergedRoster) { agent in
-            IslandMetrics.expandedGroupRank(agent.kind)
-        }
-        return VStack(spacing: 0) {
-            ForEach(0..<5, id: \.self) { rank in
-                let rows = grouped[rank] ?? []
-                if !rows.isEmpty {
-                    sectionHeader(
-                        IslandMetrics.groupLabel(rank: rank), count: rows.count,
-                        color: rows.first?.kind.color ?? "#8a8aa8")
-                    ForEach(rows) { agent in
-                        agentRow(agent: agent)
-                    }
-                }
-            }
-            recentActivitySection
-        }
-    }
-
-    private func sectionHeader(_ title: String, count: Int, color: String) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(Color(hex: color)).frame(width: 5, height: 5)
-            Text(title)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.6))
-            Text("\(count)")
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.35))
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: IslandMetrics.sectionHeaderHeight)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title), \(count) agents")
-    }
-
-    /// "What happened recently" — the last few completions/failures, newest
-    /// first. Answers "did it actually do work" without opening the peek
-    /// overlay: source + done/failed + what it was doing + when.
-    @ViewBuilder
-    private var recentActivitySection: some View {
-        let recents = eventManager.recentCompletions
-        if !recents.isEmpty {
-            sectionHeader("Recent", count: recents.count, color: "#8a8aa8")
-            ForEach(recents) { recent in
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(
-                            recent.kind == .failed
-                                ? Color(hex: AgentEventKind.failed.color)
-                                : Color(hex: AgentEventKind.completed.color)
-                        )
-                        .frame(width: 6, height: 6)
-                    // Item 12: truncation consistency — agent source uses .tail
-                    // so the differentiator at the end stays visible.
-                    Text(recent.source)
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.85))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if let title = recent.title {
-                        let clean = cleanHUDText(title)
-                        if !clean.isEmpty {
-                            Text(clean)
-                                .font(.system(size: 8.5, weight: .regular))
-                                .foregroundColor(.white.opacity(0.6))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                    }
-                    Spacer(minLength: 8)
-                    // Item 8: show duration on completed rows when available.
-                    if let duration = recent.duration {
-                        Text(
-                            IslandMetrics.elapsedLabel(
-                                since: Date(timeIntervalSinceNow: -duration), now: Date())
-                        )
-                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                        .monospacedDigit()
-                        .foregroundColor(.white.opacity(0.3))
-                    }
-                    Text(IslandMetrics.elapsedLabel(since: recent.createdAt, now: now))
-                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                        .monospacedDigit()
-                        .foregroundColor(.white.opacity(0.4))
-                }
-                .padding(.horizontal, 16)
-                .frame(height: IslandMetrics.rowHeight)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(
-                    "\(recent.source) \(recent.kind == .failed ? "failed" : "completed")"
-                        + (recent.title.flatMap {
-                            let c = cleanHUDText($0)
-                            return c.isEmpty ? nil : ": \(c)"
-                        } ?? ""))
-            }
-        }
-    }
-
-    private var flatAgentRows: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(mergedRoster.enumerated()), id: \.element.id) { index, agent in
-                VStack(spacing: 0) {
-                    // Item 13: 1px separator between rows (not before first).
-                    if index > 0 {
-                        Rectangle().fill(.white.opacity(0.04)).frame(height: 1)
-                    }
-                    agentRow(agent: agent)
-                        .background(
-                            focusedRow == index
-                                ? Color.accentColor.opacity(0.18) : Color.clear
-                        )
-                }
-                .transition(.opacity)
-            }
-            recentActivitySection
-        }
-    }
-
-    /// Row height: always the compact height — choice/multi prompts render
-    /// numbered buttons ("1", "2", "3") that fit inline, with the full option
-    /// text in each button's tooltip and the agent's title carrying context.
-    private func rowHeight(for agent: AgentSnapshot) -> CGFloat {
-        _ = agent
-        return IslandMetrics.rowHeight
-    }
-
-    /// Inline approve/deny (or choice / multi-select) controls for a blocked
-    /// agent row. Same logic the old queue cards used, rendered compactly in
-    /// the row's trailing action cluster.
-    @ViewBuilder
-    private func inlineApprovalControls(agent: AgentSnapshot) -> some View {
-        if let paneId = agent.paneId {
-            let controls = agent.approval
-            let resolving = eventManager.isResolving(paneId: paneId)
-            if controls.isYesNo {
-                approvalActionButton(
-                    systemName: "checkmark.circle.fill", color: .green, help: "Approve",
-                    disabled: resolving
-                ) {
-                    eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
-                }
-                approvalActionButton(
-                    systemName: "xmark.circle.fill", color: .red, help: "Deny",
-                    disabled: resolving
-                ) {
-                    eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
-                }
-            } else if controls.isMulti {
-                let labels = controls.displayedLabels()
-                ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                    let optionText =
-                        controls.choices.indices.contains(index)
-                        ? controls.choices[index] : "Option \(label)"
-                    approvalActionButton(
-                        label: Text(label),
-                        color: queueSelections[paneId]?.contains(
-                            IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                        ) == true ? .green : .white.opacity(0.6),
-                        help: optionText,
-                        disabled: false,
-                        accessibilityLabel: optionText
-                    ) {
-                        queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
-                            queueSelections[paneId] ?? [], index: index)
-                    }
-                }
-                let overflow = controls.overflowCount()
-                if overflow > 0 {
-                    Text("+\(overflow)")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.45))
-                }
-                approvalActionButton(
-                    systemName: "checkmark.circle.fill", color: .green, help: "Submit",
-                    disabled: resolving
-                ) {
-                    let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-                        queueSelections[paneId] ?? [])
-                    eventManager.performAction(paneId: paneId) {
-                        $0.approveMulti(paneId: paneId, selections: numbers)
-                    }
-                    queueSelections.removeValue(forKey: paneId)
-                }
-            } else {
-                let labels = controls.displayedLabels()
-                ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                    let optionText =
-                        controls.choices.indices.contains(index)
-                        ? controls.choices[index] : "Option \(label)"
-                    approvalActionButton(
-                        label: Text(label),
-                        color: .white,
-                        help: optionText,
-                        disabled: resolving,
-                        accessibilityLabel: optionText
-                    ) {
-                        eventManager.performAction(paneId: paneId) {
-                            $0.approveChoice(
-                                paneId: paneId,
-                                choice: IslandMetrics.ApprovalControls.optionNumber(
-                                    forIndex: index))
-                        }
-                    }
-                }
-                let overflow = controls.overflowCount()
-                if overflow > 0 {
-                    Text("+\(overflow)")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.45))
-                }
-                if controls.optionLabels.isEmpty {
-                    approvalActionButton(
-                        systemName: "checkmark.circle.fill", color: .green, help: "Approve",
-                        disabled: resolving
-                    ) {
-                        eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
-                    }
-                }
-            }
-        }
-    }
-
-    private func agentRow(agent: AgentSnapshot) -> some View {
-        let agentKey = agent.paneId ?? "standalone:\(agent.source)"
-        let composing = composingPaneId == agentKey
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                // Pulsing status dot for working agents.
-                Circle().fill(Color(hex: agent.kind.color)).frame(width: 6, height: 6)
-                    .modifier(
-                        PulsingDotModifier(
-                            enabled: (agent.kind == .progress || agent.kind == .started)
-                                && !reduceMotion))
-                if composing {
-                    TextField("Ask agent…", text: $promptText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white)
-                        .focused($promptFocused)
-                        .onSubmit { submitPrompt() }
-                        .modifier(
-                            EscapeCancelsModifier { cancelComposing() }
-                        )
-                        .padding(.horizontal, 6)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 20)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08))
-                        )
-                        .layoutPriority(0)
-                    Button(action: submitPrompt) {
-                        Image(systemName: "paperplane.fill").font(.system(size: 9))
-                            .foregroundColor(.white)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Send prompt (Return)")
-                    .layoutPriority(1)
-                    Button(action: cancelComposing) {
-                        Image(systemName: "xmark").font(.system(size: 9)).foregroundColor(
-                            .white.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Cancel (Esc)")
-                    .layoutPriority(1)
-                } else {
-                    HStack(spacing: 6) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 5) {
-                                if let ctx = agent.projectContext {
-                                    // Item 12: .tail truncation so the
-                                    // differentiating suffix stays visible.
-                                    Text(ctx.project)
-                                        .font(
-                                            .system(
-                                                size: 10.5, weight: .semibold,
-                                                design: .monospaced)
-                                        )
-                                        .foregroundColor(.white).lineLimit(1).truncationMode(
-                                            .tail)
-                                    if let branch = ctx.branch {
-                                        Text(branch)
-                                            .font(
-                                                .system(
-                                                    size: 8.5, weight: .medium,
-                                                    design: .monospaced)
-                                            )
-                                            .foregroundColor(.white.opacity(0.4))
-                                            .lineLimit(1)
-                                    }
-                                    if let diff = ctx.diffStat {
-                                        Text(diff)
-                                            .font(
-                                                .system(
-                                                    size: 8, weight: .semibold,
-                                                    design: .monospaced)
-                                            )
-                                            .monospacedDigit()
-                                            .foregroundColor(Color.green.opacity(0.9))
-                                            .padding(.horizontal, 3)
-                                            .padding(.vertical, 0.5)
-                                            .background(
-                                                RoundedRectangle(
-                                                    cornerRadius: 3, style: .continuous
-                                                )
-                                                .fill(Color.green.opacity(0.12))
-                                            )
-                                            .lineLimit(1)
-                                    }
-                                } else {
-                                    Text(agent.source)
-                                        .font(
-                                            .system(
-                                                size: 10.5, weight: .semibold,
-                                                design: .monospaced)
-                                        )
-                                        .foregroundColor(.white).lineLimit(1).truncationMode(
-                                            .tail)
-                                }
-                            }
-                            HStack(spacing: 5) {
-                                if agent.kind == .failed, let reason = agent.message {
-                                    // Failure reason (rate_limit/auth/billing…)
-                                    // must be visible, not just "Failed".
-                                    Text(cleanHUDText(reason))
-                                        .font(.system(size: 8.5, weight: .medium))
-                                        .foregroundColor(
-                                            Color(hex: AgentEventKind.failed.color)
-                                        )
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                } else if let live = agent.title ?? agent.message,
-                                    agent.kind.isOngoing,
-                                    !cleanHUDText(live).isEmpty
-                                {
-                                    Text(cleanHUDText(live))
-                                        .font(.system(size: 8.5, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.75))
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                } else {
-                                    Text(agent.kind.label)
-                                        .font(.system(size: 8.5, weight: .medium))
-                                        .foregroundColor(.secondary).lineLimit(1)
-                                }
-                                if NotchHUDConfig.shared.showElapsedTime,
-                                    let startedAt = agent.startedAt,
-                                    agent.kind.isOngoing
-                                {
-                                    Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
-                                        .font(
-                                            .system(
-                                                size: 8.5, weight: .medium, design: .monospaced)
-                                        )
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
-                            }
-                        }
-                        Spacer(minLength: 4)
-                        if let title = agent.title, agent.kind != .idle, !agent.kind.isOngoing {
-                            let clean = cleanHUDText(title)
-                            if !clean.isEmpty {
-                                Text(clean)
-                                    .font(.system(size: 9, weight: .regular))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                            }
-                        }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { beginComposing(agent) }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(0)
-                    if agent.kind == .accessRequest || agent.kind == .waiting {
-                        if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
-                            // Approval controls stay visible — those need attention.
-                            inlineApprovalControls(agent: agent)
-                                .layoutPriority(1)
-                        } else {
-                            Button(action: { focusAgent(agent) }) {
-                                Image(systemName: "terminal.fill").font(.system(size: 9))
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                            .buttonStyle(.plain)
-                            .help("Focus \(agent.source) to answer prompt")
-                            .accessibilityLabel("Focus \(agent.source)")
-                            .layoutPriority(1)
-                        }
-                    }
-                    // Focus/stop/peek are revealed on row hover to keep rows
-                    // calm (BoringNotch HoverButton pattern). Always
-                    // reachable: hover or tab already shows the row bg.
-                    let rowHovered = hoveredRow == agent.id
-                    TactileRowButton(
-                        systemName: "arrow.up.right",
-                        helpText: "Focus \(agent.source)"
-                    ) {
-                        focusAgent(agent)
-                    }
-                    .layoutPriority(1)
-                    .opacity(rowHovered ? 1 : 0)
-                    .animation(
-                        rowHovered
-                            ? .easeOut(duration: 0.12)
-                            : .easeOut(duration: 0.06),
-                        value: rowHovered)
-                    if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
-                        TactileRowButton(
-                            systemName: "stop.fill",
-                            color: .red,
-                            helpText: "Stop \(agent.source)"
-                        ) {
-                            eventManager.performAction(paneId: paneId) {
-                                $0.stop(paneId: paneId)
-                            }
-                        }
-                        .layoutPriority(1)
-                        .opacity(rowHovered ? 1 : 0)
-                        .animation(
-                            rowHovered
-                                ? .easeOut(duration: 0.12)
-                                : .easeOut(duration: 0.06),
-                            value: rowHovered)
-                    }
-                    peekButton(agent: agent)
-                        .layoutPriority(1)
-                        .opacity(rowHovered ? 1 : 0)
-                        .animation(
-                            rowHovered
-                                ? .easeOut(duration: 0.12)
-                                : .easeOut(duration: 0.06),
-                            value: rowHovered)
-                    TactileRowButton(
-                        systemName: "safari",
-                        helpText: "Open session in browser (Chrome / Dia)"
-                    ) {
-                        let slug = agent.projectContext?.project ?? agent.source
-                        RichSessionViewer.openInBrowser(
-                            agentName: agent.source,
-                            projectSlug: slug,
-                            cwd: agent.cwd,
-                            isWorking: agent.kind == .progress || agent.kind == .started,
-                            sessionPath: agent.sessionPath
-                        )
-                    }
-                    .layoutPriority(1)
-                    .opacity(rowHovered ? 1 : 0)
-                    .animation(
-                        rowHovered
-                            ? .easeOut(duration: 0.12)
-                            : .easeOut(duration: 0.06),
-                        value: rowHovered)
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(height: rowHeight(for: agent))
-
-        }
-        .background(hoveredRow == agent.id ? Color.white.opacity(0.07) : Color.clear)
-        .contentShape(Rectangle())
-        .modifier(AgentRowAccessibility(agent: agent))
-        .onHover { hovering in
-            hoveredRow = hovering ? agent.id : nil
-        }
-        .contextMenu {
-            Button("Focus \(agent.source.capitalized)") { focusAgent(agent) }
-            if let title = agent.title {
-                Button("Copy Title") { copyToClipboard(title) }
-            }
-            if let workspaceId = agent.workspaceId {
-                Button("Open Workspace in Finder") {
-                    openWorkspaceInFinder(workspaceId)
-                }
-            }
-            Divider()
-            if NotchHUDConfig.shared.mutedSources.contains(agent.source) {
-                Button("Unmute \(agent.source)") {
-                    NotchHUDConfig.shared.mutedSources.remove(agent.source)
-                }
-            } else {
-                Button("Mute \(agent.source)") {
-                    NotchHUDConfig.shared.mutedSources.insert(agent.source)
-                }
-            }
-        }
-    }
 
     private func terminalPeekDrawer(text: String) -> some View {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
@@ -3373,159 +1752,3 @@ struct NotchStatusView: View {
     }
 }
 
-/// Tactile press feedback (make-interfaces-feel-better principle 12).
-/// Uses subtle opacity on press across the control plane without altering
-/// geometry or invalidating ScrollViewResponder / AttributeGraph tables.
-struct ScalePressButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-    }
-}
-
-private struct EdgeGlowView: View {
-    let cornerRadius: CGFloat
-    let width: CGFloat
-    let height: CGFloat
-    let reduceMotion: Bool
-    @State private var glowPulse = false
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .strokeBorder(
-                Color(hex: IslandMetrics.glowBlockedColor).opacity(glowPulse ? 0.95 : 0.25),
-                lineWidth: 2
-            )
-            .frame(width: width, height: height)
-            .allowsHitTesting(false)
-            .animation(
-                reduceMotion ? nil : .easeInOut(duration: 0.8).repeatForever(autoreverses: true),
-                value: glowPulse
-            )
-            .onAppear {
-                glowPulse = true
-            }
-    }
-}
-
-/// Item 2: breathing opacity cycle for working-agent status dots. The dot
-/// pulses 0.4→1.0→0.4 over 1.5s, the universal "I'm busy" signifier. When
-/// `enabled` is false (reduce-motion or a non-working kind) it's an identity
-/// modifier, keeping the row's modifier type stable.
-private struct PulsingDotModifier: ViewModifier {
-    let enabled: Bool
-    @State private var pulsing = false
-    func body(content: Content) -> some View {
-        if enabled {
-            content
-                .opacity(pulsing ? 0.35 : 1.0)
-                .animation(
-                    .easeInOut(duration: 0.75).repeatForever(autoreverses: true),
-                    value: pulsing
-                )
-                .onAppear { pulsing = true }
-        } else {
-            content
-        }
-    }
-}
-
-/// Row accessibility in its own modifier so the (already heavy) agentRow
-/// expression stays under the compiler's type-check budget.
-private struct AgentRowAccessibility: ViewModifier {
-    let agent: AgentSnapshot
-
-    func body(content: Content) -> some View {
-        content
-            // `.contain` (not `.combine`) keeps the inline Approve/Deny/choice
-            // buttons individually reachable by VoiceOver — a screen-reader
-            // user must be able to act on approvals from the roster.
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("\(agent.source), \(agent.kind.label)")
-            .accessibilityValue(
-                (agent.title ?? agent.message).map { IslandMetrics.cleanHUDText($0) } ?? ""
-            )
-            .accessibilityAction(named: "Approve") {
-                if let paneId = agent.paneId,
-                    agent.kind == .accessRequest || agent.kind == .waiting
-                {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.approve(paneId: paneId)
-                    }
-                }
-            }
-            .accessibilityAction(named: "Deny") {
-                if let paneId = agent.paneId,
-                    agent.kind == .accessRequest || agent.kind == .waiting
-                {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.deny(paneId: paneId)
-                    }
-                }
-            }
-    }
-}
-
-/// Spring-driven press animation style for tactile feedback.
-private struct TactilePressStyle: ButtonStyle {
-    @Binding var isPressed: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .onChange(of: configuration.isPressed) { pressed in
-                withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
-                    isPressed = pressed
-                }
-            }
-    }
-}
-
-/// Tactile button for row actions featuring haptic feedback and micro-press physics.
-private struct TactileRowButton: View {
-    let systemName: String
-    var title: String? = nil
-    var color: Color = .white
-    var helpText: String = ""
-    let action: () -> Void
-
-    @State private var isHovered = false
-    @State private var isPressed = false
-
-    var body: some View {
-        Button(action: {
-            #if os(macOS)
-                NSHapticFeedbackManager.defaultPerformer.perform(
-                    .generic, performanceTime: .now)
-            #endif
-            action()
-        }) {
-            HStack(spacing: 3) {
-                Image(systemName: systemName)
-                    .font(.system(size: 9, weight: .semibold))
-                if let title {
-                    Text(title)
-                        .font(.system(size: 9, weight: .medium))
-                }
-            }
-            .foregroundColor(isHovered ? .white : color.opacity(0.75))
-            .padding(.horizontal, title != nil ? 6 : 5)
-            .padding(.vertical, 3.5)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isHovered ? Color.white.opacity(0.18) : Color.white.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(
-                        isHovered ? Color.white.opacity(0.25) : Color.white.opacity(0.08),
-                        lineWidth: 0.8
-                    )
-            )
-            .scaleEffect(isPressed ? 0.92 : 1.0)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(TactilePressStyle(isPressed: $isPressed))
-        .onHover { isHovered = $0 }
-        .help(helpText)
-        .accessibilityLabel(helpText)
-    }
-}
