@@ -262,4 +262,8 @@ launchctl bootout gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) "$AGENTS_PLIST" 2>/dev/null || \
   launchctl load "$AGENTS_PLIST" 2>/dev/null || true
 
+if [[ -d "$HOME/.local/bin" ]]; then
+  ln -sf "$LAUNCH_BIN" "$HOME/.local/bin/bantay"
+fi
+
 echo "bantay-tui: launch agent installed at $AGENTS_PLIST (binary: $INSTALLED_BIN)"
