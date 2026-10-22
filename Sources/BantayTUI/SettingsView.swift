@@ -648,7 +648,9 @@ struct SettingsView: View {
             if selectedCategory == .strip && matchesSearch("Strip Canvas") {
                 Section("Strip Canvas (Infinite Scrolling)") {
                     Toggle("Enable infinite strip layout", isOn: $stripEnabled)
-                        .help("Tiles all active windows side-by-side on an endless horizontal strip without shrinking.")
+                        .help(
+                            "Tiles all active windows side-by-side on an endless horizontal strip without shrinking."
+                        )
                         .onChange(of: stripEnabled) { newValue in
                             stripEnabled = newValue
                             updateStripConfig()
@@ -674,11 +676,16 @@ struct SettingsView: View {
                         .cornerRadius(6)
                     }
 
-                    Stepper("Window gap: \(Int(stripGap)) pt", value: $stripGap, in: 0...48, step: 2)
-                        .onChange(of: stripGap) { _ in updateStripConfig() }
+                    Stepper(
+                        "Window gap: \(Int(stripGap)) pt", value: $stripGap, in: 0...48, step: 2
+                    )
+                    .onChange(of: stripGap) { _ in updateStripConfig() }
 
-                    Stepper("Edge margins: \(Int(stripInset)) pt", value: $stripInset, in: 0...64, step: 2)
-                        .onChange(of: stripInset) { _ in updateStripConfig() }
+                    Stepper(
+                        "Edge margins: \(Int(stripInset)) pt", value: $stripInset, in: 0...64,
+                        step: 2
+                    )
+                    .onChange(of: stripInset) { _ in updateStripConfig() }
 
                     Picker("Default column width", selection: $stripWidthPreset) {
                         Text("33% (One Third)").tag(1.0 / 3.0)
@@ -688,20 +695,27 @@ struct SettingsView: View {
                     }
                     .onChange(of: stripWidthPreset) { _ in updateStripConfig() }
 
-                    Stepper("Spring physics omega: \(Int(stripSpringOmega))", value: $stripSpringOmega, in: 8...26, step: 1)
-                        .help("Stiffness of the smooth spring animation when scrolling.")
-                        .onChange(of: stripSpringOmega) { _ in updateStripConfig() }
+                    Stepper(
+                        "Spring physics omega: \(Int(stripSpringOmega))", value: $stripSpringOmega,
+                        in: 8...26, step: 1
+                    )
+                    .help("Stiffness of the smooth spring animation when scrolling.")
+                    .onChange(of: stripSpringOmega) { _ in updateStripConfig() }
                 }
             }
 
             if selectedCategory == .strip && matchesSearch("Infinite Strip") {
                 Section("Agent Awareness & Halos") {
                     Toggle("Agent status border halos", isOn: $stripHalos)
-                        .help("Displays floating border halos: Amber for approval, Cyan for working, Green for finished.")
+                        .help(
+                            "Displays floating border halos: Amber for approval, Cyan for working, Green for finished."
+                        )
                         .onChange(of: stripHalos) { _ in updateStripConfig() }
 
                     Toggle("Auto-jump to agent when approval needed (⌃⌥A)", isOn: $stripAutoCenter)
-                        .help("Smoothly spring-scrolls the viewport directly to the blocked agent window.")
+                        .help(
+                            "Smoothly spring-scrolls the viewport directly to the blocked agent window."
+                        )
                         .onChange(of: stripAutoCenter) { _ in updateStripConfig() }
                 }
             }
@@ -713,11 +727,13 @@ struct SettingsView: View {
 
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                         GridRow {
-                            Text("⌃⌥H / ⌃⌥L").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("⌃⌥H / ⌃⌥L").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
                             Text("Focus previous / next column").foregroundColor(.secondary)
                         }
                         GridRow {
-                            Text("⌃⌥⇧H / ⌃⌥⇧L").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("⌃⌥⇧H / ⌃⌥⇧L").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
                             Text("Move column left / right").foregroundColor(.secondary)
                         }
                         GridRow {
@@ -734,7 +750,8 @@ struct SettingsView: View {
                         }
                         GridRow {
                             Text("⌃⌥A").font(.system(size: 11, weight: .bold, design: .monospaced))
-                            Text("Jump directly to agent requesting approval").foregroundColor(.secondary)
+                            Text("Jump directly to agent requesting approval").foregroundColor(
+                                .secondary)
                         }
                         GridRow {
                             Text("⌃⌥]").font(.system(size: 11, weight: .bold, design: .monospaced))

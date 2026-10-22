@@ -19,6 +19,7 @@ public final class StripWindowManager: ObservableObject {
     @Published public private(set) var activeColumnIndex: Int = 0
     @Published public private(set) var viewport: StripViewport
     @Published public private(set) var layoutResult: StripLayoutResult = StripLayoutResult()
+    @Published public var isOverviewMode: Bool = false
 
     private let registry = StripWindowRegistry.shared
     private let animator: StripViewportAnimator
@@ -210,6 +211,14 @@ public final class StripWindowManager: ObservableObject {
 
     /// Recalculates strip layout and pushes target coordinates to the viewport.
     public func updateLayout(animate: Bool) {
+        if isOverviewMode {
+            layoutResult = StripLayoutEngine.computeOverviewLayout(
+                columns: columns, viewport: viewport)
+            animator.snapTo(target: 0.0)
+            applyComputedFrames()
+            return
+        }
+
         layoutResult = StripLayoutEngine.computeLayout(columns: columns, viewport: viewport)
 
         let targetScroll = StripLayoutEngine.revealTarget(
@@ -226,7 +235,12 @@ public final class StripWindowManager: ObservableObject {
     }
 
     private func applyComputedFrames() {
-        layoutResult = StripLayoutEngine.computeLayout(columns: columns, viewport: viewport)
+        if isOverviewMode {
+            layoutResult = StripLayoutEngine.computeOverviewLayout(
+                columns: columns, viewport: viewport)
+        } else {
+            layoutResult = StripLayoutEngine.computeLayout(columns: columns, viewport: viewport)
+        }
 
         // Apply frames to native windows
         for (winID, frame) in layoutResult.windowFrames {
@@ -249,6 +263,32 @@ public final class StripWindowManager: ObservableObject {
             enabled: config.statusHalosEnabled,
             screenBounds: screenRect
         )
+    }
+
+    /// Toggles bird's-eye zoom overview mode where all columns fit on a single screen without scrolling.
+    public func toggleOverviewMode() {
+        isOverviewMode.toggle()
+        updateLayout(animate: true)
+    }
+
+    /// Reorders a column from one index to another (via drag-and-drop or gesture).
+    public func reorderColumn(fromIndex: Int, toIndex: Int) {
+        guard StripLayoutEngine.reorder(fromIndex: fromIndex, toIndex: toIndex, columns: &columns)
+        else { return }
+        if activeColumnIndex == fromIndex {
+            activeColumnIndex = toIndex
+        }
+        updateLayout(animate: true)
+    }
+
+    /// Automatically chains windows into an agent triage workflow:
+    /// IDE/Editor (0.50) -> Browser Preview (0.35) -> Tests/Runner (0.25).
+    public func autoChainCurrentProject(slug: String? = nil) {
+        let allWindows = columns.flatMap(\.windows)
+        let chained = StripLayoutEngine.autoChainWorkflow(windows: allWindows, projectSlug: slug)
+        self.columns = chained
+        self.activeColumnIndex = 0
+        updateLayout(animate: true)
     }
 
     // MARK: - Navigation & Window Actions

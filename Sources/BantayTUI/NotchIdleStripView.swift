@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 /// Split status strip dividing active agents and alerts into left and right wings beside the physical notch cutout.
 struct CenteredSplitStripView: View {

@@ -29,6 +29,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     private var fetchTask: Task<Void, Never>?
     private var clickMonitor: Any?
     private var keyMonitor: Any?
+    private var streamTimer: Timer?
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
@@ -37,16 +38,21 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     }
 
     /// Show the overlay docked beside the island for `agent`. One overlay at a
-    /// time: when already visible, the existing panel re-points at `agent`.
+    /// time: when already visible for the same agent, toggles closed.
     func show(agent: AgentSnapshot, adapter: any PlexerAdapter) {
         if let panel, panel.isVisible {
+            if model.source == agent.source && model.paneId == agent.paneId {
+                dismiss()
+                return
+            }
             reload(agent: agent, adapter: adapter)
+            startLiveStream(agent: agent, adapter: adapter)
             return
         }
         guard let window = AppDelegate.window,
             let screen = window.screen ?? NSScreen.main
         else { return }
-        let contentSize = CGSize(width: 480, height: 420)
+        let contentSize = CGSize(width: 480, height: 440)
         let frame = IslandMetrics.peekFrame(
             anchor: window.frame, screenFrame: screen.frame, size: contentSize,
             scale: screen.backingScaleFactor)
@@ -72,17 +78,34 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
         hosting.sizingOptions = []
         panel.contentViewController = hosting
         self.panel = panel
-        installDismissMonitors()
         panel.orderFrontRegardless()
         reload(agent: agent, adapter: adapter)
+        startLiveStream(agent: agent, adapter: adapter)
+
+        // Install dismiss monitors on next runloop cycle so the opening click isn't captured
+        DispatchQueue.main.async { [weak self] in
+            self?.installDismissMonitors()
+        }
     }
 
     func dismiss() {
         fetchTask?.cancel()
         fetchTask = nil
+        streamTimer?.invalidate()
+        streamTimer = nil
         removeDismissMonitors()
         panel?.orderOut(nil)
         panel = nil
+    }
+
+    private func startLiveStream(agent: AgentSnapshot, adapter: any PlexerAdapter) {
+        streamTimer?.invalidate()
+        streamTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isVisible else { return }
+                self.reload(agent: agent, adapter: adapter)
+            }
+        }
     }
 
     /// Fetch the tail + diff off the main actor, cancelling any in-flight
@@ -96,9 +119,9 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
         model.sessionPath = agent.sessionPath
         model.isWorking = agent.kind == .progress || agent.kind == .started
         model.projectSlug = agent.projectContext?.project ?? agent.source
-        model.tailLines = []
-        model.diffPreview = nil
-        model.isLoading = true
+        if model.tailLines.isEmpty {
+            model.isLoading = true
+        }
         let paneId = agent.paneId
         let cwd = agent.cwd
         let source = agent.source
@@ -132,10 +155,19 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     // MARK: - Dismissal (Esc + outside-click)
 
     private func installDismissMonitors() {
-        guard clickMonitor == nil, keyMonitor == nil else { return }
+        guard clickMonitor == nil, keyMonitor == nil, panel != nil else { return }
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
             [weak self] event in
-            guard let self, let panel = self.panel, event.window !== panel else { return event }
+            guard let self, let panel = self.panel else { return event }
+
+            // Ignore clicks within the panel itself
+            if event.window === panel { return event }
+
+            // Ignore clicks within the Notch HUD window
+            if let hudWindow = AppDelegate.window, event.window === hudWindow {
+                return event
+            }
+
             let screenPoint =
                 event.window?.convertPoint(toScreen: event.locationInWindow)
                 ?? event.locationInWindow
@@ -219,6 +251,7 @@ private struct PeekPanelView: View {
             Divider().overlay(Color.white.opacity(0.15))
             tailSection
             choiceSection
+            quickActionsDock
             if let diff = model.diffPreview {
                 Divider().overlay(Color.white.opacity(0.15))
                 VStack(alignment: .leading, spacing: 4) {
@@ -259,7 +292,102 @@ private struct PeekPanelView: View {
                 appeared = true
             }
         }
-        .frame(width: 480, height: 420)
+        .frame(width: 480, height: 440)
+    }
+
+    @ViewBuilder
+    private var quickActionsDock: some View {
+        HStack(spacing: 8) {
+            Button {
+                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
+                    AgentEventManager.shared.performAction(paneId: paneId) {
+                        $0.stop(paneId: paneId)
+                    }
+                } else {
+                    StandaloneAgentDispatcher.dispatchAbort(agentName: model.source, cwd: model.cwd)
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("^C Abort")
+                        .font(.system(size: 9.5, weight: .semibold))
+                }
+                .foregroundColor(.red.opacity(0.9))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.red.opacity(0.14), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Interrupt agent execution (^C)")
+
+            Button {
+                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
+                    AgentEventManager.shared.performAction(paneId: paneId) {
+                        $0.approve(paneId: paneId)
+                    }
+                } else {
+                    StandaloneAgentDispatcher.dispatchApproval(
+                        agentName: model.source, approved: true, cwd: model.cwd)
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Approve (y)")
+                        .font(.system(size: 9.5, weight: .semibold))
+                }
+                .foregroundColor(.green.opacity(0.9))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.green.opacity(0.14), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Send 'y' approval")
+
+            Button {
+                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
+                    AgentEventManager.shared.performAction(paneId: paneId) {
+                        $0.deny(paneId: paneId)
+                    }
+                } else {
+                    StandaloneAgentDispatcher.dispatchApproval(
+                        agentName: model.source, approved: false, cwd: model.cwd)
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Deny (n)")
+                        .font(.system(size: 9.5, weight: .semibold))
+                }
+                .foregroundColor(.orange.opacity(0.9))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.orange.opacity(0.14), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Send 'n' rejection")
+
+            Spacer(minLength: 4)
+
+            if model.isWorking {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.cyan)
+                        .frame(width: 5, height: 5)
+                    Text("Live")
+                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.cyan)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.cyan.opacity(0.1), in: Capsule())
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.25))
     }
 
     @ViewBuilder
@@ -292,7 +420,7 @@ private struct PeekPanelView: View {
 
     private var choiceSection: some View {
         let choices = ChoiceExtractor.extractChoices(fromLines: model.tailLines)
-        guard !choices.isEmpty, let paneId = model.paneId else { return AnyView(EmptyView()) }
+        guard !choices.isEmpty else { return AnyView(EmptyView()) }
         return AnyView(
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 4) {
@@ -306,8 +434,15 @@ private struct PeekPanelView: View {
                     HStack(spacing: 6) {
                         ForEach(choices) { option in
                             Button {
-                                AgentEventManager.shared.performAction(paneId: paneId) {
-                                    $0.approveChoice(paneId: paneId, choice: option.id)
+                                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
+                                    AgentEventManager.shared.performAction(paneId: paneId) {
+                                        $0.approveChoice(paneId: paneId, choice: option.id)
+                                    }
+                                } else {
+                                    StandaloneAgentDispatcher.dispatchOption(
+                                        agentName: model.source, option: "\(option.id)",
+                                        cwd: model.cwd
+                                    )
                                 }
                             } label: {
                                 HStack(spacing: 4) {

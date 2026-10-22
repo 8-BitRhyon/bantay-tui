@@ -38,7 +38,16 @@ public enum StandaloneAgentDispatcher {
         }
         let stripped = raw.replacingOccurrences(of: "standalone:", with: "")
         let firstComponent = stripped.split(separator: ":").first.map(String.init) ?? stripped
-        return firstComponent.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let noBullet = firstComponent.split(separator: "·").first.map(String.init) ?? firstComponent
+        return noBullet.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether the agent runs inside a desktop GUI IDE (Antigravity, Cursor, Windsurf, Zed, VS Code).
+    public static func isGuiAgent(name: String) -> Bool {
+        let clean = cleanAgentName(from: name)
+        return clean == "antigravity" || clean == "antigravity-ide" || clean == "agy"
+            || clean == "cursor" || clean == "windsurf" || clean == "cascade"
+            || clean == "zed" || clean == "vscode" || clean == "code"
     }
 
     @MainActor
@@ -46,6 +55,7 @@ public enum StandaloneAgentDispatcher {
         agentName: String,
         text: String,
         cwd: String? = nil,
+        pid: Int? = nil,
         autoSend: Bool = true
     ) {
         guard enableInputSynthesis else { return }
@@ -57,57 +67,113 @@ public enum StandaloneAgentDispatcher {
         NSPasteboard.general.setString(text, forType: .string)
 
         // 2. Focus target application or terminal via TerminalFocusser
-        _ = TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd)
+        _ = TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid)
 
         // 3. Trackpad haptics
         NSHapticFeedbackManager.defaultPerformer.perform(
             .generic, performanceTime: .now
         )
 
-        // 4. Synthesize ⌘V and Return into the focused agent window
+        // 4. Synthesize input into focused agent window / prompt
         if autoSend {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                pasteAndReturnAction()
+            let isGui = isGuiAgent(name: cleanName)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+                pasteAndReturn(isGui: isGui)
+            }
+        }
+    }
+
+    @MainActor
+    public static func dispatchApproval(
+        agentName: String,
+        approved: Bool,
+        cwd: String? = nil,
+        pid: Int? = nil
+    ) {
+        guard enableInputSynthesis else { return }
+        let cleanName = cleanAgentName(from: agentName)
+        _ = TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let key = approved ? "y" : "n"
+            let script = """
+                tell application "System Events"
+                    keystroke "\(key)"
+                    delay 0.05
+                    key code 36
+                end tell
+                """
+            if let asObj = NSAppleScript(source: script) {
+                var err: NSDictionary?
+                asObj.executeAndReturnError(&err)
+            }
+        }
+    }
+
+    @MainActor
+    public static func dispatchOption(
+        agentName: String,
+        option: String,
+        cwd: String? = nil,
+        pid: Int? = nil
+    ) {
+        guard enableInputSynthesis else { return }
+        dispatchPrompt(agentName: agentName, text: option, cwd: cwd, pid: pid, autoSend: true)
+    }
+
+    @MainActor
+    public static func dispatchAbort(
+        agentName: String,
+        cwd: String? = nil,
+        pid: Int? = nil
+    ) {
+        guard enableInputSynthesis else { return }
+        let cleanName = cleanAgentName(from: agentName)
+        _ = TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let script = """
+                tell application "System Events"
+                    keystroke "c" using control down
+                end tell
+                """
+            if let asObj = NSAppleScript(source: script) {
+                var err: NSDictionary?
+                asObj.executeAndReturnError(&err)
             }
         }
     }
 
     private static func sendPasteAndReturn() {
-        // 1. Synthesize via CGEvent directly to system event tap
-        let src = CGEventSource(stateID: .combinedSessionState)
-        let vKeyCode: CGKeyCode = 9
-        let returnKeyCode: CGKeyCode = 36
+        pasteAndReturn(isGui: false)
+    }
 
-        if let vDown = CGEvent(keyboardEventSource: src, virtualKey: vKeyCode, keyDown: true) {
-            vDown.flags = .maskCommand
-            vDown.post(tap: .cghidEventTap)
-        }
-        if let vUp = CGEvent(keyboardEventSource: src, virtualKey: vKeyCode, keyDown: false) {
-            vUp.flags = .maskCommand
-            vUp.post(tap: .cghidEventTap)
+    private static func pasteAndReturn(isGui: Bool) {
+        let script: String
+        if isGui {
+            // For VS Code / Antigravity / Cursor: Command+L focuses Chat input, then Command+V pastes and Return submits
+            script = """
+                tell application "System Events"
+                    keystroke "l" using command down
+                    delay 0.12
+                    keystroke "v" using command down
+                    delay 0.08
+                    key code 36
+                end tell
+                """
+        } else {
+            // For Terminal: Command+V pastes directly into active shell/CLI, then Return submits
+            script = """
+                tell application "System Events"
+                    keystroke "v" using command down
+                    delay 0.08
+                    key code 36
+                end tell
+                """
         }
 
-        usleep(60_000)  // 60ms pause between paste and enter
-
-        if let retDown = CGEvent(
-            keyboardEventSource: src, virtualKey: returnKeyCode, keyDown: true)
-        {
-            retDown.post(tap: .cghidEventTap)
-        }
-        if let retUp = CGEvent(
-            keyboardEventSource: src, virtualKey: returnKeyCode, keyDown: false)
-        {
-            retUp.post(tap: .cghidEventTap)
-        }
-
-        // 2. Backup via System Events AppleScript
-        let script = """
-            tell application "System Events"
-                keystroke "v" using command down
-                delay 0.06
-                key code 36
-            end tell
-            """
         if let asObj = NSAppleScript(source: script) {
             var err: NSDictionary?
             asObj.executeAndReturnError(&err)

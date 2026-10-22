@@ -7787,6 +7787,61 @@ struct LogicCheckMain {
                 reordered,
                 "L152 reorder swaps column order"
             )
+
+            // Layer 153: Overview Zoom Mode, Auto-Chaining, GUI Dispatcher & Ghostty Bundle
+            let overview = StripLayoutEngine.computeOverviewLayout(columns: cols, viewport: viewport)
+            check(
+                overview.columnFrames.count == 3,
+                "L153 computeOverviewLayout produces scaled frames for all 3 columns"
+            )
+            check(
+                overview.maxScrollOffset == 0.0,
+                "L153 computeOverviewLayout fits all columns on screen with 0 scroll offset"
+            )
+            check(
+                overview.visibleWindowIDs.contains("w1") && overview.visibleWindowIDs.contains("w2") && overview.visibleWindowIDs.contains("w3"),
+                "L153 computeOverviewLayout marks all windows visible"
+            )
+
+            let testWins = [
+                StripWindowInfo(id: "ide-1", pid: 101, appBundleID: "com.google.antigravity-ide", title: "IDE"),
+                StripWindowInfo(id: "browser-1", pid: 102, appBundleID: "company.thebrowser.dia", title: "localhost:3000"),
+                StripWindowInfo(id: "term-1", pid: 103, appBundleID: "com.mitchellh.ghostty", title: "tests"),
+            ]
+            let chainedCols = StripLayoutEngine.autoChainWorkflow(windows: testWins, projectSlug: "bantay")
+            check(
+                chainedCols.count == 3,
+                "L153 autoChainWorkflow produces 3 triage stages (IDE -> Browser -> Runner)"
+            )
+            check(
+                chainedCols[0].windows.first?.id == "ide-1" && chainedCols[1].windows.first?.id == "browser-1",
+                "L153 autoChainWorkflow orders IDE first and browser second"
+            )
+
+            check(
+                StandaloneAgentDispatcher.isGuiAgent(name: "antigravity") && StandaloneAgentDispatcher.isGuiAgent(name: "cursor"),
+                "L153 isGuiAgent identifies Antigravity and Cursor as desktop GUI IDEs"
+            )
+            check(
+                !StandaloneAgentDispatcher.isGuiAgent(name: "claude") && !StandaloneAgentDispatcher.isGuiAgent(name: "opencode"),
+                "L153 isGuiAgent identifies Claude Code and OpenCode as TUI terminal agents"
+            )
+
+            let parsedTurns = RichSessionViewer.parseTranscript(lines: [
+                "❯ User: Build HUD Phase 3",
+                "→ Running swift test",
+                "● Phase 3 verified and complete",
+                "│ background process output line"
+            ])
+            check(
+                parsedTurns.count == 4 && parsedTurns[0].kind == .userPrompt && parsedTurns[1].kind == .toolCall && parsedTurns[2].kind == .assistant && parsedTurns[3].kind == .raw,
+                "L153 parseTranscript parses formatted HUD lines into structured Turn cards"
+            )
+
+            check(
+                TerminalRegistry.preferredBundleIDs.first == "com.mitchellh.ghostty",
+                "L153 TerminalRegistry prioritizes com.mitchellh.ghostty at index 0"
+            )
         }
 
         try? FileManager.default.removeItem(at: brainMockDir)

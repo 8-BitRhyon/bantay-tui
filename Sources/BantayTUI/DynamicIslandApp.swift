@@ -51,6 +51,9 @@ struct DynamicIslandApp: App {
             BantayMCPServer.runStdioLoop()
             exit(0)
         }
+        if CommandLine.arguments.contains("--ping") || CommandLine.arguments.contains("ping") {
+            sendSocketCommand(method: "bantay.ping", params: [:])
+        }
         if CommandLine.arguments.contains("--settings")
             || CommandLine.arguments.contains("settings")
         {
@@ -81,6 +84,24 @@ struct DynamicIslandApp: App {
                 sendSocketCommand(method: "strip.approval", params: [:])
             case "status":
                 sendSocketCommand(method: "strip.status", params: [:])
+            case "overview":
+                sendSocketCommand(method: "strip.overview", params: [:])
+            case "reorder":
+                let from =
+                    Int(
+                        CommandLine.arguments.indices.contains(stripIdx + 2)
+                            ? CommandLine.arguments[stripIdx + 2] : "0") ?? 0
+                let to =
+                    Int(
+                        CommandLine.arguments.indices.contains(stripIdx + 3)
+                            ? CommandLine.arguments[stripIdx + 3] : "1") ?? 1
+                sendSocketCommand(method: "strip.reorder", params: ["from": from, "to": to])
+            case "autochain":
+                let slug =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? CommandLine.arguments[stripIdx + 2] : ""
+                sendSocketCommand(
+                    method: "strip.autochain", params: slug.isEmpty ? [:] : ["slug": slug])
             default:
                 sendSocketCommand(method: "strip.toggle", params: [:])
             }
@@ -280,6 +301,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         ) { _ in
             MainActor.assumeIsolated {
                 StripWindowManager.shared.jumpToApprovalAgent()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripOverviewRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.toggleOverviewMode()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripReorderRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let from = (note.userInfo?["from"] as? Int) ?? 0
+            let to = (note.userInfo?["to"] as? Int) ?? 1
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.reorderColumn(fromIndex: from, toIndex: to)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripAutochainRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let slug = note.userInfo?["slug"] as? String
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.autoChainCurrentProject(slug: slug)
             }
         }
         StripWindowManager.shared.start()

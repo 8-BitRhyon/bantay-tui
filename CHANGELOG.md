@@ -1,120 +1,42 @@
 # Changelog
 
-All notable changes to this project are documented here. The format is based
-on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Added
 
-- **swiftui-flx In-Source Design System** (`DesignSystem/`): full native SwiftUI
-  tokens (`FLXSpacing`, `FLXRadius`, `FLXBorderWidth`, `FLXOpacity`, `FLXTypography`,
-  `FLXColors`), theme management (`FLXTheme`, `FLXThemeEnvironment`), adaptive
-  `FLXTheme+Bantay` OLED Glass preset, and composable primitives (`FLXButton`, `FLXCard`,
-  `FLXTextField`) following the shadcn/ui distribution model.
-- **Universal Multi-Vendor Quota & BYOK Adapters** (`ClaudeUsageAdapter`,
-  `CodexUsageAdapter`, `CursorUsageAdapter`, `OpenRouterUsageAdapter`,
-  `OllamaUsageAdapter`): real-time rate limit hook ingestion from Claude Code
-  (`statusLine` pipe + `POST /telemetry/claude`), deep SQLite parsing for Codex
-  (`state_5.sqlite`) and Cursor (`state.vscdb`), OpenRouter BYOK key metadata,
-  and local Ollama zero-cost model tracking.
-- **Prompt Caching Economics & Savings** (`UsageTracker`, `UsageSnapshot`):
-  true 90% discount on cache read tokens ($0.30/1M vs $3.00/1M) preventing
-  artificial cost inflation, plus monetary savings tracking (`promptCacheSavingsUSD`).
-- **Dynamic Live Countdowns & Quota Failover** (`ProviderQuota`, `TaskDispatcher`):
-  minute-accurate live countdowns (`"Resets in 1h 24m"`) and automated fallback routing
-  across agent candidates (`claude` → `codex` → `antigravity` → `ollama`) when a provider
-  hits critical saturation or 429 quarantine backoff.
-- **Sanitized Semantic Activity Detection** (`AgentDetector`, `IslandMetrics`):
-  intelligent human-readable status extraction (`"Editing Notch.swift"`, `"Running tests"`),
-  stripping ANSI escapes and braille spinners.
-- **Live usage, cost & quota** (`KiloUsageAdapter`): reads kilo's SQLite
-  ledger (`~/.local/share/kilo/kilo.db` — the source behind `kilo stats`)
-  for real daily spend vs. your budget (quota badge + edge-glow) and a
-  tokens-per-minute rate via poll-and-diff of cumulative totals. A scalable
-  `UsageSample` provider protocol is the base for Codex/Claude/opencode/
-  aider adapters. Replaces the dead transcript parser for kilo.
-- **Apple Reminders sync** (`RemindersProvider`, EventKit): the task tab
-  can sync live Reminders — quick-add, complete, remove, overdue highlight.
-- **Barrie-style natural language parser** (`NaturalLanguageParser`): pure
-  + deterministic — relative dates (today/tomorrow/in N days/next week/
-  EOD/EOM), weekday names, times (at 5pm, 17:00, 9am), priority (!!/!),
-  @tags, @agents — with a live parse-preview chip as you type in the task
-  bar.
-- **herdr push event stream** (`HerdrEventStream`): a persistent
-  `events.subscribe` socket subscription replaces the 2-second `agent.list`
-  poll as the source of truth for status transitions. `pane.updated` /
-  `pane.agent_detected` / `pane.closed` events drive the roster instantly;
-  the poll loop is now a slow safety net. Per-pane `herdr agent wait`
-  subprocesses were removed (they are redundant with the push stream and
-  spawned one `Process` per pane).
-- **ntfy.sh push notifications** (`AgentAlertNotifier`): approvals/blocked,
-  failures, and completions are pushed to a configured ntfy topic so they
-  reach you on other devices. Configurable topic + server (self-hosted
-  friendly) in Settings → Push notifications.
-- **tmux status-bar integration** (`scripts/bantay-status.sh` +
-  `TmuxStatusInstaller`): a one-line agent summary (◐ working · ⚠ blocked ·
-  ✓ done) can be wired into tmux `status-right` from Settings.
-- **Claude Code `Notification` hook**: installs `agent_needs_input` /
-  `agent_completed` / `permission_prompt` / `idle_prompt` matchers — native
-  "needs you" and "done" signals that no longer depend on screen detection.
-- **Claude Code `PermissionRequest` hook**: the current event name modern
-  Claude Code fires (legacy `PermissionPrompt` is kept for older builds).
-- **Claude Code `StopFailure` hook**: typed failure reasons
-  (rate_limit, auth, billing, …) surface as `failed` events instead of a
-  silent stop.
-- **Recent activity section** in the expanded roster: last few completions /
-  failures (source, what it was doing, how long ago) so you can see what
-  happened without opening the peek overlay.
-- **Live status in roster rows**: working agents show their current
-  `title`/`message` in the status line instead of a generic label.
-- **Peek overlay affordance**: replaced the cryptic `▸` with an `eye` icon,
-  and gave the overlay an explicit 480×420 frame (it previously collapsed to
-  a tiny window).
+- **Infinite Strip Window Manager** (`StripLayoutEngine.swift`, `StripWindowManager.swift`, `StripGestureInterceptor.swift`): Continuous horizontal window tiling engine. Uses damped harmonic springs, overscroll resistance, five width presets, and trackpad gestures.
+- **Bird's-Eye Zoom Overview Mode**: Toggles miniature previews of all columns to fit the entire strip on-screen without scrolling (`bantay strip overview`).
+- **Canvas Column Reordering & Auto-Chaining**: Added column reordering (`bantay strip reorder`) and agent auto-chaining (`bantay strip autochain`). Arranges windows into IDE (50%), Browser (35%), and Tests (25%).
+- **Window Status Halos** (`StripOverlayRenderer.swift`): Added ambient window borders reflecting agent states: amber for pending approval and green for active execution.
+- **Standalone Desktop GUI IDE Automation** (`StandaloneAgentDispatcher.swift`): Keystroke automation for Antigravity IDE, Cursor, Windsurf, Zed, and VS Code. Presses `⌘L` to focus chat and pastes input.
+- **Interactive Peek Drawer Quick Actions** (`PeekPanel.swift`): Added docked controls (`^C Abort`, `Approve`, `Deny`, choices, and live status badge) to the log tail drawer.
+- **Rich Session Browser Viewer** (`RichSessionViewer.swift`): Generates an offline HTML transcript viewer with structured turn cards. Opens directly in the default browser.
+- **Control Gateway** (`ControlGateway.swift`): Added a UNIX domain socket server (`control.sock`). Processes NDJSON commands for strip management, settings, and agent status queries.
+- **Model Context Protocol Server** (`BantayMCPServer.swift`): Added an MCP server endpoint. Exposes Bantay state and agent controls to AI clients.
+- **Multi-Vendor Quota Tracking** (`UniversalQuotaAdapters.swift`): Added quota adapters for Claude Code rate limits, Codex and Cursor SQLite databases, OpenRouter BYOK, and Ollama models.
+- **Prompt Caching Economics & Savings** (`UsageTracker.swift`): Applies a 90% discount on cache read tokens and calculates cumulative cost savings.
+- **Live Countdowns & Quota Failover** (`TaskDispatcher.swift`): Shows reset countdowns (`Resets in 1h 24m`) and routes tasks to backup providers during quota saturation.
+- **Sanitized Semantic Activity Detection** (`AgentDetector.swift`, `IslandMetrics.swift`): Extracts clean status messages by stripping ANSI escape sequences and braille spinners.
+- **Apple Reminders Sync & Natural Language Entry** (`RemindersProvider.swift`, `NaturalLanguageParser.swift`): Added EventKit synchronization and natural language task parsing.
+- **Push Alerts & Status Bar** (`AgentAlertNotifier.swift`, `TmuxStatusInstaller.swift`): Added ntfy.sh push notifications and an optional tmux status-right bar summary.
 
 ### Changed
 
-- **Expanded panel declutter** (NotchDrop-style single-list layout):
-  - Approval queue cards removed — blocked agents render as roster rows with
-    inline approve/deny/choice/submit controls.
-  - Footer bar removed (`N agents · done · failed · usage gauge · adapter ·
-    pending`) — counts live in the header.
-  - Per-row `git diff --shortstat` removed (also dropped the background
-    per-agent `git` process).
-  - Removed the redundant static header dot and duplicate source chip.
-  - Panel height math (`expandedSize`, `contentHeight`, `stableRosterHeight`)
-    now accounts for grouped section headers and drops the footer/queue terms;
-    the panel is ~78pt shorter for the same roster and fills to the rounded
-    bottom with no black band.
-- **Corner wings drawn as pure path** (`cornerCutout`): the
-  `destinationOut`-blend-in-mask implementation flaked into a stray solid
-  square on macOS 26; replaced with a path silhouette verified pixel-identical
-  to the blend's output (213 px vs 209 px at 4×, both corners).
-- **Black bottom band fix**: removed the redundant inner `.clipped()` after
-  `.offset(y:)` in `NotchStatusView.body` — the clip was cutting off the
-  footer (drawn at `[topInset…islandHeight]`) against the pre-offset frame
-  `[0…contentHeight]`, leaving black pill visible in its place.
-- **Drop files onto the notch** (`KeyablePanel: NSDraggingDestination`): the
-  island window registers for `.fileURL` drops; dragging a file over the notch
-  expands it and opens the Shelf tab, and the drop lands on the shelf.
+- **Terminal Focus Registry** (`TerminalFocusser.swift`): Corrected the Ghostty bundle identifier to `com.mitchellh.ghostty` and added `com.google.antigravity-ide`. Added PID ancestor lookup for CLI agents.
+- **Setup Script Deployment** (`scripts/setup.sh`): Updated binary installation to check modification timestamps (`-nt`). Installs the newest build to the app bundle.
+- **Peek Panel Event Monitoring** (`PeekPanel.swift`): Deferred click-outside dismissal to the next runloop turn. Ignores clicks on the Notch HUD window to prevent premature dismissal.
+- **HUD Row Controls** (`AgentRowView.swift`, `NotchStatusView.swift`): Canonicalized agent names by stripping project path slugs before routing focus and prompt dispatching.
 
 ### Fixed
 
-- Expanded panel scroll bar appeared with grouping enabled because grouped
-  section headers (18pt each) were not counted in the roster height math —
-  the roster overflowed its scroll area. Headers are now part of the natural
-  roster height.
-- Peek overlay opened "very small" because the hosting view collapsed to its
-  content size; it now has an explicit frame.
-- (working tree note) docs: this changelog plus README/ARCHITECTURE refreshed
-  to reflect the current implementation.
+- Fixed Ghostty terminal focus failing due to invalid bundle identifier.
+- Fixed Peek drawer closing immediately when clicked from the notch.
+- Fixed GUI IDE prompts pasting into active code editors instead of chat.
+- Fixed setup script copying stale binaries when fresh builds were available.
+- Fixed approval controls being disabled for standalone agents.
 
-## [0.1.0] - 2026-08-05 (pre-release baseline)
+## [0.1.0] - 2026-08-05
 
-Historical state before this changelog existed. See `git log` and the plans
-under `plans/` for the PR #47–#53 feature set: notch island + idle strip,
-expanded control plane with approval queue, universal agent detection (herdr
-poll + standalone scan + event-file ingest), global `⌥Space` + roster
-shortcuts, approval heartbeat, full-screen/space/menu-bar/display reliability,
-cost gauge, shelf, and the Go TUI control client.
+- Initial baseline release. Included notch island idle strip, expanded control plane, approval queue, universal agent detection, and Go TUI client.

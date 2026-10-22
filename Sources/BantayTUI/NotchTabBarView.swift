@@ -40,7 +40,9 @@ struct NotchTabBarView: View {
             VStack(spacing: 2) {
                 Text(title)
                     .font(.system(size: 10, weight: isSelected ? .bold : .medium))
-                    .foregroundColor(isSelected ? BantayTheme.textPrimary : BantayTheme.textTertiary)
+                    .foregroundColor(
+                        isSelected ? BantayTheme.textPrimary : BantayTheme.textTertiary
+                    )
                     .padding(.horizontal, 4)
                 Capsule()
                     .fill(isSelected ? BantayTheme.statusWorking : Color.clear)

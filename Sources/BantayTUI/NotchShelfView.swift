@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 /// Drop shelf & clipboard history view for the expanded Notch HUD.
 struct NotchShelfView: View {

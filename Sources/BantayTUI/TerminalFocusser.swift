@@ -4,7 +4,9 @@ import Foundation
 /// Terminal bundle IDs ordered by user activation preference.
 enum TerminalRegistry {
     static let preferredBundleIDs: [String] = [
+        "com.mitchellh.ghostty",
         "com.ghostty.app",
+        "com.google.antigravity-ide",
         "dev.warp.Warp-Stable",
         "org.wezfurlong.wezterm",
         "net.kovidgoyal.kitty",
@@ -50,8 +52,20 @@ enum TerminalFocusser {
         guard let app = runningApps.first(where: { $0.bundleIdentifier == target }) else {
             return openSystemTerminal()
         }
-        app.activate(options: [.activateIgnoringOtherApps])
+        app.activate(options: [.activateAllWindows])
         NSApp?.deactivate()
+        if let bundleID = app.bundleIdentifier {
+            let script = """
+                tell application id "\(bundleID)"
+                    reopen
+                    activate
+                end tell
+                """
+            if let asObj = NSAppleScript(source: script) {
+                var err: NSDictionary?
+                asObj.executeAndReturnError(&err)
+            }
+        }
         return true
     }
 
@@ -69,9 +83,18 @@ enum TerminalFocusser {
     /// Focus a standalone application window (e.g. Antigravity IDE, Cursor, Windsurf) by workspace path or app bundle.
     @MainActor
     @discardableResult
-    static func focusStandalone(source: String, cwd: String? = nil) -> Bool {
+    static func focusStandalone(source: String, cwd: String? = nil, pid: Int? = nil) -> Bool {
         let nameLower = source.lowercased()
         let runningApps = NSWorkspace.shared.runningApplications
+
+        // If PID is provided, check if it or its parent belongs to a running GUI or Terminal app
+        if let pid, pid > 0 {
+            if let target = findAppByPidOrParent(pid: pid, runningApps: runningApps) {
+                activateApp(target)
+                return true
+            }
+        }
+
         let targetApp = runningApps.first { app in
             let appName = (app.localizedName ?? "").lowercased()
             let bundleID = (app.bundleIdentifier ?? "").lowercased()
@@ -112,15 +135,7 @@ enum TerminalFocusser {
         }
 
         if let app = targetApp {
-            app.activate(options: [.activateIgnoringOtherApps])
-            NSApp?.deactivate()
-            if let bundleID = app.bundleIdentifier {
-                let script = "tell application id \"\(bundleID)\" to activate"
-                if let asObj = NSAppleScript(source: script) {
-                    var err: NSDictionary?
-                    asObj.executeAndReturnError(&err)
-                }
-            }
+            activateApp(app)
             return true
         }
 
@@ -142,5 +157,52 @@ enum TerminalFocusser {
         }
 
         return focus(preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+    }
+
+    @MainActor
+    private static func activateApp(_ app: NSRunningApplication) {
+        app.activate(options: [.activateAllWindows])
+        NSApp?.deactivate()
+        if let bundleID = app.bundleIdentifier {
+            let script = """
+                tell application id "\(bundleID)"
+                    reopen
+                    activate
+                end tell
+                """
+            if let asObj = NSAppleScript(source: script) {
+                var err: NSDictionary?
+                asObj.executeAndReturnError(&err)
+            }
+        }
+    }
+
+    /// Traces the parent process of a PID to discover its hosting terminal or GUI app.
+    private static func findAppByPidOrParent(
+        pid: Int, runningApps: [NSRunningApplication]
+    ) -> NSRunningApplication? {
+        var currentPid = pid
+        for _ in 0..<5 {
+            if let match = runningApps.first(where: { $0.processIdentifier == currentPid }) {
+                return match
+            }
+            // Find parent pid via ps -o ppid= -p <pid>
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+            proc.arguments = ["-o", "ppid=", "-p", "\(currentPid)"]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = FileHandle.nullDevice
+            guard (try? proc.run()) != nil else { break }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard
+                let str = String(data: data, encoding: .utf8)?.trimmingCharacters(
+                    in: .whitespacesAndNewlines),
+                let ppid = Int(str), ppid > 1
+            else { break }
+            currentPid = ppid
+        }
+        return nil
     }
 }

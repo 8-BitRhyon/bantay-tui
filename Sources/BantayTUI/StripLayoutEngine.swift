@@ -558,4 +558,127 @@ public enum StripLayoutEngine {
         columns.insert(moving, at: toIndex)
         return true
     }
+
+    /// Computes bird's-eye zoom overview layout: scales all columns to fit on a single screen without scrolling.
+    public static func computeOverviewLayout(
+        columns: [StripColumn],
+        viewport: StripViewport
+    ) -> StripLayoutResult {
+        guard !columns.isEmpty else { return StripLayoutResult() }
+
+        let availW = viewport.availableWidth
+        let availH = viewport.availableHeight
+        let gap = viewport.gap
+        let inset = viewport.inset
+
+        let unscaled = computeLayout(columns: columns, viewport: viewport)
+        let totalUnscaledW = max(1.0, unscaled.totalStripWidth - (2.0 * inset))
+        let targetW = availW - (Double(columns.count - 1) * gap)
+        let scale = min(1.0, max(0.15, targetW / totalUnscaledW))
+
+        var colFrames: [StripRect] = []
+        var winFrames: [String: StripRect] = [:]
+        var visibleIDs = Set<String>()
+
+        var currentX = viewport.screenOriginX + inset
+        let scaledH = availH * scale
+        let offsetY = viewport.screenOriginY + inset + ((availH - scaledH) / 2.0)
+
+        for col in columns {
+            let colW = max(60.0, round(col.widthFraction * (availW + gap) - gap) * scale)
+            let colFrame = StripRect(
+                x: currentX,
+                y: offsetY,
+                width: colW,
+                height: scaledH
+            )
+            colFrames.append(colFrame)
+
+            for win in col.windows {
+                winFrames[win.id] = colFrame
+                visibleIDs.insert(win.id)
+            }
+            currentX += colW + gap
+        }
+
+        let totalWidth = currentX - gap + inset - (viewport.screenOriginX)
+        return StripLayoutResult(
+            columnFrames: colFrames,
+            windowFrames: winFrames,
+            totalStripWidth: totalWidth,
+            maxScrollOffset: 0.0,
+            visibleWindowIDs: visibleIDs,
+            offscreenLeftIDs: [],
+            offscreenRightIDs: []
+        )
+    }
+
+    /// Automatically chains windows into an agent triage workflow:
+    /// IDE/Editor (0.50) -> Browser Preview (0.35) -> Tests/Runner (0.25).
+    public static func autoChainWorkflow(
+        windows: [StripWindowInfo],
+        projectSlug: String? = nil
+    ) -> [StripColumn] {
+        guard !windows.isEmpty else { return [] }
+
+        var ideWindows: [StripWindowInfo] = []
+        var browserWindows: [StripWindowInfo] = []
+        var terminalWindows: [StripWindowInfo] = []
+
+        for win in windows {
+            let bId = win.appBundleID.lowercased()
+            let title = win.title.lowercased()
+            let name = (win.agentName ?? "").lowercased()
+
+            if bId.contains("cursor") || bId.contains("antigravity") || bId.contains("windsurf")
+                || bId.contains("code") || bId.contains("zed") || name.contains("cursor")
+                || name.contains("antigravity")
+            {
+                ideWindows.append(win)
+            } else if bId.contains("chrome") || bId.contains("safari") || bId.contains("dia")
+                || bId.contains("arc") || bId.contains("firefox") || title.contains("localhost")
+                || title.contains("http")
+            {
+                browserWindows.append(win)
+            } else {
+                terminalWindows.append(win)
+            }
+        }
+
+        var chained: [StripColumn] = []
+
+        if !ideWindows.isEmpty {
+            chained.append(
+                StripColumn(
+                    windows: ideWindows,
+                    widthFraction: 0.50,
+                    isTabbed: ideWindows.count > 1
+                )
+            )
+        }
+
+        if !browserWindows.isEmpty {
+            chained.append(
+                StripColumn(
+                    windows: browserWindows,
+                    widthFraction: 0.35,
+                    isTabbed: browserWindows.count > 1
+                )
+            )
+        }
+
+        if !terminalWindows.isEmpty {
+            chained.append(
+                StripColumn(
+                    windows: terminalWindows,
+                    widthFraction: 0.25,
+                    isTabbed: terminalWindows.count > 1
+                )
+            )
+        }
+
+        return chained.isEmpty
+            ? [StripColumn(windows: windows, widthFraction: 0.50)]
+            : chained
+    }
 }

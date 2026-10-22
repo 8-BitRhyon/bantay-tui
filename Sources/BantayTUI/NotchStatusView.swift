@@ -642,7 +642,6 @@ struct NotchStatusView: View {
         peekTask = nil
     }
 
-
     /// Single-key roster shortcuts via `.onKeyPress` on macOS 14+. On older
     /// systems the local key monitor (installed in onAppear) covers them.
     private struct ShortcutKeyPressModifier: ViewModifier {
@@ -1311,7 +1310,6 @@ struct NotchStatusView: View {
         .frame(width: islandWidth, height: contentHeight, alignment: .top)
     }
 
-
     /// Calculates scroll viewport height for the agent roster.
     private var rosterScrollHeight: CGFloat {
         let chrome =
@@ -1335,15 +1333,9 @@ struct NotchStatusView: View {
         IslandMetrics.cleanHUDText(text)
     }
 
-
-
     private var historyContent: some View {
         NotchHistoryView(historyMode: $historyMode)
     }
-
-
-
-
 
     /// Watch the system pasteboard; new non-empty text lands on the shelf.
     private func pollClipboard(at date: Date) {
@@ -1356,7 +1348,6 @@ struct NotchStatusView: View {
             existing: clipboardItems, newText: text, now: date,
             limit: NotchHUDConfig.shared.clampedShelfLimit)
     }
-
 
     private func terminalPeekDrawer(text: String) -> some View {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
@@ -1413,7 +1404,8 @@ struct NotchStatusView: View {
                 return
             }
         }
-        focusStandaloneAgent(agent.source, cwd: agent.cwd)
+        let clean = StandaloneAgentDispatcher.cleanAgentName(from: agent.paneId ?? agent.source)
+        focusStandaloneAgent(clean.isEmpty ? agent.source : clean, cwd: agent.cwd)
     }
 
     /// Raise the standalone application window (e.g. Antigravity IDE, Cursor) or terminal.
@@ -1745,10 +1737,10 @@ struct NotchStatusView: View {
         }
         let terminals: Set<String> = [
             "com.apple.Terminal", "com.googlecode.iterm2", "io.alacritty",
-            "org.wezfurlong.wezterm", "com.ghostty.app", "dev.warp.Warp-Stable",
-            "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders",
+            "org.wezfurlong.wezterm", "com.ghostty.app", "com.mitchellh.ghostty",
+            "dev.warp.Warp-Stable",
+            "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.google.antigravity-ide",
         ]
         return terminals.contains(bundleID)
     }
 }
-

@@ -18,6 +18,9 @@ enum ControlGateway {
         case stripWidth
         case stripApproval
         case stripStatus
+        case stripOverview
+        case stripReorder
+        case stripAutochain
         case unknown
     }
 
@@ -74,6 +77,7 @@ enum ControlGateway {
         static let stripCatalog: [String] = [
             "strip.toggle", "strip.focus", "strip.center",
             "strip.width", "strip.approval", "strip.status",
+            "strip.overview", "strip.reorder", "strip.autochain",
         ]
 
         static func isKnown(_ method: String) -> Bool {
@@ -121,6 +125,9 @@ enum ControlGateway {
         case "strip.width": return .stripWidth
         case "strip.approval": return .stripApproval
         case "strip.status": return .stripStatus
+        case "strip.overview": return .stripOverview
+        case "strip.reorder": return .stripReorder
+        case "strip.autochain": return .stripAutochain
         default: return .unknown
         }
     }
@@ -308,6 +315,40 @@ final class ControlGatewayServer: @unchecked Sendable {
                     "gap": config.gap,
                     "inset": config.inset,
                 ])
+        case .stripOverview:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripOverviewRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["toggled": true])
+        case .stripReorder:
+            let from = intParam(request.params, "from", default: 0)
+            let to = intParam(request.params, "to", default: 1)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripReorderRequested,
+                    object: nil,
+                    userInfo: ["from": from, "to": to]
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["reordered": true, "from": from, "to": to])
+        case .stripAutochain:
+            let slug = stringParam(request.params, "slug")
+            DispatchQueue.main.async {
+                var info: [String: Any] = [:]
+                if let slug { info["slug"] = slug }
+                NotificationCenter.default.post(
+                    name: .stripAutochainRequested,
+                    object: nil,
+                    userInfo: info
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["autochained": true])
         case .unknown:
             return ControlGateway.GatewayResponse.error(
                 id: request.id, code: "unknown_method", message: request.method)

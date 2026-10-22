@@ -97,10 +97,12 @@ struct NotchHeaderBarView: View {
                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .foregroundColor(BantayTheme.textTertiary)
                 }
-                Text("“\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: mascotState))”")
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundColor(BantayTheme.textPrimary)
-                    .lineLimit(3)
+                Text(
+                    "“\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: mascotState))”"
+                )
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundColor(BantayTheme.textPrimary)
+                .lineLimit(3)
             }
             .padding(10)
             .frame(width: 200)
@@ -112,8 +114,12 @@ struct NotchHeaderBarView: View {
                         lineWidth: 1)
             )
         }
-        .help("\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): “\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: mascotState))”")
-        .accessibilityLabel("\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): \(mascotState.statusText)")
+        .help(
+            "\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): “\(NotchHUDConfig.shared.selectedMascotArchetype.personalityQuote(for: mascotState))”"
+        )
+        .accessibilityLabel(
+            "\(NotchHUDConfig.shared.selectedMascotArchetype.displayName): \(mascotState.statusText)"
+        )
     }
 
     private var spendGaugeBadge: some View {

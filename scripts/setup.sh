@@ -148,7 +148,9 @@ echo "bantay-tui: data directory ready at $DATA_DIR"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BINARY="$ROOT/.build/release/bantay"
-if [[ ! -x "$BINARY" ]]; then
+if [[ -f "$ROOT/.build/debug/bantay" && (! -f "$BINARY" || "$ROOT/.build/debug/bantay" -nt "$BINARY") ]]; then
+  BINARY="$ROOT/.build/debug/bantay"
+elif [[ ! -x "$BINARY" ]]; then
   BINARY="$ROOT/.build/debug/bantay"
 fi
 if [[ ! -x "$BINARY" ]]; then
