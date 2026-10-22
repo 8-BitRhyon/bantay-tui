@@ -102,6 +102,31 @@ struct DynamicIslandApp: App {
                     ? CommandLine.arguments[stripIdx + 2] : ""
                 sendSocketCommand(
                     method: "strip.autochain", params: slug.isEmpty ? [:] : ["slug": slug])
+            case "pin":
+                let col =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? Int(CommandLine.arguments[stripIdx + 2]) : nil
+                sendSocketCommand(
+                    method: "strip.pin",
+                    params: col != nil ? ["columnIndex": col!] : [:])
+            case "stack":
+                let dir =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? CommandLine.arguments[stripIdx + 2] : "right"
+                sendSocketCommand(method: "strip.stack", params: ["direction": dir])
+            case "unstack":
+                let dir =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? CommandLine.arguments[stripIdx + 2] : "right"
+                let toRight = (dir != "left")
+                sendSocketCommand(method: "strip.unstack", params: ["toRight": toRight])
+            case "tabbed":
+                let col =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? Int(CommandLine.arguments[stripIdx + 2]) : nil
+                sendSocketCommand(
+                    method: "strip.tabbed",
+                    params: col != nil ? ["columnIndex": col!] : [:])
             default:
                 sendSocketCommand(method: "strip.toggle", params: [:])
             }
@@ -331,6 +356,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let slug = note.userInfo?["slug"] as? String
             MainActor.assumeIsolated {
                 StripWindowManager.shared.autoChainCurrentProject(slug: slug)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripPinRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let col = note.userInfo?["columnIndex"] as? Int
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.togglePin(columnIndex: col)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripStackRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let dir = (note.userInfo?["direction"] as? String) ?? "right"
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.stack(direction: dir)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripUnstackRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let toRight = (note.userInfo?["toRight"] as? Bool) ?? true
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.unstack(toRight: toRight)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripTabbedRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let col = note.userInfo?["columnIndex"] as? Int
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.toggleTabbed(columnIndex: col)
             }
         }
         StripWindowManager.shared.start()

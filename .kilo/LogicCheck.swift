@@ -7842,6 +7842,115 @@ struct LogicCheckMain {
                 TerminalRegistry.preferredBundleIDs.first == "com.mitchellh.ghostty",
                 "L153 TerminalRegistry prioritizes com.mitchellh.ghostty at index 0"
             )
+
+            // Layer 154: Pinned Column Anchoring, Tabbed Windows & Strip Gateway Routing
+            let pinnedCols = [
+                StripColumn(
+                    windows: [StripWindowInfo(id: "pin-ide", pid: 201, title: "IDE")],
+                    widthFraction: 0.5,
+                    isTabbed: false,
+                    isPinned: true
+                ),
+                StripColumn(
+                    windows: [StripWindowInfo(id: "agent-term-1", pid: 202, title: "Agent 1")],
+                    widthFraction: 0.5,
+                    isTabbed: false,
+                    isPinned: false
+                ),
+                StripColumn(
+                    windows: [
+                        StripWindowInfo(id: "tab-win-1", pid: 203, title: "Tab 1"),
+                        StripWindowInfo(id: "tab-win-2", pid: 204, title: "Tab 2"),
+                    ],
+                    widthFraction: 0.5,
+                    isTabbed: true,
+                    focusedRow: 1,
+                    isPinned: false
+                ),
+            ]
+
+            var pinnedViewport = StripViewport(
+                screenOriginX: 0.0,
+                screenOriginY: 0.0,
+                screenWidth: 1600.0,
+                screenHeight: 900.0,
+                gap: 12.0,
+                inset: 12.0,
+                scrollOffset: 250.0
+            )
+
+            let pinnedLayout = StripLayoutEngine.computeLayout(
+                columns: pinnedCols,
+                viewport: pinnedViewport
+            )
+
+            // 1. Stationary Pinned Column Placement
+            check(
+                pinnedLayout.columnFrames.count == 3,
+                "L154 computeLayout produces 3 column frames with pinned master"
+            )
+            let pinnedFrame = pinnedLayout.columnFrames[0]
+            check(
+                pinnedFrame.x == pinnedViewport.screenOriginX + pinnedViewport.inset,
+                "L154 pinned column stays stationary at screenOriginX + inset despite scrollOffset"
+            )
+            check(
+                pinnedLayout.visibleWindowIDs.contains("pin-ide"),
+                "L154 pinned master window is always visible"
+            )
+
+            // 2. Unpinned Scroll Offsets
+            let unpinnedFrame = pinnedLayout.columnFrames[1]
+            check(
+                unpinnedFrame.x < pinnedFrame.maxX + pinnedViewport.gap,
+                "L154 unpinned column scrolls under positive scrollOffset"
+            )
+
+            // 3. Pinned Target Reveal & Center
+            let pinnedReveal = StripLayoutEngine.revealTarget(
+                columnIndex: 0,
+                columns: pinnedCols,
+                viewport: pinnedViewport
+            )
+            check(
+                pinnedReveal == 0.0,
+                "L154 revealTarget for pinned column returns 0.0"
+            )
+            let pinnedCenter = StripLayoutEngine.centerTarget(
+                columnIndex: 0,
+                columns: pinnedCols,
+                viewport: pinnedViewport
+            )
+            check(
+                pinnedCenter == 0.0,
+                "L154 centerTarget for pinned column returns 0.0"
+            )
+
+            // 4. Tabbed Column Visibility
+            check(
+                pinnedLayout.visibleWindowIDs.contains("tab-win-2"),
+                "L154 tabbed column focuses active row window"
+            )
+            check(
+                !pinnedLayout.visibleWindowIDs.contains("tab-win-1"),
+                "L154 tabbed column hides non-focused row window"
+            )
+
+            // 5. Gateway Socket Method Routing
+            check(
+                ControlGateway.GatewayRoute.isKnown("strip.pin")
+                    && ControlGateway.GatewayRoute.isKnown("strip.stack")
+                    && ControlGateway.GatewayRoute.isKnown("strip.unstack")
+                    && ControlGateway.GatewayRoute.isKnown("strip.tabbed"),
+                "L154 GatewayRoute catalog includes strip pin, stack, unstack, and tabbed"
+            )
+            check(
+                ControlGateway.route(method: "strip.pin") == .stripPin
+                    && ControlGateway.route(method: "strip.stack") == .stripStack
+                    && ControlGateway.route(method: "strip.unstack") == .stripUnstack
+                    && ControlGateway.route(method: "strip.tabbed") == .stripTabbed,
+                "L154 ControlGateway routes strip socket methods to matching verbs"
+            )
         }
 
         try? FileManager.default.removeItem(at: brainMockDir)

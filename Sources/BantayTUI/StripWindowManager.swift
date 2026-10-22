@@ -29,6 +29,7 @@ public final class StripWindowManager: ObservableObject {
     private var appActivateObserver: Any?
     private var screenChangeObserver: Any?
     private var syncTimer: Timer?
+    private var eventCancellable: AnyCancellable?
 
     private init() {
         let loadedConfig = StripConfiguration.load()
@@ -93,6 +94,19 @@ public final class StripWindowManager: ObservableObject {
             }
         }
 
+        // 4. Auto-center on agent approval event
+        eventCancellable = AgentEventManager.shared.$currentEvent
+            .compactMap { $0 }
+            .filter { $0.kind == .accessRequest || $0.kind == .waiting }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.config.isEnabled, self.config.autoCenterOnApproval else {
+                    return
+                }
+                self.syncWindows()
+                self.jumpToApproval()
+            }
+
         syncWindows()
         updateLayout(animate: false)
     }
@@ -113,6 +127,8 @@ public final class StripWindowManager: ObservableObject {
         }
         syncTimer?.invalidate()
         syncTimer = nil
+        eventCancellable?.cancel()
+        eventCancellable = nil
     }
 
     /// Toggles the strip window manager on or off.
@@ -135,7 +151,10 @@ public final class StripWindowManager: ObservableObject {
 
     /// Re-anchors viewport dimensions to current active display visible frame.
     public func updateViewportBounds() {
-        let screen = NSScreen.main ?? NSScreen.screens.first
+        let mouseLoc = NSEvent.mouseLocation
+        let screen =
+            NSScreen.screens.first(where: { NSMouseInRect(mouseLoc, $0.frame, false) })
+            ?? NSScreen.main ?? NSScreen.screens.first
         let vf = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1710, height: 1000)
 
         viewport.screenOriginX = vf.origin.x
@@ -399,16 +418,26 @@ public final class StripWindowManager: ObservableObject {
         }
     }
 
-    public func toggleTabbed() {
-        guard columns.indices.contains(activeColumnIndex) else { return }
-        columns[activeColumnIndex].isTabbed.toggle()
+    public func toggleTabbed(columnIndex: Int? = nil) {
+        let idx = columnIndex ?? activeColumnIndex
+        guard columns.indices.contains(idx) else { return }
+        columns[idx].isTabbed.toggle()
         updateLayout(animate: true)
     }
 
-    public func togglePin() {
-        guard columns.indices.contains(activeColumnIndex) else { return }
-        columns[activeColumnIndex].isPinned.toggle()
+    public func togglePin(columnIndex: Int? = nil) {
+        let idx = columnIndex ?? activeColumnIndex
+        guard columns.indices.contains(idx) else { return }
+        columns[idx].isPinned.toggle()
         updateLayout(animate: true)
+    }
+
+    public func stack(direction: String) {
+        if direction == "left" {
+            stackLeft()
+        } else {
+            stackRight()
+        }
     }
 
     public func jumpToColumn(index: Int) {

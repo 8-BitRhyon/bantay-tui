@@ -21,6 +21,10 @@ enum ControlGateway {
         case stripOverview
         case stripReorder
         case stripAutochain
+        case stripPin
+        case stripStack
+        case stripUnstack
+        case stripTabbed
         case unknown
     }
 
@@ -78,6 +82,7 @@ enum ControlGateway {
             "strip.toggle", "strip.focus", "strip.center",
             "strip.width", "strip.approval", "strip.status",
             "strip.overview", "strip.reorder", "strip.autochain",
+            "strip.pin", "strip.stack", "strip.unstack", "strip.tabbed",
         ]
 
         static func isKnown(_ method: String) -> Bool {
@@ -128,6 +133,10 @@ enum ControlGateway {
         case "strip.overview": return .stripOverview
         case "strip.reorder": return .stripReorder
         case "strip.autochain": return .stripAutochain
+        case "strip.pin": return .stripPin
+        case "strip.stack": return .stripStack
+        case "strip.unstack": return .stripUnstack
+        case "strip.tabbed": return .stripTabbed
         default: return .unknown
         }
     }
@@ -349,6 +358,58 @@ final class ControlGatewayServer: @unchecked Sendable {
             return ControlGateway.GatewayResponse.ok(
                 id: request.id,
                 result: ["autochained": true])
+        case .stripPin:
+            let col = optionalIntParam(request.params, "columnIndex")
+            DispatchQueue.main.async {
+                var info: [String: Any] = [:]
+                if let col { info["columnIndex"] = col }
+                NotificationCenter.default.post(
+                    name: .stripPinRequested,
+                    object: nil,
+                    userInfo: info
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["pinned": true])
+        case .stripStack:
+            let direction = stringParam(request.params, "direction") ?? "right"
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripStackRequested,
+                    object: nil,
+                    userInfo: ["direction": direction]
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["stacked": direction])
+        case .stripUnstack:
+            let toRight = boolParam(request.params, "toRight") ?? true
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripUnstackRequested,
+                    object: nil,
+                    userInfo: ["toRight": toRight]
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["unstacked": true])
+        case .stripTabbed:
+            let col = optionalIntParam(request.params, "columnIndex")
+            DispatchQueue.main.async {
+                var info: [String: Any] = [:]
+                if let col { info["columnIndex"] = col }
+                NotificationCenter.default.post(
+                    name: .stripTabbedRequested,
+                    object: nil,
+                    userInfo: info
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["tabbed": true])
         case .unknown:
             return ControlGateway.GatewayResponse.error(
                 id: request.id, code: "unknown_method", message: request.method)
@@ -422,9 +483,20 @@ final class ControlGatewayServer: @unchecked Sendable {
         return defaultValue
     }
 
+    private func optionalIntParam(_ params: [String: Any]?, _ key: String) -> Int? {
+        if let value = params?[key] as? Int { return value }
+        if let value = params?[key] as? Double { return Int(value) }
+        if let value = params?[key] as? NSNumber { return value.intValue }
+        return nil
+    }
+
+    private func boolParam(_ params: [String: Any]?, _ key: String) -> Bool? {
+        params?[key] as? Bool
+    }
+
     /// The adapter's `captureTail` is async; the responder is sync
     /// (one line in, one line out), so the call is awaited on a detached
-    /// task with a bounded wait — the same seam `HerdrSocketAdapter.listPanes`
+    /// task with a bounded wait: the same seam `HerdrSocketAdapter.listPanes`
     /// uses for its sync protocol method.
     private func captureTail(paneId: String, lines: Int) -> String {
         final class Box: @unchecked Sendable {

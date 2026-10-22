@@ -14,6 +14,10 @@ extension Notification.Name {
     static let stripOverviewRequested = Notification.Name("stripOverviewRequested")
     static let stripReorderRequested = Notification.Name("stripReorderRequested")
     static let stripAutochainRequested = Notification.Name("stripAutochainRequested")
+    static let stripPinRequested = Notification.Name("stripPinRequested")
+    static let stripStackRequested = Notification.Name("stripStackRequested")
+    static let stripUnstackRequested = Notification.Name("stripUnstackRequested")
+    static let stripTabbedRequested = Notification.Name("stripTabbedRequested")
 }
 
 @MainActor

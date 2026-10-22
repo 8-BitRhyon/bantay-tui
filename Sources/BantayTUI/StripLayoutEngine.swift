@@ -254,86 +254,164 @@ public enum StripLayoutEngine {
         let gap = viewport.gap
         let inset = viewport.inset
 
-        var stripX = inset
+        let pinnedColIndex = columns.firstIndex(where: { $0.isPinned })
+        let pinnedW =
+            pinnedColIndex.map {
+                max(120.0, round(columns[$0].widthFraction * (availW + gap) - gap))
+            } ?? 0.0
+
+        let scrollAreaOriginX =
+            (pinnedColIndex != nil)
+            ? viewport.screenOriginX + inset + pinnedW + gap
+            : viewport.screenOriginX
+        let scrollAvailW =
+            (pinnedColIndex != nil)
+            ? max(120.0, availW - pinnedW - gap)
+            : availW
+
+        var scrollViewport = viewport
+        if pinnedColIndex != nil {
+            scrollViewport.screenOriginX = scrollAreaOriginX
+            scrollViewport.screenWidth = scrollAvailW
+        }
+
+        var unpinnedStripX = (pinnedColIndex != nil) ? 0.0 : inset
 
         for col in columns {
-            let colW = max(120.0, round(col.widthFraction * (availW + gap) - gap))
-            let colScreenX = viewport.screenOriginX + stripX - viewport.scrollOffset
-            let colScreenY = viewport.screenOriginY + inset
-
-            let colFrame = StripRect(
-                x: colScreenX,
-                y: colScreenY,
-                width: colW,
-                height: availH
-            )
-            colFrames.append(colFrame)
-
-            let winCount = col.windows.count
-            if winCount == 1 {
-                let win = col.windows[0]
-                winFrames[win.id] = colFrame
-                classifyVisibility(
-                    frame: colFrame,
-                    id: win.id,
-                    viewport: viewport,
-                    visibleIDs: &visibleIDs,
-                    leftIDs: &leftIDs,
-                    rightIDs: &rightIDs
+            if col.isPinned {
+                let colScreenX = viewport.screenOriginX + inset
+                let colScreenY = viewport.screenOriginY + inset
+                let colFrame = StripRect(
+                    x: colScreenX,
+                    y: colScreenY,
+                    width: pinnedW,
+                    height: availH
                 )
-            } else if winCount > 1 {
-                if col.isTabbed {
-                    let tabH = 24.0
-                    let bodyH = max(80.0, availH - tabH)
-                    let bodyY = colScreenY + tabH
-                    for (idx, win) in col.windows.enumerated() {
-                        let winFrame = StripRect(
-                            x: colScreenX,
-                            y: bodyY,
-                            width: colW,
-                            height: bodyH
-                        )
-                        winFrames[win.id] = winFrame
-                        if idx == col.focusedRow {
+                colFrames.append(colFrame)
+
+                let winCount = col.windows.count
+                if winCount == 1 {
+                    let win = col.windows[0]
+                    winFrames[win.id] = colFrame
+                    visibleIDs.insert(win.id)
+                } else if winCount > 1 {
+                    if col.isTabbed {
+                        let tabH = 24.0
+                        let bodyH = max(80.0, availH - tabH)
+                        let bodyY = colScreenY + tabH
+                        for win in col.windows {
+                            let winFrame = StripRect(
+                                x: colScreenX,
+                                y: bodyY,
+                                width: pinnedW,
+                                height: bodyH
+                            )
+                            winFrames[win.id] = winFrame
+                            visibleIDs.insert(win.id)
+                        }
+                    } else {
+                        let totalGaps = Double(winCount - 1) * gap
+                        let winH = max(60.0, (availH - totalGaps) / Double(winCount))
+                        for (wIdx, win) in col.windows.enumerated() {
+                            let winY = colScreenY + Double(wIdx) * (winH + gap)
+                            let winFrame = StripRect(
+                                x: colScreenX,
+                                y: winY,
+                                width: pinnedW,
+                                height: winH
+                            )
+                            winFrames[win.id] = winFrame
+                            visibleIDs.insert(win.id)
+                        }
+                    }
+                }
+            } else {
+                let colW = max(120.0, round(col.widthFraction * (scrollAvailW + gap) - gap))
+                let colScreenX = scrollAreaOriginX + unpinnedStripX - viewport.scrollOffset
+                let colScreenY = viewport.screenOriginY + inset
+
+                let colFrame = StripRect(
+                    x: colScreenX,
+                    y: colScreenY,
+                    width: colW,
+                    height: availH
+                )
+                colFrames.append(colFrame)
+
+                let winCount = col.windows.count
+                if winCount == 1 {
+                    let win = col.windows[0]
+                    winFrames[win.id] = colFrame
+                    classifyVisibility(
+                        frame: colFrame,
+                        id: win.id,
+                        viewport: scrollViewport,
+                        visibleIDs: &visibleIDs,
+                        leftIDs: &leftIDs,
+                        rightIDs: &rightIDs
+                    )
+                } else if winCount > 1 {
+                    if col.isTabbed {
+                        let tabH = 24.0
+                        let bodyH = max(80.0, availH - tabH)
+                        let bodyY = colScreenY + tabH
+                        for (idx, win) in col.windows.enumerated() {
+                            let winFrame = StripRect(
+                                x: colScreenX,
+                                y: bodyY,
+                                width: colW,
+                                height: bodyH
+                            )
+                            winFrames[win.id] = winFrame
+                            if idx == col.focusedRow {
+                                classifyVisibility(
+                                    frame: winFrame,
+                                    id: win.id,
+                                    viewport: scrollViewport,
+                                    visibleIDs: &visibleIDs,
+                                    leftIDs: &leftIDs,
+                                    rightIDs: &rightIDs
+                                )
+                            }
+                        }
+                    } else {
+                        let totalGaps = Double(winCount - 1) * gap
+                        let winH = max(60.0, (availH - totalGaps) / Double(winCount))
+                        for (idx, win) in col.windows.enumerated() {
+                            let winY = colScreenY + Double(idx) * (winH + gap)
+                            let winFrame = StripRect(
+                                x: colScreenX,
+                                y: winY,
+                                width: colW,
+                                height: winH
+                            )
+                            winFrames[win.id] = winFrame
                             classifyVisibility(
                                 frame: winFrame,
                                 id: win.id,
-                                viewport: viewport,
+                                viewport: scrollViewport,
                                 visibleIDs: &visibleIDs,
                                 leftIDs: &leftIDs,
                                 rightIDs: &rightIDs
                             )
                         }
                     }
-                } else {
-                    let totalGaps = Double(winCount - 1) * gap
-                    let winH = max(60.0, (availH - totalGaps) / Double(winCount))
-                    for (idx, win) in col.windows.enumerated() {
-                        let winY = colScreenY + Double(idx) * (winH + gap)
-                        let winFrame = StripRect(
-                            x: colScreenX,
-                            y: winY,
-                            width: colW,
-                            height: winH
-                        )
-                        winFrames[win.id] = winFrame
-                        classifyVisibility(
-                            frame: winFrame,
-                            id: win.id,
-                            viewport: viewport,
-                            visibleIDs: &visibleIDs,
-                            leftIDs: &leftIDs,
-                            rightIDs: &rightIDs
-                        )
-                    }
                 }
-            }
 
-            stripX += colW + gap
+                unpinnedStripX += colW + gap
+            }
         }
 
-        let totalStripWidth = stripX - gap + inset
-        let maxScroll = max(0.0, totalStripWidth - viewport.screenWidth)
+        let totalStripWidth: Double
+        let maxScroll: Double
+        if pinnedColIndex != nil {
+            let unpinnedContentWidth = max(0.0, unpinnedStripX - gap)
+            totalStripWidth = pinnedW + gap + unpinnedContentWidth + (2.0 * inset)
+            maxScroll = max(0.0, unpinnedContentWidth - scrollAvailW)
+        } else {
+            totalStripWidth = unpinnedStripX - gap + inset
+            maxScroll = max(0.0, totalStripWidth - viewport.screenWidth)
+        }
 
         return StripLayoutResult(
             columnFrames: colFrames,
@@ -376,18 +454,34 @@ public enum StripLayoutEngine {
             return viewport.scrollOffset
         }
 
+        if columns[columnIndex].isPinned {
+            return 0.0
+        }
+
         let availW = viewport.availableWidth
         let gap = viewport.gap
         let inset = viewport.inset
 
-        var stripX = inset
+        let pinnedColIndex = columns.firstIndex(where: { $0.isPinned })
+        let pinnedW =
+            pinnedColIndex.map {
+                max(120.0, round(columns[$0].widthFraction * (availW + gap) - gap))
+            } ?? 0.0
+        let scrollAvailW =
+            (pinnedColIndex != nil)
+            ? max(120.0, availW - pinnedW - gap)
+            : availW
+
+        var stripX = (pinnedColIndex != nil) ? 0.0 : inset
         for i in 0..<columnIndex {
-            let w = max(120.0, round(columns[i].widthFraction * (availW + gap) - gap))
-            stripX += w + gap
+            if !columns[i].isPinned {
+                let w = max(120.0, round(columns[i].widthFraction * (scrollAvailW + gap) - gap))
+                stripX += w + gap
+            }
         }
         let targetW = max(
             120.0,
-            round(columns[columnIndex].widthFraction * (availW + gap) - gap)
+            round(columns[columnIndex].widthFraction * (scrollAvailW + gap) - gap)
         )
 
         let colStripLeft = stripX
@@ -400,10 +494,12 @@ public enum StripLayoutEngine {
         let leftBound = colStripLeft - gap
         let rightBound = colStripRight + gap
 
+        let effectiveScreenWidth = (pinnedColIndex != nil) ? scrollAvailW : viewport.screenWidth
+
         if leftBound < currentScroll {
             currentScroll = leftBound
-        } else if rightBound > currentScroll + viewport.screenWidth {
-            currentScroll = rightBound - viewport.screenWidth
+        } else if rightBound > currentScroll + effectiveScreenWidth {
+            currentScroll = rightBound - effectiveScreenWidth
         }
 
         return max(0.0, min(currentScroll, maxScroll))
@@ -419,22 +515,39 @@ public enum StripLayoutEngine {
             return viewport.scrollOffset
         }
 
+        if columns[columnIndex].isPinned {
+            return 0.0
+        }
+
         let availW = viewport.availableWidth
         let gap = viewport.gap
         let inset = viewport.inset
 
-        var stripX = inset
+        let pinnedColIndex = columns.firstIndex(where: { $0.isPinned })
+        let pinnedW =
+            pinnedColIndex.map {
+                max(120.0, round(columns[$0].widthFraction * (availW + gap) - gap))
+            } ?? 0.0
+        let scrollAvailW =
+            (pinnedColIndex != nil)
+            ? max(120.0, availW - pinnedW - gap)
+            : availW
+
+        var stripX = (pinnedColIndex != nil) ? 0.0 : inset
         for i in 0..<columnIndex {
-            let w = max(120.0, round(columns[i].widthFraction * (availW + gap) - gap))
-            stripX += w + gap
+            if !columns[i].isPinned {
+                let w = max(120.0, round(columns[i].widthFraction * (scrollAvailW + gap) - gap))
+                stripX += w + gap
+            }
         }
         let targetW = max(
             120.0,
-            round(columns[columnIndex].widthFraction * (availW + gap) - gap)
+            round(columns[columnIndex].widthFraction * (scrollAvailW + gap) - gap)
         )
 
         let colMidX = stripX + targetW / 2.0
-        let targetScroll = colMidX - viewport.screenWidth / 2.0
+        let effectiveScreenWidth = (pinnedColIndex != nil) ? scrollAvailW : viewport.screenWidth
+        let targetScroll = colMidX - effectiveScreenWidth / 2.0
 
         let layout = computeLayout(columns: columns, viewport: viewport)
         return max(0.0, min(targetScroll, layout.maxScrollOffset))
