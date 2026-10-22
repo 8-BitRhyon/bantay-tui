@@ -11,11 +11,11 @@ All notable changes to this project are documented in this file. The format is b
 - **Canvas Column Reordering & Auto-Chaining**: Added column reordering (`bantay strip reorder`) and agent auto-chaining (`bantay strip autochain`). Arranges windows into IDE (50%), Browser (35%), and Tests (25%).
 - **Window Status Halos** (`StripOverlayRenderer.swift`): Added ambient window borders reflecting agent states: amber for pending approval and green for active execution.
 - **Standalone Desktop GUI IDE Automation** (`StandaloneAgentDispatcher.swift`): Keystroke automation for Antigravity IDE, Cursor, Windsurf, Zed, and VS Code. Presses `⌘L` to focus chat and pastes input.
-- **Interactive Peek Drawer Quick Actions** (`PeekPanel.swift`): Added docked controls (`^C Abort`, `Approve`, `Deny`, choices, and live status badge) to the log tail drawer.
+- **Interactive Peek Drawer Quick Actions** (`PeekPanel.swift`): Added docked action controls (`^C Abort`, `Approve`, `Deny`, choices, status badge) to the log drawer.
 - **Rich Session Browser Viewer** (`RichSessionViewer.swift`): Generates an offline HTML transcript viewer with structured turn cards. Opens directly in the default browser.
 - **Control Gateway** (`ControlGateway.swift`): Added a UNIX domain socket server (`control.sock`). Processes NDJSON commands for strip management, settings, and agent status queries.
 - **Model Context Protocol Server** (`BantayMCPServer.swift`): Added an MCP server endpoint. Exposes Bantay state and agent controls to AI clients.
-- **Multi-Vendor Quota Tracking** (`UniversalQuotaAdapters.swift`): Added quota adapters for Claude Code rate limits, Codex and Cursor SQLite databases, OpenRouter BYOK, and Ollama models.
+- **Multi-Vendor Quota Tracking** (`UniversalQuotaAdapters.swift`): Added quota adapters for Claude Code, Codex, Cursor, OpenRouter, and Ollama.
 - **Prompt Caching Economics & Savings** (`UsageTracker.swift`): Applies a 90% discount on cache read tokens and calculates cumulative cost savings.
 - **Live Countdowns & Quota Failover** (`TaskDispatcher.swift`): Shows reset countdowns (`Resets in 1h 24m`) and routes tasks to backup providers during quota saturation.
 - **Sanitized Semantic Activity Detection** (`AgentDetector.swift`, `IslandMetrics.swift`): Extracts clean status messages by stripping ANSI escape sequences and braille spinners.

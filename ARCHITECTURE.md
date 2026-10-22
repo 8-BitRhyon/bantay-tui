@@ -56,7 +56,7 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 - `AgentEventManager.swift`: Core coordination actor. Merges push events and periodic scans into a unified agent roster, calculates active run-rates, and tracks pending approvals.
 - `HerdrEventStream.swift`: Persistent UNIX domain socket connection subscribing to `events.subscribe`. Receives real-time notifications for pane updates and agent detections.
 - `AgentDetector.swift`: Discovers standalone agents outside multiplexers by inspecting process names, command arguments, and session transcript files.
-- `UniversalQuotaAdapters.swift`: Vendor-specific quota adapters inspecting SQLite databases (Codex `state_5.sqlite`, Cursor `state.vscdb`), live Claude Code rate limit streams, and OpenRouter BYOK allocations.
+- `UniversalQuotaAdapters.swift`: Quota adapters for Codex, Cursor, Claude Code rate limits, and OpenRouter BYOK allocations.
 - `UsageTracker.swift`: Calculates token consumption, daily expenditures, prompt cache savings (applying 90% discount on cache reads), and projected run-rates.
 - `EventIngestServer.swift`: Localhost HTTP socket listener accepting event payloads from remote environments over SSH tunnels.
 
