@@ -7869,7 +7869,7 @@ struct LogicCheckMain {
                 ),
             ]
 
-            var pinnedViewport = StripViewport(
+            let pinnedViewport = StripViewport(
                 screenOriginX: 0.0,
                 screenOriginY: 0.0,
                 screenWidth: 1600.0,

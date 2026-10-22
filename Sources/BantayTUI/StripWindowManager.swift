@@ -280,6 +280,10 @@ public final class StripWindowManager: ObservableObject {
             frames: layoutResult.windowFrames,
             focusedWindowID: focusedWinID,
             enabled: config.statusHalosEnabled,
+            dimInactive: config.dimInactive,
+            showChevrons: config.showNavigationChevrons,
+            canFocusLeft: activeColumnIndex > 0,
+            canFocusRight: activeColumnIndex < columns.count - 1,
             screenBounds: screenRect
         )
     }
