@@ -1234,6 +1234,43 @@ struct NotchStatusView: View {
                 }
             }
 
+            if stripManager.config.isEnabled && !StripWindowRegistry.hasAccessibilityPermission() {
+                Button(action: {
+                    StripWindowRegistry.openAccessibilitySettings()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.raised.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(
+                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255))
+                        Text("Accessibility Permission Needed to Arrange Windows")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundColor(.white)
+                        Text("[Grant in Settings]")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(
+                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255).opacity(
+                                    0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(
+                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255).opacity(
+                                    0.4), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 2)
+            }
+
             if stripManager.config.isEnabled && !stripManager.columns.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     StripMiniMapHUD(

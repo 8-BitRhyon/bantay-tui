@@ -2,6 +2,10 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: inout CGWindowID)
+    -> AXError
+
 /// Reference to a native macOS window tracked on the infinite strip.
 @MainActor
 public final class StripWindowRegistry {
@@ -20,6 +24,16 @@ public final class StripWindowRegistry {
     public static func promptAccessibilityPermission() {
         let options = ["AXTrustedCheckOptionPrompt" as CFString: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    /// Deep-links directly to macOS System Settings Accessibility pane.
+    public static func openAccessibilitySettings() {
+        if let url = URL(
+            string:
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ) {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// Scans the system for movable, regular application windows.
@@ -45,16 +59,52 @@ public final class StripWindowRegistry {
             let bundleID = app.bundleIdentifier ?? ""
             let appRef = AXUIElementCreateApplication(pid)
 
-            var windowsRef: CFTypeRef?
-            let copyResult = AXUIElementCopyAttributeValue(
-                appRef,
-                kAXWindowsAttribute as CFString,
-                &windowsRef
-            )
+            // Ensure Electron and Chromium apps expose accessibility window tree
+            _ = AXUIElementSetAttributeValue(
+                appRef, "AXEnhancedUserInterface" as CFString, true as CFTypeRef)
 
-            guard copyResult == .success, let axWindows = windowsRef as? [AXUIElement] else {
-                continue
+            var axWindows: [AXUIElement] = []
+            var seenElements = Set<CFHashCode>()
+
+            var windowsRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appRef, kAXWindowsAttribute as CFString, &windowsRef)
+                == .success,
+                let wins = windowsRef as? [AXUIElement]
+            {
+                for w in wins {
+                    let hash = CFHash(w)
+                    if !seenElements.contains(hash) {
+                        seenElements.insert(hash)
+                        axWindows.append(w)
+                    }
+                }
             }
+
+            var mainRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appRef, kAXMainWindowAttribute as CFString, &mainRef)
+                == .success,
+                let w = mainRef as! AXUIElement?
+            {
+                let hash = CFHash(w)
+                if !seenElements.contains(hash) {
+                    seenElements.insert(hash)
+                    axWindows.append(w)
+                }
+            }
+
+            var focusRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(
+                appRef, kAXFocusedWindowAttribute as CFString, &focusRef) == .success,
+                let w = focusRef as! AXUIElement?
+            {
+                let hash = CFHash(w)
+                if !seenElements.contains(hash) {
+                    seenElements.insert(hash)
+                    axWindows.append(w)
+                }
+            }
+
+            guard !axWindows.isEmpty else { continue }
 
             for (index, windowRef) in axWindows.enumerated() {
                 // Verify window role and subrole
@@ -104,7 +154,13 @@ public final class StripWindowRegistry {
                     windowRef, kAXTitleAttribute as CFString, &titleRef)
                 let title = (titleRef as? String) ?? app.localizedName ?? "Window"
 
-                let windowID = "\(pid):\(index):\(bundleID)"
+                var wid: CGWindowID = 0
+                let windowID: String
+                if _AXUIElementGetWindow(windowRef, &wid) == .success, wid != 0 {
+                    windowID = "\(wid)"
+                } else {
+                    windowID = "\(pid):\(index):\(bundleID)"
+                }
                 activeIDs.insert(windowID)
                 axElements[windowID] = windowRef
 
@@ -141,12 +197,17 @@ public final class StripWindowRegistry {
     public func applyFrame(windowID: String, frame: StripRect) {
         guard let windowRef = axElements[windowID] else { return }
 
+        var sz = CGSize(width: frame.width, height: frame.height)
+        if let szVal = AXValueCreate(.cgSize, &sz) {
+            AXUIElementSetAttributeValue(windowRef, kAXSizeAttribute as CFString, szVal)
+        }
+
         var pt = CGPoint(x: frame.x, y: frame.y)
         if let ptVal = AXValueCreate(.cgPoint, &pt) {
             AXUIElementSetAttributeValue(windowRef, kAXPositionAttribute as CFString, ptVal)
         }
 
-        var sz = CGSize(width: frame.width, height: frame.height)
+        // Set size once more if window bounds clamped during position shift
         if let szVal = AXValueCreate(.cgSize, &sz) {
             AXUIElementSetAttributeValue(windowRef, kAXSizeAttribute as CFString, szVal)
         }

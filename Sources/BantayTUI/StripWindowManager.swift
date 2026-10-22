@@ -61,6 +61,10 @@ public final class StripWindowManager: ObservableObject {
     public func start() {
         guard config.isEnabled else { return }
 
+        if !StripWindowRegistry.hasAccessibilityPermission() {
+            StripWindowRegistry.promptAccessibilityPermission()
+        }
+
         updateViewportBounds()
         interceptor.start()
 
@@ -195,6 +199,7 @@ public final class StripWindowManager: ObservableObject {
 
         if !newWindows.isEmpty {
             var insertionIndex = min(activeColumnIndex + 1, updatedColumns.count)
+            let targetIdx = insertionIndex
             for newWin in newWindows {
                 let newCol = StripColumn(
                     windows: [newWin],
@@ -205,6 +210,10 @@ public final class StripWindowManager: ObservableObject {
                 updatedColumns.insert(newCol, at: insertionIndex)
                 insertionIndex += 1
             }
+            self.columns = updatedColumns
+            activeColumnIndex = targetIdx
+            updateLayout(animate: true)
+            return
         }
 
         self.columns = updatedColumns
@@ -222,7 +231,7 @@ public final class StripWindowManager: ObservableObject {
             if let rowIdx = col.windows.firstIndex(where: { $0.pid == frontPID }) {
                 activeColumnIndex = colIdx
                 columns[colIdx].focusedRow = rowIdx
-                scrollToColumn(colIdx, animated: true)
+                centerCurrentColumn()
                 return
             }
         }

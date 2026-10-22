@@ -59,6 +59,20 @@ struct DynamicIslandApp: App {
         {
             sendSocketCommand(method: "settings.open", params: [:])
         }
+        if CommandLine.arguments.contains("--permissions")
+            || CommandLine.arguments.contains("permissions")
+        {
+            let granted = StripWindowRegistry.hasAccessibilityPermission()
+            if granted {
+                print("Accessibility permission: GRANTED")
+            } else {
+                print("Accessibility permission: NOT GRANTED")
+                print("Opening macOS System Settings Privacy & Security > Accessibility...")
+                StripWindowRegistry.promptAccessibilityPermission()
+                StripWindowRegistry.openAccessibilitySettings()
+            }
+            exit(0)
+        }
         if let stripIdx = CommandLine.arguments.firstIndex(where: {
             $0 == "strip" || $0 == "--strip"
         }) {

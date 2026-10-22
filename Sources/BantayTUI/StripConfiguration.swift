@@ -27,7 +27,7 @@ public struct StripConfiguration: Equatable, Sendable {
     ]
 
     public init(
-        isEnabled: Bool = false,
+        isEnabled: Bool = true,
         gap: Double = 12.0,
         inset: Double = 12.0,
         autoCenterOnApproval: Bool = true,
@@ -54,7 +54,7 @@ public struct StripConfiguration: Equatable, Sendable {
 
     /// Loads configuration from UserDefaults or defaults.
     public static func load(from defaults: UserDefaults = .standard) -> StripConfiguration {
-        let isEnabled = defaults.bool(forKey: "bantay.strip.enabled")
+        let isEnabled = defaults.object(forKey: "bantay.strip.enabled") as? Bool ?? true
         let gap = defaults.object(forKey: "bantay.strip.gap") as? Double ?? 12.0
         let inset = defaults.object(forKey: "bantay.strip.inset") as? Double ?? 12.0
         let autoCenter = defaults.object(forKey: "bantay.strip.autoCenter") as? Bool ?? true
