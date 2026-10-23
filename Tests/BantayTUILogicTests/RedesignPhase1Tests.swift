@@ -59,6 +59,13 @@
             #expect(SettingsRoute.resolve(cliArgument: "nope") == nil)
         }
 
+        @Test("opencode ledger adapter")
+        func opencodeAdapter() {
+            let home = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-opencode-\(UUID().uuidString)").path
+            #expect(OpenCodeUsageAdapter.detect(home: home) == false)
+        }
+
         @Test("desktop HUD gateway route")
         func desktopHudRoute() {
             #expect(ControlGateway.route(method: "strip.hud") == .stripHud)

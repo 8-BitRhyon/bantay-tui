@@ -11,6 +11,7 @@ struct UsageSnapshot: Equatable, Sendable {
     var cacheWriteTokens: Int = 0
     var costUSD: Double = 0
     var costBySource: [String: Double] = [:]
+    var tokensBySource: [String: Int] = [:]
 
     /// Legacy alias for the cache-write bucket (transcript parsers use
     /// "cache creation" terminology).
@@ -201,6 +202,7 @@ enum UsageParser {
             total.outputTokens += part.outputTokens
             total.cacheReadTokens += part.cacheReadTokens
             total.cacheCreationTokens += part.cacheCreationTokens
+            total.reasoningTokens += part.reasoningTokens
             total.costUSD += part.costUSD
         }
     }
@@ -259,6 +261,9 @@ enum UsageTracker {
             total.costUSD += part.costUSD
             for (source, cost) in part.costBySource {
                 total.costBySource[source, default: 0] += cost
+            }
+            for (source, tokens) in part.tokensBySource {
+                total.tokensBySource[source, default: 0] += tokens
             }
         }
     }
@@ -324,29 +329,46 @@ enum UsageTracker {
     }
 
     /// Reads usage and token burn rate over recent transcripts in a single pass.
+    /// Transcript usage is attributed per agent family so session records and
+    /// the spend ledger can break tokens and cost down by source.
     static func latestUsageAndRate(
         home: String, names: [String], now: Date, window: TimeInterval
     ) -> (usage: UsageSnapshot, rate: UsageRate) {
-        let roots: Set<String> = Set(
-            names.flatMap { AgentDetector.transcriptSearchPaths(home: home, name: $0) })
+        let lowered = names.map { $0.lowercased() }
+        var rootOwners: [String: [String]] = [:]
+        for name in lowered {
+            for root in AgentDetector.transcriptSearchPaths(home: home, name: name) {
+                rootOwners[root, default: []].append(name)
+            }
+        }
         var combined = UsageSnapshot.zero
         var rateLines: [String] = []
-        for root in roots {
+        for (root, owners) in rootOwners {
             guard let lines = UsageTracker.tailLines(root: root, maxBytes: 32_000) else {
                 continue
             }
             let usage = UsageParser.parseAll(lines: lines)
             if usage.totalTokens > 0 || usage.costUSD > 0 {
                 combined = aggregate([combined, usage])
+                for owner in owners {
+                    combined.tokensBySource[owner, default: 0] += usage.totalTokens
+                    combined.costBySource[owner, default: 0] += usage.costUSD
+                }
             }
             rateLines.append(contentsOf: lines)
         }
-        if names.contains(where: { $0.lowercased() == "codex" }),
+        if lowered.contains("opencode"),
+            let opencodeSnap = OpenCodeUsageAdapter.snapshot(
+                since: 24 * 3600, now: now, home: home)
+        {
+            combined = aggregate([combined, opencodeSnap])
+        }
+        if lowered.contains("codex"),
             let codexSnap = CodexUsageAdapter.snapshot(since: 24 * 3600, now: now, home: home)
         {
             combined = aggregate([combined, codexSnap])
         }
-        if names.contains(where: { $0.lowercased() == "cursor" }),
+        if lowered.contains("cursor"),
             let cursorSnap = CursorUsageAdapter.snapshot(now: now, home: home)
         {
             combined = aggregate([combined, cursorSnap])

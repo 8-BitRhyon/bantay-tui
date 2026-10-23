@@ -711,7 +711,7 @@ final class AgentEventManager: ObservableObject {
                     title: title,
                     startTime: sessionStart,
                     durationSeconds: completionDuration ?? 0,
-                    totalTokens: 0,
+                    totalTokens: usage.tokensBySource[event.sourceKey] ?? 0,
                     costUSD: usage.costBySource[event.sourceKey] ?? 0,
                     status: event.kind == .completed ? "Completed" : "Failed"))
         }

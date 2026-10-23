@@ -7024,6 +7024,21 @@ struct LogicCheckMain {
         check(dailyRec?.costByAgent["claude"] == 0.35, "L145 daily record tracks per-agent cost")
         check(dailyRec?.peakBurnRateTPM == 1200.0, "L145 daily record tracks peak TPM")
 
+        let opencodeHome = mockOpenCodeHome()
+        let opencodeSnap = OpenCodeUsageAdapter.snapshot(
+            since: 24 * 3600, now: Date(), home: opencodeHome)
+        check(opencodeSnap?.inputTokens == 300, "P7 opencode adapter reads ledger input")
+        check(opencodeSnap?.outputTokens == 60, "P7 opencode adapter reads ledger output")
+        check(
+            (opencodeSnap?.costUSD ?? 0) > 0.001,
+            "P7 opencode adapter reads ledger cost")
+        check(
+            opencodeSnap?.costBySource["opencode"] == opencodeSnap?.costUSD,
+            "P7 opencode adapter attributes cost to opencode")
+        check(
+            opencodeSnap?.tokensBySource["opencode"] == opencodeSnap?.totalTokens,
+            "P7 opencode adapter attributes tokens to opencode")
+
         let recent7 = spendStore.recentDays(count: 7, now: sampleDate)
         check(recent7.count == 7, "L145 recentDays returns 7 entries")
         check(recent7.last?.dateKey == dateKey, "L145 last entry in recentDays is sample day")
@@ -7031,6 +7046,51 @@ struct LogicCheckMain {
         let runRate = spendStore.projectedRunRate(budget: 10.0, now: sampleDate)
         check(runRate.projectedDayUSD >= 0.45, "L145 projectedRunRate projects day spend")
         check(runRate.fractionOfBudget > 0, "L145 projectedRunRate calculates budget fraction")
+
+        func mockOpenCodeHome() -> String {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-opencode-\(UUID().uuidString)")
+            let share = dir.appendingPathComponent(".local/share/opencode", isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: share, withIntermediateDirectories: true)
+            let db = share.appendingPathComponent("opencode.db")
+            var handle: OpaquePointer?
+            guard
+                sqlite3_open(db.path, &handle) == SQLITE_OK, let handle
+            else { return dir.path }
+            defer { sqlite3_close(handle) }
+            sqlite3_exec(
+                handle,
+                """
+                CREATE TABLE session_message(
+                  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+                  seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+                  time_updated INTEGER NOT NULL, data TEXT NOT NULL)
+                """,
+                nil, nil, nil)
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let payload =
+                "{\"tokens\":{\"input\":300,\"output\":60,\"reasoning\":10,"
+                + "\"cache\":{\"read\":20,\"write\":5}},\"cost\":0.012}"
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            var stmt: OpaquePointer?
+            sqlite3_prepare_v2(
+                handle,
+                "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
+                -1, &stmt, nil)
+            if let stmt {
+                sqlite3_bind_text(stmt, 1, "m1", -1, transient)
+                sqlite3_bind_text(stmt, 2, "s1", -1, transient)
+                sqlite3_bind_text(stmt, 3, "assistant", -1, transient)
+                sqlite3_bind_int64(stmt, 4, 1)
+                sqlite3_bind_int64(stmt, 5, nowMs)
+                sqlite3_bind_int64(stmt, 6, nowMs)
+                sqlite3_bind_text(stmt, 7, (payload as NSString).utf8String, -1, transient)
+                sqlite3_step(stmt)
+                sqlite3_finalize(stmt)
+            }
+            return dir.path
+        }
 
         // L146. Rigorous Adversarial, Stress, Race Condition, and UX Sinkhole Battery
         MainActor.assumeIsolated {
