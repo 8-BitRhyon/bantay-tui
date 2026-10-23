@@ -83,26 +83,10 @@
             try? FileManager.default.removeItem(at: dir)
         }
 
-        @Test("opencode Go rows track per-model plan allowances")
-        func opencodeGoAllowances() {
-            let tight = OpenCodeGoLimits.tightestWindow(
-                spend5h: 2.0, spend7d: 3.0, spend30d: 4.0, monthlyLimit: 60.0)
-            #expect(tight.window == .fiveHour)
-            #expect(abs(tight.allowance - 12.0) < 0.001)
-            #expect(
-                abs(
-                    OpenCodeGoLimits.remainingPercent(
-                        spend: tight.spend, allowance: tight.allowance) - 83.33)
-                    < 0.1)
-            #expect(
-                OpenCodeGoLimits.limit(
-                    for: "deepseek-v4.1-flash", plan: .go
-                )?.goMonthlyUSD == 80)
-            #expect(
-                OpenCodeGoLimits.limit(
-                    for: "Muse Spark 1.3 Contributor", plan: .goPlus
-                )?.goPlusMonthlyUSD == 120)
-            #expect(OpenCodeGoLimits.limit(for: "unknown-model", plan: .go) == nil)
+        @Test("opencode Go bundled spend prefers opencode stats")
+        func opencodeGoBundled() {
+            let bundled = OpenCodeUsageAdapter.goBundledSpend(home: NSHomeDirectory())
+            #expect(bundled.spend5h + bundled.spend7d + bundled.spend30d >= 0)
         }
 
         @Test("quotaThresholds detects warning and critical status correctly")

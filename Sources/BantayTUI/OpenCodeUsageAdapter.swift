@@ -73,16 +73,6 @@ enum OpenCodeUsageAdapter {
         let tokensToday: Int
     }
 
-    /// Dollar spend for one OpenCode Go model across the three Go allowance
-    /// windows (5-hour, weekly, monthly), read from the ledger's own cost
-    /// accounting.
-    struct GoModelSpend: Equatable, Sendable {
-        let modelID: String
-        let spend5h: Double
-        let spend7d: Double
-        let spend30d: Double
-    }
-
     static func quotaState(
         now: Date = Date(),
         home: String = NSHomeDirectory()
@@ -133,46 +123,94 @@ enum OpenCodeUsageAdapter {
             tokensToday: tokens)
     }
 
-    /// Per-model Go spend across the 5-hour, weekly, and monthly windows.
-    /// Only `opencode-go` provider traffic counts; free-tier models are
-    /// unlimited and tracked by the limit-wall state instead.
-    static func goModelSpend(
+    /// Bundled Go spend across windows, preferring opencode's own
+    /// accounting (`opencode stats --json`). Falls back to ledger sums when
+    /// the CLI is missing or slow. Windows are wall-clock ranges; Go's own
+    /// 5h/weekly/monthly allowances cannot be read locally.
+    struct GoBundledSpend: Equatable, Sendable {
+        let spend5h: Double
+        let spend7d: Double
+        let spend30d: Double
+    }
+
+    static func goBundledSpend(
         now: Date = Date(),
-        home: String = NSHomeDirectory()
-    ) -> [GoModelSpend] {
+        home: String = NSHomeDirectory(),
+        opencodeBinary: String? = nil
+    ) -> GoBundledSpend {
+        GoBundledSpend(
+            spend5h: goSpendSince(hours: 5, now: now, home: home),
+            spend7d: statsGoCost(days: 7, opencodeBinary: opencodeBinary)
+                ?? goSpendSince(hours: 24 * 7, now: now, home: home),
+            spend30d: statsGoCost(days: 30, opencodeBinary: opencodeBinary)
+                ?? goSpendSince(hours: 24 * 30, now: now, home: home))
+    }
+
+    /// Total opencode-go cost from opencode's own accounting for the range.
+    /// Nil when the CLI is missing, slow, or unparsable so callers fall back
+    /// to ledger sums.
+    private static func statsGoCost(days: Int, opencodeBinary: String?) -> Double? {
+        guard
+            let output = runStatsJSON(days: days, opencodeBinary: opencodeBinary),
+            let data = output.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let models = obj["models"] as? [[String: Any]]
+        else { return nil }
+        var total = 0.0
+        var found = false
+        for model in models {
+            guard
+                let info = model["model"] as? [String: Any],
+                info["providerID"] as? String == "opencode-go",
+                let cost = (model["cost"] as? NSNumber)?.doubleValue
+            else { continue }
+            found = true
+            total += cost
+        }
+        return found ? total : nil
+    }
+
+    private static func runStatsJSON(days: Int, opencodeBinary: String?) -> String? {
+        let binary =
+            opencodeBinary
+            ?? ["/opt/homebrew/bin/opencode", "\(NSHomeDirectory())/.local/bin/opencode"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+            ?? "opencode"
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = [binary, "stats", "--json", "--days", "\(days)"]
+        proc.standardOutput = Pipe()
+        proc.standardError = FileHandle.nullDevice
+        guard (try? proc.run()) != nil else { return nil }
+        let deadline = Date().addingTimeInterval(8)
+        while proc.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if proc.isRunning {
+            proc.terminate()
+            return nil
+        }
+        guard proc.terminationStatus == 0,
+            let pipe = proc.standardOutput as? Pipe
+        else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard !data.isEmpty else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func goSpendSince(hours: Double, now: Date, home: String) -> Double {
         let url = databaseURL(home: home)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
-        let fiveHMs = nowMs - 5 * 3_600 * 1_000
-        let sevenDMs = nowMs - 7 * 86_400 * 1_000
-        let thirtyDMs = nowMs - 30 * 86_400 * 1_000
+        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+        let sinceMs = Int64(now.timeIntervalSince1970 * 1000) - Int64(hours * 3_600 * 1_000)
         let sql =
-            "SELECT json_extract(data,'$.model.id'),"
-            + " COALESCE(SUM(CASE WHEN time_created >= \(fiveHMs)"
-            + " THEN CAST(json_extract(data,'$.cost') AS REAL) ELSE 0 END),0),"
-            + " COALESCE(SUM(CASE WHEN time_created >= \(sevenDMs)"
-            + " THEN CAST(json_extract(data,'$.cost') AS REAL) ELSE 0 END),0),"
-            + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0)"
+            "SELECT COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0)"
             + " FROM session_message WHERE type='assistant'"
             + " AND json_extract(data,'$.model.providerID') = 'opencode-go'"
-            + " AND time_created >= \(thirtyDMs)"
-            + " GROUP BY 1"
-        guard let rows = sqlite3QueryOpenCode(sql: sql, db: url) else { return [] }
-        var result: [GoModelSpend] = []
-        for row in rows {
-            guard row.count >= 4, let modelID = row.first, !modelID.isEmpty else {
-                continue
-            }
-            let fiveH = Double(row[1]) ?? 0
-            let sevenD = Double(row[2]) ?? 0
-            let thirtyD = Double(row[3]) ?? 0
-            guard fiveH + sevenD + thirtyD > 0 else { continue }
-            result.append(
-                GoModelSpend(
-                    modelID: modelID, spend5h: fiveH, spend7d: sevenD,
-                    spend30d: thirtyD))
-        }
-        return result.sorted { $0.spend7d > $1.spend7d }
+            + " AND time_created >= \(sinceMs)"
+        guard let row = sqlite3QueryOpenCode(sql: sql, db: url)?.first,
+            let first = row.first
+        else { return 0 }
+        return Double(first) ?? 0
     }
 
     private static func sqlite3QueryOpenCode(sql: String, db: URL) -> [[String]]? {

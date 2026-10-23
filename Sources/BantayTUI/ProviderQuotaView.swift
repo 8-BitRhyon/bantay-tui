@@ -123,7 +123,7 @@ struct ProviderQuotaView: View {
                             .background(BantayTheme.statusQuota.opacity(0.15))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                             .help(
-                                "Computed from ledger spend and published Go plan limits, not a provider-reported quota"
+                                "Computed locally from measured spend, not a provider-reported quota"
                             )
                     }
 
@@ -147,30 +147,34 @@ struct ProviderQuotaView: View {
                             .foregroundColor(BantayTheme.textSecondary)
                     }
 
-                    Text("\(percentInt)%")
-                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                        .foregroundColor(statusColor)
+                    if !quota.hidesProgress {
+                        Text("\(percentInt)%")
+                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .foregroundColor(statusColor)
+                    }
                 }
             }
 
             // Quota progress bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.white.opacity(0.08))
-                        .frame(height: 4)
+            if !quota.hidesProgress {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.white.opacity(0.08))
+                            .frame(height: 4)
 
-                    let barWidth =
-                        geo.size.width * CGFloat(quota.remainingPercent / 100.0)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(statusColor)
-                        .frame(
-                            width: max(0, min(barWidth, geo.size.width)),
-                            height: 4
-                        )
+                        let barWidth =
+                            geo.size.width * CGFloat(quota.remainingPercent / 100.0)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(statusColor)
+                            .frame(
+                                width: max(0, min(barWidth, geo.size.width)),
+                                height: 4
+                            )
+                    }
                 }
+                .frame(height: 4)
             }
-            .frame(height: 4)
 
             // Reset and burn rate details
             HStack {

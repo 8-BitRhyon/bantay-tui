@@ -54,16 +54,13 @@ final class QuotaMonitor: ObservableObject {
         let cost = costUSD ?? manager.usage.costUSD
         let budget = budgetUSD ?? NotchHUDConfig.shared.dailyBudgetUSD
         let rate = burnRateTPM ?? (manager.usageRate.tokensPerMinute ?? 0.0)
-        let goPlan: OpenCodeGoLimits.Plan =
-            NotchHUDConfig.shared.openCodeGoPlan == "go-plus" ? .goPlus : .go
 
         let probed = await Task.detached(priority: .utility) {
             QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: providers,
                 costUSD: cost,
                 budgetUSD: budget,
-                burnRateTPM: rate,
-                goPlan: goPlan)
+                burnRateTPM: rate)
         }.value
         let kiloDetected = await Task.detached(priority: .utility) {
             KiloUsageAdapter.detect()

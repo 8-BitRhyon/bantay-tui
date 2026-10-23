@@ -30,9 +30,13 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
     /// True when the provider reported a hard limit wall (e.g. opencode
     /// free-tier QuotaExceeded). Renders as a red limit state, not a bar.
     public var limitReached: Bool
-    /// True when the percentage is derived from the local daily budget, not a
-    /// provider-reported quota. The UI labels these rows as estimates.
+    /// True for rows with no meaningful percentage: computed estimates and
+    /// spend-only rows without a quota cap. The UI labels them and hides
+    /// the progress bar.
     public var isEstimated: Bool
+    /// True when the row reports spend without a quota cap, so the progress
+    /// bar would be meaningless. The row renders text only.
+    public var hidesProgress: Bool
     public var isWarning: Bool { remainingPercent <= 20.0 }
     public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown || limitReached }
 
@@ -48,7 +52,8 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         resetsAt: Date? = nil,
         isCooldown: Bool = false,
         limitReached: Bool = false,
-        isEstimated: Bool = false
+        isEstimated: Bool = false,
+        hidesProgress: Bool = false
     ) {
         self.provider = provider
         self.remainingPercent = min(max(remainingPercent, 0.0), 100.0)
@@ -62,6 +67,7 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         self.isCooldown = isCooldown
         self.limitReached = limitReached
         self.isEstimated = isEstimated
+        self.hidesProgress = hidesProgress
     }
 
     /// Convenience initializer for generated/estimated quota rows.
@@ -76,7 +82,8 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         burnRateTPM: Double = 0.0,
         hoursRemaining: Double? = nil,
         resetsAt: Date? = nil,
-        isCooldown: Bool = false
+        isCooldown: Bool = false,
+        hidesProgress: Bool = false
     ) {
         self.init(
             provider: provider,
@@ -89,7 +96,8 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
             hoursRemaining: hoursRemaining,
             resetsAt: resetsAt,
             isCooldown: isCooldown,
-            isEstimated: isEstimated)
+            isEstimated: isEstimated,
+            hidesProgress: hidesProgress)
     }
 
     /// Formats dynamic live countdown if resetsAt is present, otherwise falls back to static resetHint.
@@ -158,8 +166,7 @@ public final class QuotaAxiTracker: Sendable {
         costUSD: Double,
         budgetUSD: Double,
         burnRateTPM: Double = 0.0,
-        home: String = NSHomeDirectory(),
-        goPlan: OpenCodeGoLimits.Plan = .go
+        home: String = NSHomeDirectory()
     ) -> [ProviderQuota] {
         // 1. Try quota-axi CLI if installed
         let candidateBins = [
@@ -273,29 +280,22 @@ public final class QuotaAxiTracker: Sendable {
                             limitReached: state.limitReached
                         ))
                 }
-                for spend in OpenCodeUsageAdapter.goModelSpend(now: Date(), home: home) {
-                    guard
-                        let modelLimit = OpenCodeGoLimits.limit(
-                            for: spend.modelID, plan: goPlan)
-                    else { continue }
-                    let monthly = modelLimit.monthlyUSD(plan: goPlan)
-                    let tight = OpenCodeGoLimits.tightestWindow(
-                        spend5h: spend.spend5h, spend7d: spend.spend7d,
-                        spend30d: spend.spend30d, monthlyLimit: monthly)
-                    let percent = OpenCodeGoLimits.remainingPercent(
-                        spend: tight.spend, allowance: tight.allowance)
+                let bundled = OpenCodeUsageAdapter.goBundledSpend(
+                    now: Date(), home: home)
+                if bundled.spend5h + bundled.spend7d + bundled.spend30d > 0 {
                     results.append(
                         ProviderQuota(
                             isEstimated: true,
-                            provider: "Go · \(modelLimit.displayName)",
-                            remainingPercent: percent,
-                            resetHint: "Go \(tight.window.label) allowance",
-                            tier: goPlan.displayName,
+                            provider: "opencode Go",
+                            remainingPercent: 100,
+                            resetHint: "Bundled Go spend",
+                            tier: "Go subscription",
                             usedDisplay: String(
-                                format: "$%.2f of $%.2f",
-                                tight.spend, tight.allowance),
-                            totalDisplay: String(format: "$%.0f / mo", monthly),
-                            burnRateTPM: burnRateTPM
+                                format: "5h $%.2f · 7d $%.2f · 30d $%.2f",
+                                bundled.spend5h, bundled.spend7d, bundled.spend30d),
+                            totalDisplay: "No cap set",
+                            burnRateTPM: burnRateTPM,
+                            hidesProgress: true
                         ))
                 }
             case "openrouter":

@@ -8533,12 +8533,6 @@ struct LogicCheckMain {
             OpenCodeUsageAdapter.quotaState(home: NSTemporaryDirectory()) == nil,
             "P8 opencode quota state is nil without recent ledger activity")
 
-        let goTight = OpenCodeGoLimits.tightestWindow(
-            spend5h: 2.0, spend7d: 3.0, spend30d: 4.0, monthlyLimit: 60.0)
-        check(
-            goTight.window == .fiveHour && abs(goTight.allowance - 12.0) < 0.001,
-            "P8 Go tightest window is the 5-hour allowance")
-
         let proceedPrompt = ApprovalPromptResolver.resolve(
             rawTail: """
                 Do you want to proceed?
