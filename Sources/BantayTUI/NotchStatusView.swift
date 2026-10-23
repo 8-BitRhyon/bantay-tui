@@ -186,6 +186,11 @@ struct NotchStatusView: View {
     /// its content instead of clipping against uniform-row math.
     private var rosterMetrics: IslandMetrics.RosterLayoutMetrics {
         let blocked = approvalQueueAgents.count
+        let choiceRows = approvalQueueAgents.reduce(0) { total, agent in
+            let controls = agent.approval
+            guard !controls.isYesNo else { return total }
+            return total + min(controls.choices.count, 6)
+        }
         let working = mergedRoster.filter {
             $0.kind != .accessRequest && $0.kind != .waiting
                 && ($0.isWorking || $0.kind == .failed)
@@ -197,6 +202,7 @@ struct NotchStatusView: View {
         if idle > 0 { groups += 1 }
         return IslandMetrics.RosterLayoutMetrics(
             approvalCardCount: blocked,
+            approvalChoiceRowCount: choiceRows,
             workingRowCount: working,
             idleRowCount: idle,
             groupCount: groups)
@@ -227,11 +233,14 @@ struct NotchStatusView: View {
                     taskCount: TaskStore.shared.tasks.count, sectionCount: 3,
                     isTasksTab: true
                 ).height
-            } else if showShelf || showHistory || showMedia || showNotes {
+            } else if showHistory {
+                return min(
+                    max(historyContentHeight + chipTopOffset, IslandMetrics.minExpandedHeight),
+                    IslandMetrics.maxExpandedHeight)
+            } else if showShelf || showMedia || showNotes {
                 let itemCount =
                     showShelf
-                    ? max(shelfStore.files.count + clipboardItems.count, 2)
-                    : (showHistory ? max(SessionHistoryStore.shared.sessions.count, 2) : 3)
+                    ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
                 return IslandMetrics.expandedSize(
                     topInset: chipTopOffset, agentCount: itemCount,
                     queueCount: 0,
@@ -253,9 +262,16 @@ struct NotchStatusView: View {
         return IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
     }
 
+    private var historyContentHeight: CGFloat {
+        380
+    }
+
     private var contentHeight: CGFloat {
         if hasActiveNotification {
             return activeNotificationCardHeight
+        }
+        if showHistory {
+            return historyContentHeight
         }
         if showTasks {
             return IslandMetrics.contentHeightForTasks(
@@ -265,11 +281,10 @@ struct NotchStatusView: View {
                 sectionCount: 3,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab
             )
-        } else if showShelf || showHistory || showMedia || showNotes {
+        } else if showShelf || showMedia || showNotes {
             let itemCount =
                 showShelf
-                ? max(shelfStore.files.count + clipboardItems.count, 2)
-                : (showHistory ? max(SessionHistoryStore.shared.sessions.count, 2) : 3)
+                ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
             return IslandMetrics.contentHeight(
                 isExpanded: isExpanded, topInset: chipTopOffset,
                 agentCount: itemCount, queueCount: 0,
@@ -952,7 +967,8 @@ struct NotchStatusView: View {
     private func approvalNotificationCard(
         event: AgentEvent, paneId: String?, agent: AgentSnapshot?
     ) -> some View {
-        let controls = notificationApprovalControls(event: event, agent: agent)
+        let controls = notificationApprovalControls(
+            event: event, agent: agent, detail: notificationDetail)
         let resolving = paneId.map { eventManager.isResolving(paneId: $0) } ?? false
         let projectLabel = notificationProjectLabel(event: event, agent: agent)
         let hasTitle = !IslandMetrics.isGenericApprovalText(event.title)
@@ -1051,9 +1067,24 @@ struct NotchStatusView: View {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
                 if let paneId {
-                    notificationApprovalActions(
-                        event: event, paneId: paneId, controls: controls,
-                        resolving: resolving)
+                    if canApproveNotification(event: event, agent: agent) {
+                        notificationApprovalActions(
+                            event: event, paneId: paneId, controls: controls,
+                            resolving: resolving)
+                    } else if !controls.isYesNo {
+                        notificationApprovalActions(
+                            event: event, paneId: paneId, controls: controls,
+                            resolving: resolving)
+                    } else {
+                        notificationActionButton(
+                            title: "Review", systemName: "doc.text.magnifyingglass",
+                            color: Color.white.opacity(0.8),
+                            helpText: "Review the full request before deciding",
+                            disabled: false
+                        ) {
+                            withAnimation(morphAnimation) { expandTo(true) }
+                        }
+                    }
                     TactileRowButton(
                         systemName: "arrow.up.right",
                         color: Color.white.opacity(0.6),
@@ -1272,17 +1303,32 @@ struct NotchStatusView: View {
     /// carries the decoded variance/choices) and falls back to parsing a
     /// numbered prompt out of the event title.
     private func notificationApprovalControls(
-        event: AgentEvent, agent: AgentSnapshot?
+        event: AgentEvent, agent: AgentSnapshot?, detail: String
     ) -> IslandMetrics.ApprovalControls {
         let base =
             agent?.approval
             ?? IslandMetrics.ApprovalControls.make(
                 variance: event.variance, choices: event.choices)
-        guard base.isYesNo, let title = event.title ?? event.message else { return base }
-        let extracted = ChoiceExtractor.extractChoices(from: title)
+        guard base.isYesNo else { return base }
+        let text = [event.title, event.message, detail]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        let extracted = ChoiceExtractor.extractChoices(from: text)
         guard extracted.count >= 2 else { return base }
         return IslandMetrics.ApprovalControls.make(
             variance: .choices, choices: extracted.map(\.label))
+    }
+
+    /// A notification may approve only when the event is a real permission
+    /// request with concrete detail. Generic blocked heartbeats get Review.
+    private func canApproveNotification(
+        event: AgentEvent, agent: AgentSnapshot?
+    ) -> Bool {
+        guard event.kind == .accessRequest else { return false }
+        if let agent, !agent.approvalActionable { return false }
+        if let agent, agent.approval.isYesNo, agent.approvalActionable { return true }
+        let title = event.title ?? event.message
+        return !IslandMetrics.isGenericApprovalText(title)
     }
 
     private func notificationChoiceSummary(
@@ -1429,7 +1475,16 @@ struct NotchStatusView: View {
                 }
             }
             Spacer(minLength: 8)
-            approvalActions(variance: variance, choices: choices, paneId: paneId)
+            if canApprovePill(event: event, paneId: paneId) {
+                approvalActions(variance: variance, choices: choices, paneId: paneId)
+            } else {
+                approvalActionButton(
+                    systemName: "doc.text.magnifyingglass", color: .white.opacity(0.8),
+                    help: "Review the full request before deciding"
+                ) {
+                    withAnimation(morphAnimation) { expandTo(true) }
+                }
+            }
             approvalActionButton(
                 systemName: "arrow.up.right", color: .white.opacity(0.6), help: "Focus pane"
             ) {
@@ -1439,6 +1494,18 @@ struct NotchStatusView: View {
         .frame(width: islandWidth, height: IslandMetrics.pillHeight)
         .contentShape(Rectangle())
         return pill
+    }
+
+    private func canApprovePill(event: AgentEvent, paneId: String) -> Bool {
+        guard event.kind == .accessRequest else { return false }
+        if let agent = mergedRoster.first(where: {
+            ($0.paneId != nil && $0.paneId == paneId)
+                || $0.source == event.sourceKey
+        }) {
+            return agent.approvalActionable
+        }
+        let title = event.title ?? event.message
+        return !IslandMetrics.isGenericApprovalText(title)
     }
 
     @ViewBuilder

@@ -45,8 +45,11 @@ enum AgentPresentation {
                     tool: command.base)
             }
             if isGenericInputText(cleaned) {
+                let headline =
+                    agent.kind == .waiting || !agent.approvalActionable
+                    ? "Waiting for you" : "Waiting for your approval"
                 return HumanizedAgentStatus(
-                    headline: "Waiting for your approval",
+                    headline: headline,
                     detail: nil,
                     risk: risk,
                     tool: nil)

@@ -65,6 +65,29 @@
             #expect(ControlGateway.GatewayRoute.stripCatalog.contains("strip.hud"))
         }
 
+        @Test("approval prompt resolver refuses blind approvals")
+        func approvalPromptResolution() {
+            let permission = ApprovalPromptResolver.resolve(
+                rawTail: """
+                    Do you want to proceed?
+                    1. Yes
+                    2. No
+                    """,
+                kind: .accessRequest)
+            #expect(permission.actionable)
+            #expect(permission.choices.count == 2)
+
+            let generic = ApprovalPromptResolver.resolve(
+                rawTail: "", fallbackTitle: "blocked", kind: .accessRequest)
+            #expect(!generic.actionable)
+
+            let waiting = ApprovalPromptResolver.resolve(
+                rawTail: "Which environment?\n1. Staging\n2. Production",
+                kind: .waiting)
+            #expect(!waiting.actionable)
+            #expect(waiting.choices.count == 2)
+        }
+
         @Test("structured roster height grows and caps")
         func rosterHeight() {
             let metrics = IslandMetrics.RosterLayoutMetrics(

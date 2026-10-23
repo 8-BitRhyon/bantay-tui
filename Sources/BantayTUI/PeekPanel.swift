@@ -10,6 +10,7 @@ final class PeekPanelModel: ObservableObject {
     @Published var cwd: String? = nil
     @Published var sessionPath: String? = nil
     @Published var isWorking = false
+    @Published var approvalActionable = false
     @Published var projectSlug = ""
     @Published var tailLines: [String] = []
     @Published var diffPreview: String?
@@ -120,6 +121,8 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
         model.cwd = agent.cwd
         model.sessionPath = agent.sessionPath
         model.isWorking = agent.kind == .progress || agent.kind == .started
+        model.approvalActionable =
+            agent.kind == .accessRequest && agent.approvalActionable
         model.projectSlug = agent.projectContext?.project ?? agent.source
         if model.tailLines.isEmpty {
             model.isLoading = true
@@ -325,43 +328,45 @@ private struct PeekPanelView: View {
             .buttonStyle(.plain)
             .help("Interrupt agent execution (^C)")
 
-            Button {
-                if let paneId = actionablePaneId {
-                    AgentEventManager.shared.approve(paneId: paneId)
+            if model.approvalActionable {
+                Button {
+                    if let paneId = actionablePaneId {
+                        AgentEventManager.shared.approve(paneId: paneId)
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 9, weight: .bold))
+                        Text("Approve (y)")
+                            .font(.system(size: 9.5, weight: .semibold))
+                    }
+                    .foregroundColor(.green.opacity(0.9))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.green.opacity(0.14), in: Capsule())
                 }
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 9, weight: .bold))
-                    Text("Approve (y)")
-                        .font(.system(size: 9.5, weight: .semibold))
-                }
-                .foregroundColor(.green.opacity(0.9))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.green.opacity(0.14), in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .help("Send 'y' approval")
+                .buttonStyle(.plain)
+                .help("Send 'y' approval")
 
-            Button {
-                if let paneId = actionablePaneId {
-                    AgentEventManager.shared.deny(paneId: paneId)
+                Button {
+                    if let paneId = actionablePaneId {
+                        AgentEventManager.shared.deny(paneId: paneId)
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 9, weight: .bold))
+                        Text("Deny (n)")
+                            .font(.system(size: 9.5, weight: .semibold))
+                    }
+                    .foregroundColor(.orange.opacity(0.9))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.14), in: Capsule())
                 }
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 9, weight: .bold))
-                    Text("Deny (n)")
-                        .font(.system(size: 9.5, weight: .semibold))
-                }
-                .foregroundColor(.orange.opacity(0.9))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.orange.opacity(0.14), in: Capsule())
+                .buttonStyle(.plain)
+                .help("Send 'n' rejection")
             }
-            .buttonStyle(.plain)
-            .help("Send 'n' rejection")
 
             Spacer(minLength: 4)
 

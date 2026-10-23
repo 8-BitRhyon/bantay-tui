@@ -12,6 +12,11 @@ All notable changes to this project are documented in this file. The format is b
 - **Settings Deep Links** (`SettingsRoute.swift`): One shared modal with route destinations. Notch gear opens Agents, Desktop gear opens Desktop. CLI accepts `bantay settings [route]`.
 - **Approval Safety and Desktop HUD Sections** (`SettingsView.swift`): New Agents policy section and Desktop HUD behavior section. Categories renamed to Notch and Desktop. All preference keys stay unchanged.
 - **Cached Quota Monitor** (`QuotaMonitor.swift`): Quota probes run on a background task every 60 seconds. View rendering performs no subprocess or disk reads.
+- **Approval Prompt Enrichment** (`ApprovalPromptResolver.swift`, `AgentEventManager.swift`): Status-only blocked events read the live pane or transcript. The resolver preserves the exact command, path, or question, extracts numbered and multi-select choices, and marks real permission requests.
+- **Review-Only Waiting States** (`ApprovalCardView.swift`, `ApprovalNotificationController.swift`): Prompts without a concrete request or choices no longer offer blind Approve and Deny. They show Review, Open terminal, or Focus.
+- **Real Session History** (`UsageTracker.swift`, `AgentEventManager.swift`): Completion and failure events record live sessions with duration, status, and source cost. Demo session rows are removed.
+- **Budget-Derived Quota Labels** (`QuotaAxiTracker.swift`): Quota rows that come from the local budget, not a provider, are marked EST. The notch hides the quota badge when no live provider source exists.
+- **Spend Summary** (`SpendHistoryView.swift`): The history panel shows today, the past seven days, projected daily spend, and a clear empty state.
 - **Focus and Approval Separation** (`StripOverlayRenderer.swift`, `BantayTheme.swift`): Focus uses cyan, approvals own amber. Only approvals pulse. Pulsing honors reduce motion. Overlay badges use text labels.
 
 - **Infinite Strip Window Manager** (`StripLayoutEngine.swift`, `StripWindowManager.swift`, `StripGestureInterceptor.swift`): Continuous horizontal window tiling engine. Uses damped harmonic springs, overscroll resistance, five width presets, and trackpad gestures.
@@ -44,6 +49,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - Fixed quota probes blocking the main thread during notch rendering. The header reads cached values.
 - Fixed the notch re-rendering on every strip scroll. It observes only the HUD controller now.
+- Fixed the roster builder reading `.git/HEAD` on the main thread. Slow project paths now warm in the background.
 
 - Fixed Ghostty terminal focus failing due to invalid bundle identifier.
 - Fixed Peek drawer closing immediately when clicked from the notch.

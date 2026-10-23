@@ -40,7 +40,8 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 ### 1. Control Plane & User Interface
 - `DynamicIslandApp.swift`: Main application entry point running as an accessory application (`LSUIElement`). Manages the top-level `NSPanel`, menu bar tray item, global hotkey registration (`⌥Space`), and screen configuration observers.
 - `NotchStatusView.swift`: Root view for the expanded notch control plane. Hosts the counts header bar, roster scroll view, and core tabs (Inbox, Tasks, History) with utility pills (Shelf, Notes, Media).
-- `ApprovalCardView.swift`: Unified approval card for blocked agents. Shows the exact request, risk badge, queue position, and Allow Once, Review, and Deny actions.
+- `ApprovalCardView.swift`: Unified approval card for blocked agents. Shows the exact request, risk badge, queue position, and actions. Waiting states show Review and Open instead of blind Approve and Deny.
+- `ApprovalPromptResolver.swift`: Pure parser for live pane prompts. Extracts the exact command, path, question, numbered choices, multi-select choices, and risk tier from terminal text.
 - `AgentPresentation.swift`: Pure presentation logic. Humanizes raw tool text, classifies risk, and groups subagents under their project workspace.
 - `NotchRosterView.swift` and `AgentRowView.swift`: Render the inbox. Approval cards lead, working groups fold subagents, and finished agents use compact rows. Clicking a row focuses its window.
 - `DesktopHUDController.swift` and `DesktopHUDView.swift`: Bottom-center window-only HUD. Shows column cards, Chain, Overview, navigation, and a Layout menu. Auto-hides unless pinned and never appears in full screen.
@@ -106,6 +107,8 @@ Approval prompts support three variance types:
 - **Multi-Select Prompts**: Sends selected indices as one space-separated line (`1 3` followed by Return).
 
 Every approval surface routes through `AgentEventManager`: the notch popup, inbox approval cards, Peek drawer, Notification Center actions, and menu-bar actions. The manager writes OpenCode decisions and sends multiplexer actions. It sends standalone keystrokes through `StandaloneAgentDispatcher`.
+
+Status-only `blocked` events often carry no request text. `AgentEventManager` captures the live pane or transcript and `ApprovalPromptResolver` extracts the exact command, path, question, and choices. Until that detail arrives, the surface shows Review only. A prompt without concrete detail or choices never offers blind Approve and Deny. The same fingerprint stays suppressed after an answer until the agent reports a non-approval status, so repeated `blocked` heartbeats cannot ask the same question again.
 
 Standalone agents have no multiplexer pane id. `IslandMetrics.actionablePaneId` derives a synthetic `standalone:<source>` id. This id keeps the popup, Notification Center, and menu bar in agreement and resolves the agent cwd for dispatch.
 

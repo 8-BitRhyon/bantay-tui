@@ -13,6 +13,7 @@ final class QuotaMonitor: ObservableObject {
     @Published private(set) var quotas: [ProviderQuota] = []
     @Published private(set) var minRemainingPercent: Int = 100
     @Published private(set) var hasUsageData: Bool = false
+    @Published private(set) var hasLiveQuota: Bool = false
     @Published private(set) var lastRefresh: Date?
 
     private var pollTask: Task<Void, Never>?
@@ -66,7 +67,9 @@ final class QuotaMonitor: ObservableObject {
         }.value
 
         quotas = probed
-        minRemainingPercent = Self.minRemainingPercent(quotas: probed)
+        let live = probed.filter { !$0.isEstimated }
+        hasLiveQuota = !live.isEmpty
+        minRemainingPercent = Self.minRemainingPercent(quotas: live)
         hasUsageData = Self.hasUsageData(
             kiloDetected: kiloDetected,
             totalTokens: manager.usage.totalTokens,

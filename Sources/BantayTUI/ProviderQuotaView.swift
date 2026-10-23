@@ -4,8 +4,12 @@ import SwiftUI
 /// Micro-dashboard displaying live multi-provider quota status, remaining percentages, and tier limits.
 struct ProviderQuotaView: View {
     @ObservedObject private var eventManager = AgentEventManager.shared
-    @State private var quotas: [ProviderQuota] = []
+    @ObservedObject private var monitor = QuotaMonitor.shared
     @State private var isRefreshing = false
+
+    private var quotas: [ProviderQuota] {
+        monitor.quotas
+    }
 
     var body: some View {
         FLXCard {
@@ -30,7 +34,7 @@ struct ProviderQuotaView: View {
             }
         }
         .onAppear {
-            refreshQuotas()
+            Task { await refreshQuotas() }
         }
     }
 
@@ -49,7 +53,7 @@ struct ProviderQuotaView: View {
                 "Refresh",
                 systemImage: "arrow.clockwise",
                 variant: .ghost,
-                action: refreshQuotas
+                action: { Task { await refreshQuotas() } }
             )
             .controlSize(.small)
         }
@@ -60,9 +64,14 @@ struct ProviderQuotaView: View {
             Image(systemName: "gauge.with.needle")
                 .font(.system(size: 16))
                 .foregroundColor(BantayTheme.textTertiary)
-            Text("Probing provider quotas...")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(BantayTheme.textTertiary)
+            Text(
+                monitor.lastRefresh == nil
+                    ? "Checking provider quotas..."
+                    : "No live provider quota source found.\nInstall quota-axi or sign in to a provider."
+            )
+            .font(.system(size: 10, weight: .medium))
+            .multilineTextAlignment(.center)
+            .foregroundColor(BantayTheme.textTertiary)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 70)
@@ -71,9 +80,11 @@ struct ProviderQuotaView: View {
     private func providerQuotaRow(_ quota: ProviderQuota) -> some View {
         let percentInt = Int(quota.remainingPercent)
         let statusColor =
-            quota.isCritical
-            ? BantayTheme.statusFailed
-            : (quota.isWarning ? BantayTheme.statusQuota : BantayTheme.statusCompleted)
+            quota.isEstimated
+            ? BantayTheme.textTertiary
+            : (quota.isCritical
+                ? BantayTheme.statusFailed
+                : (quota.isWarning ? BantayTheme.statusQuota : BantayTheme.statusCompleted))
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -93,6 +104,19 @@ struct ProviderQuotaView: View {
                         .padding(.vertical, 1)
                         .background(Color.white.opacity(0.06))
                         .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                    if quota.isEstimated {
+                        Text("EST")
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundColor(BantayTheme.statusQuota)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(BantayTheme.statusQuota.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .help(
+                                "Estimated from the local daily budget, not a provider-reported quota"
+                            )
+                    }
 
                     if quota.isCooldown {
                         Text("COOLDOWN")
@@ -210,22 +234,15 @@ struct ProviderQuotaView: View {
         }
     }
 
-    private func refreshQuotas() {
+    private func refreshQuotas() async {
         withAnimation(.easeInOut(duration: 0.4)) { isRefreshing = true }
-        let active = eventManager.agents.map(\.source)
-        let cost = eventManager.usage.costUSD
-        let budget = NotchHUDConfig.shared.dailyBudgetUSD
-        let rate = eventManager.usageRate.tokensPerMinute ?? 0.0
-
-        quotas = QuotaAxiTracker.probeLiveQuotas(
-            activeProviders: active,
-            costUSD: cost,
-            budgetUSD: budget,
-            burnRateTPM: rate
-        )
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            withAnimation { isRefreshing = false }
-        }
+        await monitor.refresh(
+            activeProviders: eventManager.agents.map(\.source),
+            costUSD: eventManager.usage.costUSD,
+            budgetUSD: NotchHUDConfig.shared.dailyBudgetUSD,
+            burnRateTPM: eventManager.usageRate.tokensPerMinute ?? 0.0,
+            force: true)
+        try? await Task.sleep(for: .milliseconds(400))
+        withAnimation { isRefreshing = false }
     }
 }

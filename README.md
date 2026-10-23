@@ -12,7 +12,8 @@ Bantay supports agents running in Herdr, tmux, Zellij, standard terminals, and d
 ### 1. The Notch Island (HUD)
 - **Idle Status Strip**: Shows agent chips next to the notch with color status dots. The strip clamps to screen bounds to prevent menu bar overlap.
 - **Expanded Control Plane**: Press `⌥Space` or hover over the notch to open the main control panel:
-  - **Approval Cards**: Blocked agents render as cards. Each card shows the exact request, risk badge, queue position, and actions.
+  - **Approval Cards**: Blocked agents render as cards. Each card shows the exact request, risk badge, queue position, and full choice labels.
+  - **Review-Only Waits**: Prompts without a concrete request or choices offer Review and Open, never a blind Approve or Deny.
   - **State-Grouped Roster**: Organizes agents into `Needs you`, `Working`, and `Idle`. Subagents fold under their project with an expander.
   - **Peek Drawer**: Click Review to view live output and git diff summaries. Reply from the row menu or press `R`.
   - **Session Viewer**: Open a structured session report in your web browser from the row menu.

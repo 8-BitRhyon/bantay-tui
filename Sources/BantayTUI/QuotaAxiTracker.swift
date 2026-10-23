@@ -27,6 +27,9 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
     public var hoursRemaining: Double?
     public var resetsAt: Date?
     public var isCooldown: Bool
+    /// True when the percentage is derived from the local daily budget, not a
+    /// provider-reported quota. The UI labels these rows as estimates.
+    public var isEstimated: Bool
     public var isWarning: Bool { remainingPercent <= 20.0 }
     public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown }
 
@@ -40,7 +43,8 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         burnRateTPM: Double = 0.0,
         hoursRemaining: Double? = nil,
         resetsAt: Date? = nil,
-        isCooldown: Bool = false
+        isCooldown: Bool = false,
+        isEstimated: Bool = false
     ) {
         self.provider = provider
         self.remainingPercent = min(max(remainingPercent, 0.0), 100.0)
@@ -52,6 +56,35 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         self.hoursRemaining = hoursRemaining
         self.resetsAt = resetsAt
         self.isCooldown = isCooldown
+        self.isEstimated = isEstimated
+    }
+
+    /// Convenience initializer for generated/estimated quota rows.
+    public init(
+        isEstimated: Bool,
+        provider: String,
+        remainingPercent: Double,
+        resetHint: String = "24h",
+        tier: String = "Pro",
+        usedDisplay: String = "",
+        totalDisplay: String = "",
+        burnRateTPM: Double = 0.0,
+        hoursRemaining: Double? = nil,
+        resetsAt: Date? = nil,
+        isCooldown: Bool = false
+    ) {
+        self.init(
+            provider: provider,
+            remainingPercent: remainingPercent,
+            resetHint: resetHint,
+            tier: tier,
+            usedDisplay: usedDisplay,
+            totalDisplay: totalDisplay,
+            burnRateTPM: burnRateTPM,
+            hoursRemaining: hoursRemaining,
+            resetsAt: resetsAt,
+            isCooldown: isCooldown,
+            isEstimated: isEstimated)
     }
 
     /// Formats dynamic live countdown if resetsAt is present, otherwise falls back to static resetHint.
@@ -122,6 +155,7 @@ public final class QuotaAxiTracker: Sendable {
             activeProviders.isEmpty ? ["herdr", "kilo", "anthropic"] : activeProviders
         return defaultProviders.map { name in
             ProviderQuota(
+                isEstimated: true,
                 provider: name.capitalized,
                 remainingPercent: percent,
                 resetHint: "Midnight",
@@ -224,6 +258,7 @@ public final class QuotaAxiTracker: Sendable {
                 } else {
                     results.append(
                         ProviderQuota(
+                            isEstimated: true,
                             provider: "Claude Code",
                             remainingPercent: basePercent,
                             resetHint: "5h rolling window",
@@ -249,6 +284,7 @@ public final class QuotaAxiTracker: Sendable {
                 let tierStr = "Tier 1 (\(codexModel))"
                 results.append(
                     ProviderQuota(
+                        isEstimated: true,
                         provider: "OpenAI Codex",
                         remainingPercent: max(0.0, min(100.0, basePercent * 0.95)),
                         resetHint: "Midnight UTC",
@@ -289,6 +325,7 @@ public final class QuotaAxiTracker: Sendable {
                     }
                 results.append(
                     ProviderQuota(
+                        isEstimated: true,
                         provider: "Cursor",
                         remainingPercent: cursorPct,
                         resetHint: "Renews 1st of month",
@@ -301,6 +338,7 @@ public final class QuotaAxiTracker: Sendable {
             case "cloudcode":
                 results.append(
                     ProviderQuota(
+                        isEstimated: true,
                         provider: "Google Cloud Code",
                         remainingPercent: max(10.0, basePercent),
                         resetHint: "Midnight PST",
@@ -313,6 +351,7 @@ public final class QuotaAxiTracker: Sendable {
             case "antigravity":
                 results.append(
                     ProviderQuota(
+                        isEstimated: true,
                         provider: "Antigravity",
                         remainingPercent: basePercent,
                         resetHint: "Session Budget",
@@ -325,6 +364,7 @@ public final class QuotaAxiTracker: Sendable {
             case "windsurf":
                 results.append(
                     ProviderQuota(
+                        isEstimated: true,
                         provider: "Windsurf",
                         remainingPercent: max(15.0, basePercent),
                         resetHint: "Monthly",
@@ -337,6 +377,7 @@ public final class QuotaAxiTracker: Sendable {
             case "kilo":
                 results.append(
                     ProviderQuota(
+                        isEstimated: true,
                         provider: "Kilo",
                         remainingPercent: basePercent,
                         resetHint: "Continuous Ledger",
@@ -355,6 +396,7 @@ public final class QuotaAxiTracker: Sendable {
                 } else {
                     results.append(
                         ProviderQuota(
+                            isEstimated: true,
                             provider: "OpenRouter",
                             remainingPercent: basePercent,
                             resetHint: "Monthly credit limit",
@@ -373,6 +415,7 @@ public final class QuotaAxiTracker: Sendable {
                 } else {
                     results.append(
                         ProviderQuota(
+                            isEstimated: true,
                             provider: "Ollama",
                             remainingPercent: 100.0,
                             resetHint: "Unlimited (Local)",
@@ -386,6 +429,7 @@ public final class QuotaAxiTracker: Sendable {
             default:
                 results.append(
                     ProviderQuota(
+                        isEstimated: true,
                         provider: p.capitalized,
                         remainingPercent: basePercent,
                         resetHint: "24h",

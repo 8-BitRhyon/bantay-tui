@@ -50,16 +50,19 @@ struct NotchHistoryView: View {
             .padding(.horizontal, 10)
             .padding(.top, 4)
 
-            switch historyMode {
-            case .timeline:
-                MultiAgentTimelineView()
-            case .spend:
-                SpendHistoryView()
-            case .quotas:
-                ProviderQuotaView()
-            case .sessions:
-                sessionsListView
+            ScrollView(.vertical, showsIndicators: false) {
+                switch historyMode {
+                case .timeline:
+                    MultiAgentTimelineView()
+                case .spend:
+                    SpendHistoryView()
+                case .quotas:
+                    ProviderQuotaView()
+                case .sessions:
+                    sessionsListView
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -93,23 +96,41 @@ struct NotchHistoryView: View {
 
                                     HStack(spacing: 6) {
                                         Text(session.agentName.capitalized)
-                                            .font(.system(size: 8, weight: .semibold))
+                                            .font(.system(size: 9, weight: .semibold))
                                             .foregroundColor(.cyan)
                                         Text("•")
                                             .font(.system(size: 8))
                                             .foregroundColor(.white.opacity(0.3))
-                                        Text("\(session.totalTokens) tok")
-                                            .font(.system(size: 8, design: .monospaced))
-                                            .foregroundColor(.white.opacity(0.6))
+                                        Text(
+                                            session.totalTokens > 0
+                                                ? "\(session.totalTokens) tok"
+                                                : "usage in Spend"
+                                        )
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.6))
                                         Text("•")
                                             .font(.system(size: 8))
                                             .foregroundColor(.white.opacity(0.3))
                                         Text(String(format: "$%.2f", session.costUSD))
                                             .font(
                                                 .system(
-                                                    size: 8, weight: .bold, design: .monospaced)
+                                                    size: 9, weight: .bold, design: .monospaced)
                                             )
                                             .foregroundColor(.green.opacity(0.8))
+                                        if session.durationSeconds > 0 {
+                                            Text("•")
+                                                .font(.system(size: 8))
+                                                .foregroundColor(.white.opacity(0.3))
+                                            Text(
+                                                IslandMetrics.elapsedLabel(
+                                                    since: Date(
+                                                        timeIntervalSinceNow: -session
+                                                            .durationSeconds),
+                                                    now: Date())
+                                            )
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundColor(.white.opacity(0.5))
+                                        }
                                     }
                                 }
                                 Spacer()
@@ -118,8 +139,16 @@ struct NotchHistoryView: View {
                                     .font(.system(size: 8, weight: .bold))
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.green.opacity(0.2)))
-                                    .foregroundColor(.green)
+                                    .background(
+                                        Capsule().fill(
+                                            (session.status == "Failed"
+                                                ? BantayTheme.statusFailed
+                                                : BantayTheme.statusCompleted).opacity(0.2))
+                                    )
+                                    .foregroundColor(
+                                        session.status == "Failed"
+                                            ? BantayTheme.statusFailed
+                                            : BantayTheme.statusCompleted)
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)

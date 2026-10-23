@@ -432,6 +432,9 @@ struct LogicCheckMain {
         check(
             fallbacks.first?.remainingPercent == 90.0,
             "QuotaAxiTracker fallback budget percent calculation")
+        check(
+            fallbacks.first?.isEstimated == true,
+            "QuotaAxiTracker fallback is labelled as estimated")
 
         let taskHeight = IslandMetrics.contentHeightForTasks(
             isExpanded: true, topInset: 0, taskCount: 8, shelfTabVisible: true)
@@ -1188,9 +1191,10 @@ struct LogicCheckMain {
                 eventsFileURL: FileManager.default.temporaryDirectory
                     .appendingPathComponent("lc-l7-\(UUID().uuidString).jsonl"),
                 capture: false)
-            manager.pendingApprovals["1-1"] = (
-                variance: .multi, choices: ["lint", "test", "deploy"]
-            )
+            manager.pendingApprovals["1-1"] = PendingApproval(
+                eventID: UUID(), title: nil, message: nil, variance: .multi,
+                choices: ["lint", "test", "deploy"], actionable: false,
+                risk: .low, prompt: nil)
             let merged = manager.mergeApprovals(into: [snapshot])
             guard let m = merged.first else {
                 check(false, "L7 merged roster non-empty")
@@ -1281,7 +1285,9 @@ struct LogicCheckMain {
                 startedAt: nil,
                 projectContext: nil)
             let start = Date(timeIntervalSince1970: 500_000)
-            manager.pendingApprovals["1-1"] = (variance: nil, choices: nil)
+            manager.pendingApprovals["1-1"] = PendingApproval(
+                eventID: UUID(), title: nil, message: nil, variance: nil,
+                choices: nil, actionable: false, risk: .low, prompt: nil)
             let merged = manager.mergeApprovals(into: [working, done])
             check(
                 merged[0].startedAt == nil,
@@ -1851,8 +1857,12 @@ struct LogicCheckMain {
                 eventsFileURL: FileManager.default.temporaryDirectory
                     .appendingPathComponent("lc-l14-\(UUID().uuidString).jsonl"),
                 capture: false)
-            manager.pendingApprovals["1-1"] = (variance: .yesNo, choices: nil)
-            manager.pendingApprovals["1-2"] = (variance: .multi, choices: ["a", "b"])
+            manager.pendingApprovals["1-1"] = PendingApproval(
+                eventID: UUID(), title: nil, message: nil, variance: .yesNo,
+                choices: nil, actionable: false, risk: .low, prompt: nil)
+            manager.pendingApprovals["1-2"] = PendingApproval(
+                eventID: UUID(), title: nil, message: nil, variance: .multi,
+                choices: ["a", "b"], actionable: false, risk: .low, prompt: nil)
             manager.heartbeatVerify(liveStatuses: ["1-1": "blocked", "1-2": "done"])
             check(
                 manager.pendingApprovals["1-1"] != nil && manager.pendingApprovals["1-2"] == nil,
@@ -8398,8 +8408,8 @@ struct LogicCheckMain {
                 id: "p3", source: "codex", kind: .waiting, title: "blocked",
                 paneId: "w1:p3", workspaceId: "w1"))
         check(
-            genericApproval.headline == "Waiting for your approval",
-            "P1 generic blocked text humanizes (got \(genericApproval.headline))")
+            genericApproval.headline == "Waiting for you",
+            "P1 generic waiting text humanizes (got \(genericApproval.headline))")
 
         let parent = snapshot(
             id: "g1", source: "opencode", kind: .progress, paneId: "w2:p1",
@@ -8500,6 +8510,39 @@ struct LogicCheckMain {
             QuotaMonitor.hasUsageData(
                 kiloDetected: true, totalTokens: 0, tokensPerMinute: 0) == true,
             "P1 kilo detection counts as usage data")
+
+        let proceedPrompt = ApprovalPromptResolver.resolve(
+            rawTail: """
+                Do you want to proceed?
+                1. Yes
+                2. Yes, and don't ask again
+                3. No
+                """,
+            kind: .accessRequest)
+        check(proceedPrompt.choices.count == 3, "P6 resolver captures numbered choices")
+        check(proceedPrompt.variance == .choices, "P6 resolver marks numbered choices")
+        check(proceedPrompt.actionable, "P6 permission prompt is actionable")
+
+        let genericBlocked = ApprovalPromptResolver.resolve(
+            rawTail: "", fallbackTitle: "blocked", kind: .accessRequest)
+        check(!genericBlocked.actionable, "P6 generic blocked prompt is not actionable")
+
+        let commandPrompt = ApprovalPromptResolver.resolve(
+            rawTail: "",
+            fallbackTitle: "git push origin main",
+            fallbackMessage: "Claude wants to use Bash",
+            fallbackVariance: .yesNo,
+            kind: .accessRequest)
+        check(commandPrompt.actionable, "P6 command plus permission is actionable")
+        check(
+            commandPrompt.detail?.contains("git push") == true,
+            "P6 command detail is preserved")
+
+        let waitingQuestion = ApprovalPromptResolver.resolve(
+            rawTail: "Which environment?\n1. Staging\n2. Production",
+            kind: .waiting)
+        check(!waitingQuestion.actionable, "P6 waiting question never offers approval")
+        check(waitingQuestion.choices.count == 2, "P6 waiting question keeps its choices")
 
         check(
             ControlGateway.route(method: "strip.hud") == .stripHud,

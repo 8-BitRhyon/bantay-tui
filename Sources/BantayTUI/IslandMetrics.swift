@@ -176,7 +176,9 @@ public enum IslandMetrics: Sendable {
     public static let queueCardHeight: CGFloat = 56
     /// Height of one expanded inbox approval card: request summary plus a
     /// full-height action row. Used by the v2 roster layout math.
-    public static let approvalCardHeight: CGFloat = 136
+    public static let approvalCardHeight: CGFloat = 152
+    /// Extra height for each visible choice row inside an approval card.
+    public static let approvalChoiceRowHeight: CGFloat = 34
     /// Height of one active/working agent row: project line plus humanized
     /// activity line. Used by the v2 roster layout math.
     public static let workingRowHeight: CGFloat = 48
@@ -298,6 +300,7 @@ public enum IslandMetrics: Sendable {
     /// their own height without clipping the panel.
     public struct RosterLayoutMetrics: Equatable, Sendable {
         public let approvalCardCount: Int
+        public let approvalChoiceRowCount: Int
         public let workingRowCount: Int
         public let idleRowCount: Int
         public let groupCount: Int
@@ -306,6 +309,7 @@ public enum IslandMetrics: Sendable {
 
         public init(
             approvalCardCount: Int = 0,
+            approvalChoiceRowCount: Int = 0,
             workingRowCount: Int = 0,
             idleRowCount: Int = 0,
             groupCount: Int = 0,
@@ -313,6 +317,7 @@ public enum IslandMetrics: Sendable {
             hasAwayDigest: Bool = false
         ) {
             self.approvalCardCount = approvalCardCount
+            self.approvalChoiceRowCount = approvalChoiceRowCount
             self.workingRowCount = workingRowCount
             self.idleRowCount = idleRowCount
             self.groupCount = groupCount
@@ -324,6 +329,7 @@ public enum IslandMetrics: Sendable {
     /// Natural roster height for structured v2 rows.
     public static func rosterHeight(_ roster: RosterLayoutMetrics) -> CGFloat {
         CGFloat(max(roster.approvalCardCount, 0)) * approvalCardHeight
+            + CGFloat(max(roster.approvalChoiceRowCount, 0)) * approvalChoiceRowHeight
             + CGFloat(max(roster.workingRowCount, 0)) * workingRowHeight
             + CGFloat(max(roster.idleRowCount, 0)) * idleRowHeight
             + CGFloat(max(roster.groupCount, 0)) * sectionHeaderHeight

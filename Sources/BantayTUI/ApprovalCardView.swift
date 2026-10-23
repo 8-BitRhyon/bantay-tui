@@ -26,6 +26,24 @@ struct ApprovalCardView: View {
         AgentPresentation.status(for: agent)
     }
 
+    private var canApprove: Bool {
+        guard agent.kind == .accessRequest, agent.approvalActionable else { return false }
+        if let variance = agent.variance,
+            variance == .choices || variance == .multi,
+            (agent.choices?.count ?? 0) < 2
+        {
+            return false
+        }
+        return true
+    }
+
+    private var headerTitle: String {
+        if canApprove { return "Approval needed" }
+        if agent.kind == .waiting { return "Waiting for you" }
+        if !agent.approvalActionable { return "Review this request" }
+        return "Agent needs input"
+    }
+
     private var projectLabel: String? {
         guard let project = agent.projectContext?.project, !project.isEmpty,
             project.lowercased() != agent.source.lowercased()
@@ -44,7 +62,7 @@ struct ApprovalCardView: View {
                 Text(request)
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.85))
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 8)
@@ -54,30 +72,43 @@ struct ApprovalCardView: View {
                             .fill(Color.black.opacity(0.35))
                     )
             }
+            if !choiceOptions.isEmpty {
+                choiceList
+            }
             actionRow
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(BantayTheme.statusAttention.opacity(0.08))
+                .fill(
+                    (canApprove ? BantayTheme.statusAttention : BantayTheme.textTertiary)
+                        .opacity(0.08))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(BantayTheme.statusAttention.opacity(0.4), lineWidth: 1)
+                .stroke(
+                    (canApprove ? BantayTheme.statusAttention : BantayTheme.borderSubtle)
+                        .opacity(canApprove ? 0.4 : 0.3),
+                    lineWidth: 1)
         )
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "\(agent.source) needs approval: \(status.headline)")
+            "\(agent.source) \(headerTitle.lowercased()): \(status.headline)")
     }
 
     private var headerRow: some View {
         HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: canApprove ? "exclamationmark.triangle.fill" : "hourglass")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(BantayTheme.statusAttention)
+                .foregroundColor(
+                    canApprove ? BantayTheme.statusAttention : BantayTheme.textTertiary)
+            Text(headerTitle.uppercased())
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(
+                    canApprove ? BantayTheme.statusAttention : BantayTheme.textTertiary)
             Text(agent.source.capitalized)
                 .font(.system(size: 10.5, weight: .bold))
                 .foregroundColor(.white)
@@ -100,13 +131,13 @@ struct ApprovalCardView: View {
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5))
             }
-            riskBadge
+            if canApprove { riskBadge }
         }
     }
 
     private var riskBadge: some View {
         let (label, color): (String, Color) = {
-            switch status.risk {
+            switch agent.approvalRisk {
             case .high: return ("High risk", BantayTheme.statusFailed)
             case .medium: return ("Medium", BantayTheme.statusAttention)
             case .low: return ("Low", BantayTheme.textTertiary)
@@ -122,34 +153,85 @@ struct ApprovalCardView: View {
 
     private var requestText: String? {
         if let detail = status.detail, !detail.isEmpty { return detail }
-        if let tool = status.tool, !tool.isEmpty { return status.headline }
-        return nil
+        if let title = agent.title,
+            !IslandMetrics.isGenericApprovalText(title),
+            !title.isEmpty
+        {
+            return title
+        }
+        if let message = agent.message,
+            !IslandMetrics.isGenericApprovalText(message),
+            !message.isEmpty
+        {
+            return message
+        }
+        return "No request text captured. Review the terminal before deciding."
+    }
+
+    private var choiceOptions: [String] {
+        let controls = agent.approval
+        guard !controls.isYesNo else { return [] }
+        return Array(controls.choices.prefix(6))
+    }
+
+    private var choiceList: some View {
+        VStack(spacing: 4) {
+            ForEach(Array(choiceOptions.enumerated()), id: \.offset) { index, label in
+                let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+                let isSelected =
+                    agent.approval.isMulti
+                    && queueSelections[paneId]?.contains(number) == true
+                Button {
+                    if agent.approval.isMulti {
+                        queueSelections[paneId] =
+                            IslandMetrics.ApprovalControls.toggling(
+                                queueSelections[paneId] ?? [], index: index)
+                    } else {
+                        manager.approveChoice(paneId: paneId, choice: number)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if agent.approval.isMulti {
+                            Image(
+                                systemName: isSelected
+                                    ? "checkmark.square.fill" : "square"
+                            )
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(
+                                isSelected ? BantayTheme.statusCompleted : .white.opacity(0.5))
+                        }
+                        Text("\(number). \(label)")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(height: IslandMetrics.approvalChoiceRowHeight)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                isSelected
+                                    ? BantayTheme.statusCompleted.opacity(0.18)
+                                    : Color.white.opacity(0.06))
+                    )
+                }
+                .buttonStyle(.plain)
+                .help(label)
+                .accessibilityLabel("Option \(number): \(label)")
+            }
+        }
     }
 
     @ViewBuilder
     private var actionRow: some View {
         let controls = agent.approval
         HStack(spacing: 8) {
-            if controls.isYesNo {
-                primaryButton(title: "Allow Once", icon: "checkmark") {
-                    manager.approve(paneId: paneId)
-                }
-                secondaryButton(title: "Review", icon: "doc.text.magnifyingglass") {
-                    onReview()
-                }
-                denyButton {
-                    manager.deny(paneId: paneId)
-                }
-            } else if controls.isMulti {
-                multiButtons(controls: controls)
-                secondaryButton(title: "Review", icon: "doc.text.magnifyingglass") {
-                    onReview()
-                }
+            if canApprove {
+                approvalActions(controls: controls)
             } else {
-                choiceButtons(controls: controls)
-                secondaryButton(title: "Review", icon: "doc.text.magnifyingglass") {
-                    onReview()
-                }
+                waitingActions(controls: controls)
             }
             Spacer(minLength: 0)
             Button {
@@ -168,6 +250,68 @@ struct ApprovalCardView: View {
         .frame(minHeight: 36)
         .disabled(resolving)
         .opacity(resolving ? 0.5 : 1)
+    }
+
+    @ViewBuilder
+    private func approvalActions(controls: IslandMetrics.ApprovalControls) -> some View {
+        if controls.isMulti {
+            submitButton
+            reviewButton
+        } else if controls.isYesNo {
+            primaryButton(title: "Allow Once", icon: "checkmark") {
+                manager.approve(paneId: paneId)
+            }
+            reviewButton
+            denyButton {
+                manager.deny(paneId: paneId)
+            }
+        } else {
+            reviewButton
+        }
+    }
+
+    @ViewBuilder
+    private func waitingActions(controls: IslandMetrics.ApprovalControls) -> some View {
+        if controls.isMulti {
+            submitButton
+        }
+        reviewButton
+        secondaryButton(title: "Open terminal", icon: "terminal") {
+            onFocus()
+        }
+    }
+
+    private var submitButton: some View {
+        let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
+            queueSelections[paneId] ?? [])
+        return Button {
+            manager.approveMulti(paneId: paneId, selections: numbers)
+            queueSelections.removeValue(forKey: paneId)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                Text("Submit")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundColor(numbers.isEmpty ? .white.opacity(0.4) : .black)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(
+                numbers.isEmpty
+                    ? Color.white.opacity(0.08) : BantayTheme.statusCompleted,
+                in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(numbers.isEmpty)
+        .help("Submit selected options")
+        .accessibilityLabel("Submit selected options")
+    }
+
+    private var reviewButton: some View {
+        secondaryButton(title: "Review", icon: "doc.text.magnifyingglass") {
+            onReview()
+        }
     }
 
     private func primaryButton(
@@ -226,80 +370,5 @@ struct ApprovalCardView: View {
         .buttonStyle(.plain)
         .help("Deny request (N)")
         .accessibilityLabel("Deny request. Shortcut N.")
-    }
-
-    private func choiceButtons(
-        controls: IslandMetrics.ApprovalControls
-    ) -> some View {
-        let labels = controls.displayedLabels()
-        return ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-            let optionText =
-                controls.choices.indices.contains(index)
-                ? controls.choices[index] : "Option \(label)"
-            Button {
-                let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                manager.approveChoice(paneId: paneId, choice: number)
-            } label: {
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-                    .frame(width: 32, height: 32)
-                    .background(Color.white.opacity(0.1), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .help(optionText)
-            .accessibilityLabel("Choose \(optionText)")
-        }
-    }
-
-    private func multiButtons(
-        controls: IslandMetrics.ApprovalControls
-    ) -> some View {
-        let labels = controls.displayedLabels()
-        return HStack(spacing: 6) {
-            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                let selected = queueSelections[paneId]?.contains(number) == true
-                let optionText =
-                    controls.choices.indices.contains(index)
-                    ? controls.choices[index] : "Option \(label)"
-                Button {
-                    queueSelections[paneId] =
-                        IslandMetrics.ApprovalControls.toggling(
-                            queueSelections[paneId] ?? [], index: index)
-                } label: {
-                    Text(label)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundColor(selected ? .black : .white)
-                        .frame(width: 32, height: 32)
-                        .background(
-                            selected ? BantayTheme.statusCompleted : Color.white.opacity(0.1),
-                            in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help(optionText)
-                .accessibilityLabel("Toggle \(optionText)")
-            }
-            let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-                queueSelections[paneId] ?? [])
-            Button {
-                manager.approveMulti(paneId: paneId, selections: numbers)
-                queueSelections.removeValue(forKey: paneId)
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .bold))
-                    Text("Submit")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundColor(.black)
-                .padding(.horizontal, 12)
-                .frame(height: 32)
-                .background(BantayTheme.statusCompleted, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .help("Submit selected options")
-            .accessibilityLabel("Submit selected options")
-        }
     }
 }

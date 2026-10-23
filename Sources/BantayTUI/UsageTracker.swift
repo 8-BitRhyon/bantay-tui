@@ -86,26 +86,21 @@ public final class SessionHistoryStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: "bantay_session_history"),
             let decoded = try? JSONDecoder().decode([AgentSessionRecord].self, from: data)
         {
-            sessions = decoded
+            // Remove the three demo rows that older builds seeded on first
+            // launch. Real sessions are recorded from live completion events.
+            let demo = Set([
+                "Apple Reminders & Antigravity detection",
+                "Settings window crash fix",
+                "Unit test harness suite L64",
+            ])
+            sessions = decoded.filter { !demo.contains($0.title) }
         } else {
-            sessions = [
-                AgentSessionRecord(
-                    agentName: "antigravity", title: "Apple Reminders & Antigravity detection",
-                    startTime: Date().addingTimeInterval(-1800), durationSeconds: 320,
-                    totalTokens: 14500, costUSD: 0.18, status: "Completed"),
-                AgentSessionRecord(
-                    agentName: "claude", title: "Settings window crash fix",
-                    startTime: Date().addingTimeInterval(-3600), durationSeconds: 410,
-                    totalTokens: 28900, costUSD: 0.42, status: "Completed"),
-                AgentSessionRecord(
-                    agentName: "codex", title: "Unit test harness suite L64",
-                    startTime: Date().addingTimeInterval(-7200), durationSeconds: 190,
-                    totalTokens: 8200, costUSD: 0.12, status: "Completed"),
-            ]
+            sessions = []
         }
     }
 
     public func addSession(_ session: AgentSessionRecord) {
+        guard !sessions.contains(where: { $0.id == session.id }) else { return }
         sessions.insert(session, at: 0)
         if sessions.count > 50 {
             sessions = Array(sessions.prefix(50))
