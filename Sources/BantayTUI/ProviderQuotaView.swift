@@ -105,7 +105,16 @@ struct ProviderQuotaView: View {
                         .background(Color.white.opacity(0.06))
                         .clipShape(RoundedRectangle(cornerRadius: 3))
 
-                    if quota.isEstimated {
+                    if quota.limitReached {
+                        Text("LIMIT")
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundColor(BantayTheme.statusFailed)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(BantayTheme.statusFailed.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .help("Provider reported a limit wall. New requests will fail.")
+                    } else if quota.isEstimated {
                         Text("EST")
                             .font(.system(size: 7.5, weight: .bold))
                             .foregroundColor(BantayTheme.statusQuota)

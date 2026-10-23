@@ -8529,6 +8529,10 @@ struct LogicCheckMain {
                 kiloDetected: true, totalTokens: 0, tokensPerMinute: 0) == true,
             "P1 kilo detection counts as usage data")
 
+        check(
+            OpenCodeUsageAdapter.quotaState(home: NSTemporaryDirectory()) == nil,
+            "P8 opencode quota state is nil without recent ledger activity")
+
         let proceedPrompt = ApprovalPromptResolver.resolve(
             rawTail: """
                 Do you want to proceed?

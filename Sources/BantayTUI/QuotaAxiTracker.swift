@@ -27,11 +27,14 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
     public var hoursRemaining: Double?
     public var resetsAt: Date?
     public var isCooldown: Bool
+    /// True when the provider reported a hard limit wall (e.g. opencode
+    /// free-tier QuotaExceeded). Renders as a red limit state, not a bar.
+    public var limitReached: Bool
     /// True when the percentage is derived from the local daily budget, not a
     /// provider-reported quota. The UI labels these rows as estimates.
     public var isEstimated: Bool
     public var isWarning: Bool { remainingPercent <= 20.0 }
-    public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown }
+    public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown || limitReached }
 
     public init(
         provider: String,
@@ -44,6 +47,7 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         hoursRemaining: Double? = nil,
         resetsAt: Date? = nil,
         isCooldown: Bool = false,
+        limitReached: Bool = false,
         isEstimated: Bool = false
     ) {
         self.provider = provider
@@ -56,6 +60,7 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         self.hoursRemaining = hoursRemaining
         self.resetsAt = resetsAt
         self.isCooldown = isCooldown
+        self.limitReached = limitReached
         self.isEstimated = isEstimated
     }
 
@@ -219,6 +224,7 @@ public final class QuotaAxiTracker: Sendable {
         if fs.fileExists(atPath: home + "/.local/state/kilo") { recognized.insert("kilo") }
         if OpenRouterUsageAdapter.detect(home: home) { recognized.insert("openrouter") }
         if OllamaUsageAdapter.detect(home: home) { recognized.insert("ollama") }
+        if OpenCodeUsageAdapter.detect(home: home) { recognized.insert("opencode") }
 
         if recognized.isEmpty {
             recognized = ["claude", "codex", "cursor"]
@@ -229,6 +235,11 @@ public final class QuotaAxiTracker: Sendable {
         // OpenRouter/Ollama) is skipped: no budget-derived percentages, no
         // activity-derived request counts, and no rows for tools that merely
         // have a directory on disk.
+        //
+        // opencode is the measured exception: it has no quota API, but the
+        // ledger records free-tier limit walls (QuotaExceeded) plus exact
+        // daily spend. Its row reports that measured state, never a
+        // fabricated percentage.
         for p in recognized.sorted() {
             switch p {
             case "claude":
@@ -239,6 +250,27 @@ public final class QuotaAxiTracker: Sendable {
                         tokensPerMin: burnRateTPM,
                         remainingPercent: live.remainingPercent)
                     results.append(quota)
+                }
+            case "opencode":
+                if let state = OpenCodeUsageAdapter.quotaState(now: Date(), home: home) {
+                    let tier =
+                        (state.model?.lowercased().contains("free") == true)
+                        ? "Free tier" : (state.model ?? "Managed models")
+                    results.append(
+                        ProviderQuota(
+                            provider: "opencode",
+                            remainingPercent: state.limitReached ? 0 : 100,
+                            resetHint: state.limitReached
+                                ? "Free tier limit" : "No quota wall today",
+                            tier: tier,
+                            usedDisplay: String(
+                                format: "$%.2f today (%@ tok)",
+                                state.costTodayUSD,
+                                UsageTracker.compactTokens(state.tokensToday)),
+                            totalDisplay: "Measured",
+                            burnRateTPM: burnRateTPM,
+                            limitReached: state.limitReached
+                        ))
                 }
             case "openrouter":
                 if let cached = OpenRouterUsageAdapter.cachedQuota {

@@ -25,6 +25,64 @@
             #expect(quotas.isEmpty)
         }
 
+        @Test("opencode quota state reflects the ledger limit wall")
+        func opencodeQuotaState() {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-opencode-quota-\(UUID().uuidString)")
+            let share = dir.appendingPathComponent(".local/share/opencode", isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: share, withIntermediateDirectories: true)
+            let db = share.appendingPathComponent("opencode.db")
+            var handle: OpaquePointer?
+            guard sqlite3_open(db.path, &handle) == SQLITE_OK, let dbHandle = handle else {
+                Issue.record("mock opencode DB failed to open")
+                return
+            }
+            defer { sqlite3_close(dbHandle) }
+            sqlite3_exec(
+                dbHandle,
+                "CREATE TABLE session_message(id TEXT PRIMARY KEY, session_id TEXT NOT NULL,"
+                    + " type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL,"
+                    + " time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
+                nil, nil, nil)
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let payload =
+                "{\"tokens\":{\"input\":100,\"output\":10,\"reasoning\":0,"
+                + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":0.01,"
+                + "\"content\":[{\"type\":\"text\",\"text\":\"QuotaExceeded: Free usage limit\"}]}"
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            var stmt: OpaquePointer?
+            sqlite3_prepare_v2(
+                dbHandle,
+                "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
+                -1, &stmt, nil)
+            if let stmt {
+                sqlite3_bind_text(stmt, 1, "m1", -1, transient)
+                sqlite3_bind_text(stmt, 2, "s1", -1, transient)
+                sqlite3_bind_text(stmt, 3, "assistant", -1, transient)
+                sqlite3_bind_int64(stmt, 4, 1)
+                sqlite3_bind_int64(stmt, 5, nowMs)
+                sqlite3_bind_int64(stmt, 6, nowMs)
+                sqlite3_bind_text(stmt, 7, (payload as NSString).utf8String, -1, transient)
+                sqlite3_step(stmt)
+                sqlite3_finalize(stmt)
+            }
+            let state = OpenCodeUsageAdapter.quotaState(
+                now: Date(), home: dir.path)
+            #expect(state?.limitReached == true)
+            #expect((state?.costTodayUSD ?? 0) > 0)
+            let quotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["opencode"],
+                costUSD: 0.01,
+                budgetUSD: 10.0,
+                home: dir.path
+            )
+            let opencode = quotas.first { $0.id == "opencode" }
+            #expect(opencode?.limitReached == true)
+            #expect(opencode?.remainingPercent == 0)
+            try? FileManager.default.removeItem(at: dir)
+        }
+
         @Test("quotaThresholds detects warning and critical status correctly")
         func quotaThresholds() {
             let normal = ProviderQuota(provider: "Claude Code", remainingPercent: 45.0)

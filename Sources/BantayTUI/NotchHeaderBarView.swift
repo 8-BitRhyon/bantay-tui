@@ -51,7 +51,9 @@ struct NotchHeaderBarView: View {
             if NotchHUDConfig.shared.showTokenRate, liveRate > 0 {
                 tokenRateBadge(tpm: Int(liveRate))
             }
-            if NotchHUDConfig.shared.enableQuotaAxiGauge, quotaMonitor.hasLiveQuota, hasUsageData {
+            if NotchHUDConfig.shared.enableQuotaAxiGauge, quotaMonitor.hasLiveQuota,
+                hasUsageData, quotaMonitor.minRemainingPercent < 100
+            {
                 quotaAxiBadge
             }
             Spacer(minLength: 4)

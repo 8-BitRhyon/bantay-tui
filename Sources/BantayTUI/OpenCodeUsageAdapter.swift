@@ -62,6 +62,62 @@ enum OpenCodeUsageAdapter {
         return snapshot
     }
 
+    /// Quota wall state from the ledger: whether recent assistant messages
+    /// hit a provider limit (opencode free-tier QuotaExceeded), plus today's
+    /// measured cost, tokens, and latest model. Nil when opencode has no
+    /// recent activity, so unused installs never produce a quota row.
+    struct QuotaState: Equatable, Sendable {
+        let limitReached: Bool
+        let model: String?
+        let costTodayUSD: Double
+        let tokensToday: Int
+    }
+
+    static func quotaState(
+        now: Date = Date(),
+        home: String = NSHomeDirectory()
+    ) -> QuotaState? {
+        let url = databaseURL(home: home)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let calendar = Calendar.current
+        let startOfDayMs = Int64(
+            calendar.startOfDay(for: now).timeIntervalSince1970 * 1000)
+        let usageSql =
+            "SELECT COUNT(*),"
+            + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0),"
+            + " COALESCE(SUM(CAST(json_extract(data,'$.tokens.input') AS INTEGER)),0)"
+            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.output') AS INTEGER)),0)"
+            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.reasoning') AS INTEGER)),0)"
+            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.cache.read') AS INTEGER)),0)"
+            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.cache.write') AS INTEGER)),0)"
+            + " FROM session_message WHERE type='assistant'"
+            + " AND time_created >= \(startOfDayMs)"
+        guard
+            let row = sqlite3QueryOpenCode(sql: usageSql, db: url)?.first,
+            row.count >= 3,
+            let count = Int(row[0]),
+            count > 0,
+            let cost = Double(row[1]),
+            let tokens = Int(row[2])
+        else { return nil }
+        let limitSql =
+            "SELECT COUNT(*) FROM session_message WHERE type='assistant'"
+            + " AND time_created >= \(startOfDayMs) AND data LIKE '%QuotaExceeded%'"
+        let limited =
+            (sqlite3QueryOpenCode(sql: limitSql, db: url)?.first?.first)
+            .flatMap(Int.init) ?? 0 > 0
+        let modelSql =
+            "SELECT json_extract(data,'$.model.id') FROM session_message"
+            + " WHERE type='assistant' AND time_created >= \(startOfDayMs)"
+            + " ORDER BY time_created DESC LIMIT 1"
+        let model = sqlite3QueryOpenCode(sql: modelSql, db: url)?.first?.first
+        return QuotaState(
+            limitReached: limited,
+            model: model?.isEmpty == false ? model : nil,
+            costTodayUSD: cost,
+            tokensToday: tokens)
+    }
+
     private static func sqlite3QueryOpenCode(sql: String, db: URL) -> [[String]]? {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
