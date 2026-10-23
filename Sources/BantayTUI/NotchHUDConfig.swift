@@ -108,6 +108,13 @@ final class NotchHUDConfig {
     var enforceBudgetLimit: Bool = false {
         didSet { defaults.set(enforceBudgetLimit, forKey: "enforceBudgetLimit") }
     }
+    /// OpenCode Go plan tier for per-model allowance math ("go" or "go-plus").
+    var openCodeGoPlan: String = "go" {
+        didSet {
+            openCodeGoPlan = openCodeGoPlan == "go-plus" ? "go-plus" : "go"
+            defaults.set(openCodeGoPlan, forKey: "openCodeGoPlan")
+        }
+    }
     /// High burn velocity threshold in tokens per minute (default 2500.0).
     var highBurnThresholdTPM: Double = 2500.0 {
         didSet {
@@ -559,6 +566,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "enforceBudgetLimit") as? Bool {
             enforceBudgetLimit = v
+        }
+        if let v = defaults.object(forKey: "openCodeGoPlan") as? String {
+            openCodeGoPlan = v
         }
         if let v = defaults.object(forKey: "highBurnThresholdTPM") as? NSNumber {
             highBurnThresholdTPM = v.doubleValue

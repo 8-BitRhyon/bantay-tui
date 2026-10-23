@@ -73,6 +73,16 @@ enum OpenCodeUsageAdapter {
         let tokensToday: Int
     }
 
+    /// Dollar spend for one OpenCode Go model across the three Go allowance
+    /// windows (5-hour, weekly, monthly), read from the ledger's own cost
+    /// accounting.
+    struct GoModelSpend: Equatable, Sendable {
+        let modelID: String
+        let spend5h: Double
+        let spend7d: Double
+        let spend30d: Double
+    }
+
     static func quotaState(
         now: Date = Date(),
         home: String = NSHomeDirectory()
@@ -82,6 +92,11 @@ enum OpenCodeUsageAdapter {
         let calendar = Calendar.current
         let startOfDayMs = Int64(
             calendar.startOfDay(for: now).timeIntervalSince1970 * 1000)
+        // Free-tier bucket only: opencode-go traffic counts toward Go plan
+        // limits, never toward the free wall.
+        let freeFilter =
+            "AND (json_extract(data,'$.model.providerID') IS NULL"
+            + " OR json_extract(data,'$.model.providerID') != 'opencode-go')"
         let usageSql =
             "SELECT COUNT(*),"
             + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0),"
@@ -91,7 +106,7 @@ enum OpenCodeUsageAdapter {
             + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.cache.read') AS INTEGER)),0)"
             + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.cache.write') AS INTEGER)),0)"
             + " FROM session_message WHERE type='assistant'"
-            + " AND time_created >= \(startOfDayMs)"
+            + " AND time_created >= \(startOfDayMs) \(freeFilter)"
         guard
             let row = sqlite3QueryOpenCode(sql: usageSql, db: url)?.first,
             row.count >= 3,
@@ -108,7 +123,7 @@ enum OpenCodeUsageAdapter {
             .flatMap(Int.init) ?? 0 > 0
         let modelSql =
             "SELECT json_extract(data,'$.model.id') FROM session_message"
-            + " WHERE type='assistant' AND time_created >= \(startOfDayMs)"
+            + " WHERE type='assistant' AND time_created >= \(startOfDayMs) \(freeFilter)"
             + " ORDER BY time_created DESC LIMIT 1"
         let model = sqlite3QueryOpenCode(sql: modelSql, db: url)?.first?.first
         return QuotaState(
@@ -116,6 +131,48 @@ enum OpenCodeUsageAdapter {
             model: model?.isEmpty == false ? model : nil,
             costTodayUSD: cost,
             tokensToday: tokens)
+    }
+
+    /// Per-model Go spend across the 5-hour, weekly, and monthly windows.
+    /// Only `opencode-go` provider traffic counts; free-tier models are
+    /// unlimited and tracked by the limit-wall state instead.
+    static func goModelSpend(
+        now: Date = Date(),
+        home: String = NSHomeDirectory()
+    ) -> [GoModelSpend] {
+        let url = databaseURL(home: home)
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let fiveHMs = nowMs - 5 * 3_600 * 1_000
+        let sevenDMs = nowMs - 7 * 86_400 * 1_000
+        let thirtyDMs = nowMs - 30 * 86_400 * 1_000
+        let sql =
+            "SELECT json_extract(data,'$.model.id'),"
+            + " COALESCE(SUM(CASE WHEN time_created >= \(fiveHMs)"
+            + " THEN CAST(json_extract(data,'$.cost') AS REAL) ELSE 0 END),0),"
+            + " COALESCE(SUM(CASE WHEN time_created >= \(sevenDMs)"
+            + " THEN CAST(json_extract(data,'$.cost') AS REAL) ELSE 0 END),0),"
+            + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0)"
+            + " FROM session_message WHERE type='assistant'"
+            + " AND json_extract(data,'$.model.providerID') = 'opencode-go'"
+            + " AND time_created >= \(thirtyDMs)"
+            + " GROUP BY 1"
+        guard let rows = sqlite3QueryOpenCode(sql: sql, db: url) else { return [] }
+        var result: [GoModelSpend] = []
+        for row in rows {
+            guard row.count >= 4, let modelID = row.first, !modelID.isEmpty else {
+                continue
+            }
+            let fiveH = Double(row[1]) ?? 0
+            let sevenD = Double(row[2]) ?? 0
+            let thirtyD = Double(row[3]) ?? 0
+            guard fiveH + sevenD + thirtyD > 0 else { continue }
+            result.append(
+                GoModelSpend(
+                    modelID: modelID, spend5h: fiveH, spend7d: sevenD,
+                    spend30d: thirtyD))
+        }
+        return result.sorted { $0.spend7d > $1.spend7d }
     }
 
     private static func sqlite3QueryOpenCode(sql: String, db: URL) -> [[String]]? {

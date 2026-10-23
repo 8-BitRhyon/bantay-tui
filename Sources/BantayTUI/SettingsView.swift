@@ -132,6 +132,7 @@ struct SettingsView: View {
     @State private var stripDimInactive = StripConfiguration.load().dimInactive
     @State private var stripChevrons = StripConfiguration.load().showNavigationChevrons
     @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
+    @State private var openCodeGoPlan = NotchHUDConfig.shared.openCodeGoPlan
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
 
     private static let sectionKeywords: [String: [String]] = [
@@ -510,6 +511,15 @@ struct SettingsView: View {
                     .help("Blocks new task dispatches when the daily budget is exhausted.")
                     .onChange(of: enforceBudgetLimit) { newValue in
                         NotchHUDConfig.shared.enforceBudgetLimit = newValue
+                    }
+                    Picker("OpenCode Go plan", selection: $openCodeGoPlan) {
+                        Text("Go ($10/mo)").tag("go")
+                        Text("Go Plus ($40/mo)").tag("go-plus")
+                    }
+                    .help("Selects the per-model monthly allowances for Go quota rows.")
+                    .onChange(of: openCodeGoPlan) { newValue in
+                        NotchHUDConfig.shared.openCodeGoPlan = newValue
+                        Task { await QuotaMonitor.shared.refresh(force: true) }
                     }
                 }
             }
@@ -1493,6 +1503,7 @@ struct SettingsView: View {
         stripDimInactive = stripCfg.dimInactive
         stripChevrons = stripCfg.showNavigationChevrons
         desktopHUDPinned = DesktopHUDController.shared.isPinned
+        openCodeGoPlan = NotchHUDConfig.shared.openCodeGoPlan
         hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
         DispatchQueue.main.async {
             isRefreshingConfig = false

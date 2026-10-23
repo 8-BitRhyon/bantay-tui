@@ -158,7 +158,8 @@ public final class QuotaAxiTracker: Sendable {
         costUSD: Double,
         budgetUSD: Double,
         burnRateTPM: Double = 0.0,
-        home: String = NSHomeDirectory()
+        home: String = NSHomeDirectory(),
+        goPlan: OpenCodeGoLimits.Plan = .go
     ) -> [ProviderQuota] {
         // 1. Try quota-axi CLI if installed
         let candidateBins = [
@@ -270,6 +271,31 @@ public final class QuotaAxiTracker: Sendable {
                             totalDisplay: "Measured",
                             burnRateTPM: burnRateTPM,
                             limitReached: state.limitReached
+                        ))
+                }
+                for spend in OpenCodeUsageAdapter.goModelSpend(now: Date(), home: home) {
+                    guard
+                        let modelLimit = OpenCodeGoLimits.limit(
+                            for: spend.modelID, plan: goPlan)
+                    else { continue }
+                    let monthly = modelLimit.monthlyUSD(plan: goPlan)
+                    let tight = OpenCodeGoLimits.tightestWindow(
+                        spend5h: spend.spend5h, spend7d: spend.spend7d,
+                        spend30d: spend.spend30d, monthlyLimit: monthly)
+                    let percent = OpenCodeGoLimits.remainingPercent(
+                        spend: tight.spend, allowance: tight.allowance)
+                    results.append(
+                        ProviderQuota(
+                            isEstimated: true,
+                            provider: "Go · \(modelLimit.displayName)",
+                            remainingPercent: percent,
+                            resetHint: "Go \(tight.window.label) allowance",
+                            tier: goPlan.displayName,
+                            usedDisplay: String(
+                                format: "$%.2f of $%.2f",
+                                tight.spend, tight.allowance),
+                            totalDisplay: String(format: "$%.0f / mo", monthly),
+                            burnRateTPM: burnRateTPM
                         ))
                 }
             case "openrouter":

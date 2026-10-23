@@ -123,7 +123,7 @@ struct ProviderQuotaView: View {
                             .background(BantayTheme.statusQuota.opacity(0.15))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                             .help(
-                                "Estimated from the local daily budget, not a provider-reported quota"
+                                "Computed from ledger spend and published Go plan limits, not a provider-reported quota"
                             )
                     }
 
