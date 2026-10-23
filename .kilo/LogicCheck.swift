@@ -8420,12 +8420,16 @@ struct LogicCheckMain {
             SettingsRoute.resolve(cliArgument: "nope") == nil,
             "P1 unknown CLI route is nil")
         check(
-            SettingsRoute.desktop.categoryName == "Infinite Strip"
-                && SettingsRoute.desktop.sectionTitle == "Infinite Strip",
+            SettingsRoute.desktop.categoryName == "Desktop"
+                && SettingsRoute.desktop.sectionTitle == "Desktop HUD",
             "P1 desktop route anchors to current settings")
         check(
-            SettingsRoute.notch.categoryName == "Appearance",
+            SettingsRoute.notch.categoryName == "Notch",
             "P1 notch route anchors to current settings")
+        check(
+            SettingsRoute.approvals.categoryName == "Agents"
+                && SettingsRoute.approvals.sectionTitle == "Approval safety",
+            "P4 approvals route anchors to the Agents policy section")
 
         let rosterMetrics = IslandMetrics.RosterLayoutMetrics(
             approvalCardCount: 1, workingRowCount: 2, idleRowCount: 1, groupCount: 2)

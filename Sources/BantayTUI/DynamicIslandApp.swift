@@ -58,7 +58,14 @@ struct DynamicIslandApp: App {
         if CommandLine.arguments.contains("--settings")
             || CommandLine.arguments.contains("settings")
         {
-            sendSocketCommand(method: "settings.open", params: [:])
+            let routeArg =
+                CommandLine.arguments.drop(while: { $0 != "--settings" && $0 != "settings" })
+                .dropFirst().first(where: { !$0.hasPrefix("--") })
+            var params: [String: Any] = [:]
+            if let routeArg, let route = SettingsRoute.resolve(cliArgument: routeArg) {
+                params["route"] = route.rawValue
+            }
+            sendSocketCommand(method: "settings.open", params: params)
         }
         if CommandLine.arguments.contains("--permissions")
             || CommandLine.arguments.contains("permissions")
@@ -319,10 +326,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             forName: .openSettingsRequested,
             object: nil,
             queue: .main
-        ) { _ in
+        ) { note in
+            let route =
+                (note.userInfo?["route"] as? String).flatMap(SettingsRoute.init(rawValue:))
+                ?? .general
             Task { @MainActor in
                 Self.dbg("Notification openSettingsRequested received, calling showSettings")
-                AppDelegate.showSettings()
+                AppDelegate.showSettings(route: route)
             }
         }
         NotificationCenter.default.addObserver(
@@ -1358,17 +1368,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor private var settingsWindowInstance: NSWindow?
 
     @MainActor
-    static func showSettings() {
-        shared?.openSettings()
+    static func showSettings(route: SettingsRoute = .general) {
+        shared?.openSettingsWindow(route: route)
     }
 
     @MainActor
     @objc func openSettings() {
+        openSettingsWindow(route: .general)
+    }
+
+    @MainActor
+    func openSettingsWindow(route: SettingsRoute) {
         Self.dbg("openSettings: 1 start")
         let window = settingsWindowInstance ?? makeSettingsWindow()
         Self.dbg("openSettings: 2 window obtained")
         settingsWindowInstance = window
         NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
+        NotificationCenter.default.post(
+            name: .settingsRouteRequested, object: nil,
+            userInfo: ["route": route.rawValue])
         Self.dbg("openSettings: 3 settingsWillOpen posted")
         if let targetScreen = Self.islandScreen() ?? NSScreen.main {
             let screenRect = targetScreen.visibleFrame

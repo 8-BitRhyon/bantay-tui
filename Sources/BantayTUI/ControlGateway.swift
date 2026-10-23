@@ -268,8 +268,12 @@ final class ControlGatewayServer: @unchecked Sendable {
         case .prompt:
             return handlePrompt(id: request.id, params: request.params)
         case .openSettings:
+            let route = stringParam(request.params, "route")
             DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
+                var info: [String: Any] = [:]
+                if let route { info["route"] = route }
+                NotificationCenter.default.post(
+                    name: .openSettingsRequested, object: nil, userInfo: info)
             }
             return ControlGateway.GatewayResponse.ok(
                 id: request.id,

@@ -58,7 +58,7 @@ final class DesktopHUDController: ObservableObject {
     func show() {
         let strip = StripWindowManager.shared
         guard strip.config.isEnabled else {
-            AppDelegate.showSettings()
+            AppDelegate.showSettings(route: .desktop)
             return
         }
         guard !strip.isFullScreen else { return }

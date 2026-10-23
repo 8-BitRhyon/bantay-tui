@@ -1564,7 +1564,7 @@ struct NotchStatusView: View {
                     }
                 },
                 onOpenSettings: {
-                    AppDelegate.showSettings()
+                    AppDelegate.showSettings(route: .agents)
                 },
                 onExpandTo: { expandTo($0) }
             )

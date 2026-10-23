@@ -14,29 +14,29 @@ enum SettingsRoute: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    /// Existing SettingsView category name. Phase 4 reorganizes categories;
-    /// until then routes anchor to the current sidebar labels.
+    /// Current SettingsView category name. Renamed in Phase 4: Appearance
+    /// became Notch, Infinite Strip became Desktop.
     var categoryName: String {
         switch self {
         case .general: return "General"
         case .agents, .approvals: return "Agents"
-        case .notch: return "Appearance"
-        case .desktop: return "Infinite Strip"
+        case .notch: return "Notch"
+        case .desktop: return "Desktop"
         case .notifications: return "Notifications"
         case .integrations: return "Integrations"
         case .advanced: return "Advanced"
         }
     }
 
-    /// Existing SettingsView section title when one is stable enough to
-    /// scroll to. Nil means select the category only.
+    /// SettingsView section title to land on. Used as the settings search
+    /// filter so the deep link shows the matching section.
     var sectionTitle: String? {
         switch self {
         case .general: return "Quick actions"
         case .agents: return "Tasks & Dispatching"
-        case .approvals: return nil
+        case .approvals: return "Approval safety"
         case .notch: return "Expanded panel"
-        case .desktop: return "Infinite Strip"
+        case .desktop: return "Desktop HUD"
         case .notifications: return "Alerts"
         case .integrations: return "Claude Code hook"
         case .advanced: return "Capture"

@@ -97,7 +97,7 @@ struct DesktopHUDView: View {
             .help(hud.isPinned ? "Unpin Desktop HUD" : "Pin Desktop HUD open")
             .accessibilityLabel(hud.isPinned ? "Unpin Desktop HUD" : "Pin Desktop HUD open")
             Button {
-                AppDelegate.showSettings()
+                AppDelegate.showSettings(route: .desktop)
             } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 10, weight: .semibold))
@@ -356,7 +356,7 @@ struct DesktopHUDView: View {
                     strip.config.dimInactive.toggle()
                 }
                 Divider()
-                Button("Open Desktop Settings…") { AppDelegate.showSettings() }
+                Button("Open Desktop Settings…") { AppDelegate.showSettings(route: .desktop) }
             } label: {
                 HStack(spacing: 4) {
                     Text("Layout")

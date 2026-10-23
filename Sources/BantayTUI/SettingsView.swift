@@ -8,9 +8,9 @@ struct SettingsView: View {
     /// category with matches shows all its (matching) sections.
     private enum Category: String, CaseIterable, Identifiable {
         case general = "General"
-        case appearance = "Appearance"
         case agents = "Agents"
-        case strip = "Infinite Strip"
+        case notch = "Notch"
+        case desktop = "Desktop"
         case notifications = "Notifications"
         case integrations = "Integrations"
         case advanced = "Advanced"
@@ -20,12 +20,25 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .general: "gearshape"
-            case .appearance: "paintbrush"
             case .agents: "terminal"
-            case .strip: "rectangle.split.3x1"
+            case .notch: "laptopcomputer"
+            case .desktop: "rectangle.split.3x1"
             case .notifications: "bell"
             case .integrations: "link"
             case .advanced: "wrench.and.screwdriver"
+            }
+        }
+
+        /// Maps a settings deep-link route to its sidebar category.
+        static func from(route: SettingsRoute) -> Category {
+            switch route {
+            case .general: return .general
+            case .agents, .approvals: return .agents
+            case .notch: return .notch
+            case .desktop: return .desktop
+            case .notifications: return .notifications
+            case .integrations: return .integrations
+            case .advanced: return .advanced
             }
         }
     }
@@ -118,6 +131,7 @@ struct SettingsView: View {
     @State private var stripSpringOmega = StripConfiguration.load().springOmega
     @State private var stripDimInactive = StripConfiguration.load().dimInactive
     @State private var stripChevrons = StripConfiguration.load().showNavigationChevrons
+    @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
 
     private static let sectionKeywords: [String: [String]] = [
@@ -151,6 +165,13 @@ struct SettingsView: View {
         ],
         "Muted sources": [
             "mute", "muted sources", "hide source", "unmute",
+        ],
+        "Approval safety": [
+            "approval", "approve", "deny", "risk", "policy", "allow once",
+            "permission prompt",
+        ],
+        "Desktop HUD": [
+            "desktop hud", "pin desktop", "auto-hide", "bottom dock", "spatial",
         ],
         "Tasks & Dispatching": [
             "auto-run tasks", "dispatch", "focus terminal or app", "reminders", "apple reminders",
@@ -365,6 +386,19 @@ struct SettingsView: View {
             AppDelegate.dbg("SettingsView: settingsWillOpen received")
             DispatchQueue.main.async { refreshFromConfig() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsRouteRequested)) { note in
+            guard let raw = note.userInfo?["route"] as? String,
+                let route = SettingsRoute(rawValue: raw)
+            else { return }
+            DispatchQueue.main.async { applyRoute(route) }
+        }
+    }
+
+    /// Deep-link navigation for the single shared modal: select the route's
+    /// category and filter to its section via the existing search.
+    private func applyRoute(_ route: SettingsRoute) {
+        selectedCategory = Category.from(route: route)
+        searchText = route.sectionTitle ?? ""
     }
 
     /// Whether any section in a category matches the current search.
@@ -377,13 +411,13 @@ struct SettingsView: View {
     private func sectionTitles(for category: Category) -> [String] {
         switch category {
         case .general:
-            ["Startup", "Quick actions", "Displays"]
-        case .appearance:
-            ["Pill behavior", "Expanded panel", "Displays", "Mascot & Pet Companion"]
+            ["Startup", "Quick actions", "Displays", "Welcome"]
+        case .notch:
+            ["Pill behavior", "Expanded panel", "Mascot & Pet Companion", "Shelf"]
         case .agents:
-            ["Muted sources", "Tasks & Dispatching", "Shelf", "Expanded panel"]
-        case .strip:
-            ["Infinite Strip", "Strip Canvas", "Navigation & Shortcuts"]
+            ["Approval safety", "Muted sources", "Tasks & Dispatching"]
+        case .desktop:
+            ["Infinite Strip", "Strip Canvas", "Navigation & Shortcuts", "Desktop HUD"]
         case .notifications:
             ["Alerts", "Push notifications (ntfy.sh)", "Quiet hours", "tmux status bar"]
         case .integrations:
@@ -477,6 +511,28 @@ struct SettingsView: View {
                     .onChange(of: enforceBudgetLimit) { newValue in
                         NotchHUDConfig.shared.enforceBudgetLimit = newValue
                     }
+                }
+            }
+
+            if selectedCategory == .agents && matchesSearch("Approval safety") {
+                Section("Approval safety") {
+                    Text(
+                        "Every approval shows the exact command, file, or question before it runs. Allow Once approves a single request; Deny blocks it. Nothing auto-approves."
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    Text("Risk tiers: High (destructive shell, remote scripts, deploys).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Medium (edits, pushes, permission changes). Low (reads, status checks).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Button("Open Agents inbox") {
+                        NotificationCenter.default.post(
+                            name: .notchExpandRequested, object: nil)
+                    }
+                    .buttonStyle(.link)
+                    .help("Expand the notch to the Agents inbox.")
                 }
             }
 
@@ -623,7 +679,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .agents && matchesSearch("Shelf") {
+            if selectedCategory == .notch && matchesSearch("Shelf") {
                 Section("Shelf") {
                     Toggle("Shelf tab in expanded view", isOn: $showShelf)
                         .help("Clipboard history + dropped files next to agents.")
@@ -647,7 +703,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .strip && matchesSearch("Strip Canvas") {
+            if selectedCategory == .desktop && matchesSearch("Strip Canvas") {
                 Section("Strip Canvas (Infinite Scrolling)") {
                     Toggle("Enable infinite strip layout", isOn: $stripEnabled)
                         .help(
@@ -706,7 +762,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .strip && matchesSearch("Infinite Strip") {
+            if selectedCategory == .desktop && matchesSearch("Infinite Strip") {
                 Section("Agent Awareness & Halos") {
                     Toggle("Agent status border halos", isOn: $stripHalos)
                         .help(
@@ -722,7 +778,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .strip && matchesSearch("Navigation & Shortcuts") {
+            if selectedCategory == .desktop && matchesSearch("Navigation & Shortcuts") {
                 Section("Navigation & Shortcuts (hold ⌃⌥)") {
                     Toggle("Enable strip global hotkeys", isOn: $stripHotkeys)
                         .onChange(of: stripHotkeys) { _ in updateStripConfig() }
@@ -808,6 +864,26 @@ struct SettingsView: View {
                     }
                     .font(.system(size: 11))
                     .padding(.vertical, 4)
+                }
+            }
+
+            if selectedCategory == .desktop && matchesSearch("Desktop HUD") {
+                Section("Desktop HUD") {
+                    Toggle("Pin Desktop HUD open", isOn: $desktopHUDPinned)
+                        .help("Pinned HUD never auto-hides when the pointer leaves.")
+                        .onChange(of: desktopHUDPinned) { newValue in
+                            DesktopHUDController.shared.isPinned = newValue
+                        }
+                    Text(
+                        "Bottom-center window map. Auto-hides 1.8s after the pointer leaves unless pinned. Never appears in full screen."
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    Button("Open Desktop HUD") {
+                        DesktopHUDController.shared.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .help("Toggle the Desktop strip HUD (⌃⌥Space).")
                 }
             }
 
@@ -1095,7 +1171,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .appearance && matchesSearch("Pill behavior") {
+            if selectedCategory == .notch && matchesSearch("Pill behavior") {
                 Section("Pill behavior") {
                     Stepper("Auto-clear after \(autoClearTTL) s", value: $autoClearTTL, in: 1...30)
                         .onChange(of: autoClearTTL) { newValue in
@@ -1111,7 +1187,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .appearance && matchesSearch("Mascot & Pet Companion") {
+            if selectedCategory == .notch && matchesSearch("Mascot & Pet Companion") {
                 Section("Mascot & Pet Companion") {
                     Toggle("Show Mascot on Notch", isOn: $showNotchMascot)
                         .help(
@@ -1286,7 +1362,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .appearance && matchesSearch("Expanded panel") {
+            if selectedCategory == .notch && matchesSearch("Expanded panel") {
                 Section("Expanded panel & Modular tabs") {
                     Toggle("🤖 Agents Roster tab", isOn: $showAgentsTab)
                         .help("Enable or disable AI agent monitoring and roster in notch.")
@@ -1416,6 +1492,7 @@ struct SettingsView: View {
         stripSpringOmega = stripCfg.springOmega
         stripDimInactive = stripCfg.dimInactive
         stripChevrons = stripCfg.showNavigationChevrons
+        desktopHUDPinned = DesktopHUDController.shared.isPinned
         hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
         DispatchQueue.main.async {
             isRefreshingConfig = false
