@@ -67,10 +67,11 @@ public final class StripWindowManager: ObservableObject {
     public func start() {
         guard config.isEnabled else { return }
 
-        if !StripWindowRegistry.hasAccessibilityPermission() {
-            StripWindowRegistry.promptAccessibilityPermission()
-        }
-
+        // Never auto-prompt for Accessibility here. The system dialog is
+        // modal and easy to miss; firing it on every launch is the nag loop.
+        // The Desktop HUD permission card and Settings offer an explicit
+        // Grant button instead. Without the grant the strip degrades to an
+        // empty column set until the user grants access.
         updateViewportBounds()
         interceptor.start()
         FullScreenMonitor.shared.start()
@@ -178,9 +179,6 @@ public final class StripWindowManager: ObservableObject {
         }
 
         if config.isEnabled {
-            if !StripWindowRegistry.hasAccessibilityPermission() {
-                StripWindowRegistry.promptAccessibilityPermission()
-            }
             start()
         } else {
             stop()

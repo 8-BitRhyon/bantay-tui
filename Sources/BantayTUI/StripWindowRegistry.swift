@@ -26,7 +26,9 @@ public final class StripWindowRegistry {
     }
 
     /// Requests accessibility permission prompt if not already granted.
-    /// Only prompts once per process.
+    /// Only prompts once per process, and only from explicit user action
+    /// (Grant buttons). Automatic calls on launch or toggle are removed:
+    /// they turned every restart into a permission nag.
     public static func promptAccessibilityPermission() {
         guard !didPromptForAccessibility else { return }
         didPromptForAccessibility = true

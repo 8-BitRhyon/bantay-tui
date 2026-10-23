@@ -225,7 +225,16 @@ echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui (identi
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
 else
-  codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+  # Unlock the dedicated dev-signing keychain non-interactively so codesign
+  # never blocks on a GUI authorization dialog.
+  DEV_KEYCHAIN="${BANTAY_DEV_KEYCHAIN:-$HOME/.config/bantay/signing.keychain-db}"
+  DEV_PW_FILE="$HOME/.config/bantay/.signing-keychain-pass"
+  if [[ -f "$DEV_KEYCHAIN" && -f "$DEV_PW_FILE" ]]; then
+    security unlock-keychain -p "$(cat "$DEV_PW_FILE")" "$DEV_KEYCHAIN" >/dev/null 2>&1 || true
+    codesign --force --keychain "$DEV_KEYCHAIN" --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+  else
+    codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+  fi
 fi
 
 # Ensure TCC uses the designated identifier requirement.
