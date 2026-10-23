@@ -39,8 +39,13 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 
 ### 1. Control Plane & User Interface
 - `DynamicIslandApp.swift`: Main application entry point running as an accessory application (`LSUIElement`). Manages the top-level `NSPanel`, menu bar tray item, global hotkey registration (`⌥Space`), and screen configuration observers.
-- `NotchStatusView.swift`: Root view for the expanded notch control plane. Hosts the counts header bar, roster scroll view, inline approval controls, and tabbed utilities (Shelf, Tasks, Notes, Media).
-- `NotchRosterView.swift` and `AgentRowView.swift`: Render active and completed agent processes. Show status badges, elapsed timers, activity lines, and inline action buttons (Focus, Stop, Peek, Browser View).
+- `NotchStatusView.swift`: Root view for the expanded notch control plane. Hosts the counts header bar, roster scroll view, and core tabs (Inbox, Tasks, History) with utility pills (Shelf, Notes, Media).
+- `ApprovalCardView.swift`: Unified approval card for blocked agents. Shows the exact request, risk badge, queue position, and Allow Once, Review, and Deny actions.
+- `AgentPresentation.swift`: Pure presentation logic. Humanizes raw tool text, classifies risk, and groups subagents under their project workspace.
+- `NotchRosterView.swift` and `AgentRowView.swift`: Render the inbox. Approval cards lead, working groups fold subagents, and finished agents use compact rows. Clicking a row focuses its window.
+- `DesktopHUDController.swift` and `DesktopHUDView.swift`: Bottom-center window-only HUD. Shows column cards, Chain, Overview, navigation, and a Layout menu. Auto-hides unless pinned and never appears in full screen.
+- `QuotaMonitor.swift`: Cached background quota polling. Keeps subprocess and disk reads out of view rendering.
+- `SettingsRoute.swift`: Deep-link destinations for the single shared Settings modal.
 - `PeekPanel.swift`: Lightweight floating drawer anchored beside the notch. Displays live streaming terminal output, git diff statistics, and quick action controls (`^C Abort`, `Approve`, `Deny`).
 - `RichSessionViewer.swift`: Generates offline, interactive turn-card session views and launches them in default browsers (Chrome, Dia, Safari).
 - `SettingsView.swift`: Configuration view covering idle styles, dock sides, quota budgets, push notifications, and keybindings.
@@ -51,14 +56,14 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 - `StripStatusProvider.swift`: Sendable snapshot bridge between the AppKit strip manager and the control gateway. Keeps the pure logic harness free of UI-only imports.
 - `FullScreenMonitor.swift`: Polls the frontmost app and publishes `isFullScreen`. Uses the Accessibility `AXFullScreen` attribute first. Falls back to window bounds for apps that do not expose the attribute.
 - `StripGestureInterceptor.swift`: Intercepts global strip hotkeys and two-finger trackpad gestures. Column and window navigation use `⌃⌥` chords. Scroll gestures stay disabled in full screen.
-- `StripOverlayRenderer.swift`: Renders floating ambient status halos around windows corresponding to agent state (amber for pending approval, green for active work). Halo and chevron panels hide independently. All overlay panels hide in full screen.
+- `StripOverlayRenderer.swift`: Renders floating status halos around windows. Amber is reserved for approvals. Cyan marks working and focused windows. Only approvals pulse. Halo and chevron panels hide independently. All overlay panels hide in full screen.
 - `StripViewportAnimator.swift`: Numerical solver for damped harmonic springs with asymptotic resistance outside canvas bounds.
 
 #### Full-Screen Suppression
 
 `FullScreenMonitor` reports the full-screen state of the frontmost app. When the state is true, the strip manager takes these actions:
 
-1. Hide status halos, navigation chevrons, and the HUD minimap.
+1. Hide status halos, navigation chevrons, and the Desktop HUD.
 2. Stop the viewport animator.
 3. Skip `syncWindows` and frame application.
 4. Resume layout when the state becomes false.
@@ -100,7 +105,7 @@ Approval prompts support three variance types:
 - **Numbered Choices**: Sends the selected index (`1` through `9` followed by Return).
 - **Multi-Select Prompts**: Sends selected indices as one space-separated line (`1 3` followed by Return).
 
-Every approval surface routes through `AgentEventManager`: the notch popup, roster rows, Peek drawer, Notification Center actions, and menu-bar actions. The manager writes OpenCode decisions and sends multiplexer actions. It sends standalone keystrokes through `StandaloneAgentDispatcher`.
+Every approval surface routes through `AgentEventManager`: the notch popup, inbox approval cards, Peek drawer, Notification Center actions, and menu-bar actions. The manager writes OpenCode decisions and sends multiplexer actions. It sends standalone keystrokes through `StandaloneAgentDispatcher`.
 
 Standalone agents have no multiplexer pane id. `IslandMetrics.actionablePaneId` derives a synthetic `standalone:<source>` id. This id keeps the popup, Notification Center, and menu bar in agreement and resolves the agent cwd for dispatch.
 

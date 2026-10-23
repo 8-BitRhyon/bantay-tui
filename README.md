@@ -12,10 +12,10 @@ Bantay supports agents running in Herdr, tmux, Zellij, standard terminals, and d
 ### 1. The Notch Island (HUD)
 - **Idle Status Strip**: Shows agent chips next to the notch with color status dots. The strip clamps to screen bounds to prevent menu bar overlap.
 - **Expanded Control Plane**: Press `⌥Space` or hover over the notch to open the main control panel:
-  - **Inline Approvals**: Answer yes/no prompts, numbered choices, or multi-select lists directly in the roster row.
-  - **State-Grouped Roster**: Organizes agents by state: `Blocked`, `Working`, `Completed`, `Failed`, and `Idle`.
-  - **Peek Drawer**: Click the eye icon to view live output, git diff summaries, and quick controls (`^C Abort`, `Approve`, `Deny`).
-  - **Session Viewer**: Click the compass icon to open a structured session report in your web browser.
+  - **Approval Cards**: Blocked agents render as cards. Each card shows the exact request, risk badge, queue position, and actions.
+  - **State-Grouped Roster**: Organizes agents into `Needs you`, `Working`, and `Idle`. Subagents fold under their project with an expander.
+  - **Peek Drawer**: Click Review to view live output and git diff summaries. Reply from the row menu or press `R`.
+  - **Session Viewer**: Open a structured session report in your web browser from the row menu.
   - **File Shelf**: Drag files over the notch to save them to a persistent shelf with QuickLook previews.
   - **Task Manager**: Add tasks with natural language input. Tasks synchronize with Apple Reminders.
 
@@ -27,7 +27,8 @@ Bantay includes a horizontal window tiling engine for macOS:
 - **Column Reordering**: Move columns using gestures or the CLI (`bantay strip reorder --from <idx> --to <idx>`).
 - **Auto-Chaining**: Scans every open window and organizes the IDE, browser, and terminal into a 50/30/20 layout. Widths always sum to 100%. A project slug makes each stage prefer matching windows. Other apps go to a trailing `Other` column instead of being mislabeled as tests.
 - **Status Halos**: Displays ambient colored borders on windows to show live agent status.
-- **Full-Screen Aware**: Strip halos, navigation chevrons, HUD controls, and window tiling pause when the frontmost app is in full screen. The strip restores when you leave full screen.
+- **Desktop HUD**: Press `⌃⌥Space` to open a bottom-center window map. It shows column cards, Chain, Overview, navigation, and a Layout menu. It auto-hides and never appears in full screen.
+- **Full-Screen Aware**: Strip halos, navigation chevrons, Desktop HUD, and window tiling pause when the frontmost app is in full screen. The strip restores when you leave full screen.
 - **Keyboard Navigation**: Use `⌃⌥←` and `⌃⌥→` to move between columns. Use `⌃⌥↑` and `⌃⌥↓` to cycle windows in the active column. Use `⌃⌥Home` and `⌃⌥End` to jump to the first or last column. Click the active radar card to cycle stacked windows.
 
 ### 3. Agent and Quota Telemetry
@@ -41,19 +42,22 @@ Bantay includes a horizontal window tiling engine for macOS:
 |---|---|
 | Open or close Notch Island | Press `⌥Space` |
 | Approve or deny in HUD | Press `Y` or `N` |
+| Reply to the top agent | Press `R` |
 | Select numbered choice | Press `1` through `9` |
-| Open Peek drawer | Click the eye icon |
-| Open session in browser | Click the compass icon |
-| Focus agent application | Click the arrow icon |
-| Stop or abort agent (`^C`) | Click the stop icon |
-| Write prompt to agent | Click the agent row |
+| Review live output | Click Review on the approval card or row menu |
+| Open session in browser | Use the row More menu |
+| Focus agent application | Click the agent row |
+| Stop or abort agent (`^C`) | Use the row More menu |
+| Toggle Desktop HUD | Press `⌃⌥Space` |
 | Add file to shelf | Drag file over the notch |
 | Toggle Infinite Strip | Run `bantay strip toggle` |
 | Move between columns | Press `⌃⌥←` or `⌃⌥→` |
 | Cycle windows in the active column | Press `⌃⌥↑` or `⌃⌥↓` |
 | Jump to the first or last column | Press `⌃⌥Home` or `⌃⌥End` |
-| Chain windows | Press `⌃⌥M` or click `Chain` in the strip HUD |
+| Chain windows | Press `⌃⌥M` or click `Chain` in the Desktop HUD |
 | Toggle Overview Mode | Run `bantay strip overview` |
+| Toggle Desktop HUD | Run `bantay strip hud` |
+| Open Settings at a section | Run `bantay settings [desktop|approvals|notch]` |
 | Jump to pending approval | Run `bantay strip approval` |
 
 ## CLI Reference
@@ -70,10 +74,12 @@ bantay strip width [--mode cycle|expand|shrink] # Change the column width preset
 bantay strip approval                         # Focus the window waiting for approval
 bantay strip reorder --from 0 --to 1          # Move column 0 to position 1
 bantay strip autochain [--slug <project>]     # Chain all open windows for the project
+bantay strip hud                              # Toggle the Desktop HUD
 bantay strip status                           # Output live columns, windows, and full-screen state as JSON
 
 # System Commands
 bantay settings                               # Open the Settings window
+bantay settings [route]                       # Open Settings at a section (desktop, approvals, notch)
 bantay ping                                   # Check daemon status
 ```
 

@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- **Desktop Strip HUD** (`DesktopHUDController.swift`, `DesktopHUDView.swift`): Bottom-center window-only surface with column cards, Chain, Overview, navigation, and a Layout menu. Opens with `⌃⌥Space`, the menu bar, or `bantay strip hud`. Auto-hides unless pinned. Never appears in full screen. The notch no longer renders window controls.
+- **Unified Approval Cards** (`ApprovalCardView.swift`): Blocked agents render as cards. Each card shows the exact request, risk badge, and queue position. Actions are Allow Once, Review, and Deny. Supports yes-no, numbered choices, and multi-select prompts.
+- **Humanized Agent Rows** (`AgentPresentation.swift`, `AgentRowView.swift`): Raw tool text maps to plain status lines. Risk tiers flag destructive commands. Subagents fold under their project. Clicking a row focuses its window. Reply uses `R` or the row menu.
+- **Settings Deep Links** (`SettingsRoute.swift`): One shared modal with route destinations. Notch gear opens Agents, Desktop gear opens Desktop. CLI accepts `bantay settings [route]`.
+- **Approval Safety and Desktop HUD Sections** (`SettingsView.swift`): New Agents policy section and Desktop HUD behavior section. Categories renamed to Notch and Desktop. All preference keys stay unchanged.
+- **Cached Quota Monitor** (`QuotaMonitor.swift`): Quota probes run on a background task every 60 seconds. View rendering performs no subprocess or disk reads.
+- **Focus and Approval Separation** (`StripOverlayRenderer.swift`, `BantayTheme.swift`): Focus uses cyan, approvals own amber. Only approvals pulse. Pulsing honors reduce motion. Overlay badges use text labels.
+
 - **Infinite Strip Window Manager** (`StripLayoutEngine.swift`, `StripWindowManager.swift`, `StripGestureInterceptor.swift`): Continuous horizontal window tiling engine. Uses damped harmonic springs, overscroll resistance, five width presets, and trackpad gestures.
 - **Bird's-Eye Zoom Overview Mode**: Toggles miniature previews of all columns to fit the entire strip on-screen without scrolling (`bantay strip overview`).
 - **Canvas Column Reordering & Auto-Chaining**: Added column reordering (`bantay strip reorder`) and agent auto-chaining (`bantay strip autochain`). Auto-chain scans every open window and classifies IDE, browser, terminal, and other apps. It honors `--slug` and normalizes widths to a 50/30/20 layout that fits the viewport. Added a `Chain` HUD action and the `⌃⌥M` hotkey.
@@ -33,6 +41,9 @@ All notable changes to this project are documented in this file. The format is b
 - **Live Strip Status** (`ControlGateway.swift`, `StripStatusProvider.swift`): `bantay strip status` now returns live columns, window titles, agent metadata, Accessibility state, and full-screen state. It replaces the static config output.
 
 ### Fixed
+
+- Fixed quota probes blocking the main thread during notch rendering. The header reads cached values.
+- Fixed the notch re-rendering on every strip scroll. It observes only the HUD controller now.
 
 - Fixed Ghostty terminal focus failing due to invalid bundle identifier.
 - Fixed Peek drawer closing immediately when clicked from the notch.
