@@ -15,6 +15,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 UI_ONLY=(
   AgentRowView.swift
+  ApprovalCardView.swift
   AwayDigestCardView.swift
   DesktopHUDController.swift
   DesktopHUDView.swift

@@ -186,8 +186,8 @@ public enum IslandMetrics: Sendable {
     public static let replyComposerHeight: CGFloat = 76
     /// Height of the dismissible while-away recap card.
     public static let awayDigestHeight: CGFloat = 64
-    /// Shelf tab bar height (Agents/Shelf switcher).
-    public static let shelfTabBarHeight: CGFloat = 22
+    /// Shelf tab bar height (Inbox/Tasks/History + utility pills).
+    public static let shelfTabBarHeight: CGFloat = 26
     /// Divider between the header/tabs and the list.
     public static let dividerHeight: CGFloat = 1
     /// "+N more waiting" overflow row height.

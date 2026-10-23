@@ -21,13 +21,20 @@ struct NotchRosterView: View {
     let onCancelComposing: () -> Void
     let onBeginComposing: (AgentSnapshot) -> Void
 
+    @State private var expandedGroups: Set<String> = []
+
+    /// Blocked agents in roster order; drives approval cards and queue steppers.
+    private var attentionAgents: [AgentSnapshot] {
+        mergedRoster.filter { $0.kind == .accessRequest || $0.kind == .waiting }
+    }
+
     var body: some View {
         ScrollView(.vertical) {
             VStack(spacing: 0) {
                 if visibleAgents.isEmpty {
                     emptyStateView
                 } else if NotchHUDConfig.shared.expandedGroupByState {
-                    groupedAgentRows
+                    inboxGroups
                 } else {
                     flatAgentRows
                 }
@@ -55,24 +62,118 @@ struct NotchRosterView: View {
         .frame(height: rosterScrollHeight)
     }
 
-    private var groupedAgentRows: some View {
-        let grouped = Dictionary(grouping: mergedRoster) { agent in
-            IslandMetrics.expandedGroupRank(agent.kind)
+    /// Inbox layout: approval cards first, then working groups with
+    /// collapsible subagents, then compact idle rows, then recent activity.
+    private var inboxGroups: some View {
+        let groups = AgentPresentation.groupRoster(mergedRoster)
+        let attention = groups.filter(\.needsAttention)
+        let working = groups.filter {
+            !$0.needsAttention
+                && ($0.lead.isWorking || $0.lead.kind == .failed
+                    || $0.subagents.contains(where: \.isWorking))
         }
+        let workingIDs = Set(working.map(\.id))
+        let idle = groups.filter { !$0.needsAttention && !workingIDs.contains($0.id) }
         return VStack(spacing: 0) {
-            ForEach(0..<5, id: \.self) { rank in
-                let rows = grouped[rank] ?? []
-                if !rows.isEmpty {
-                    sectionHeader(
-                        IslandMetrics.groupLabel(rank: rank), count: rows.count,
-                        color: rows.first?.kind.color ?? "#8a8aa8")
-                    ForEach(rows) { agent in
-                        agentRow(agent: agent)
+            if !attention.isEmpty {
+                sectionHeader(
+                    "Needs you", count: attentionAgents.count,
+                    color: AgentEventKind.accessRequest.color)
+                ForEach(attentionAgents) { agent in
+                    approvalCard(
+                        agent: agent,
+                        index: attentionAgents.firstIndex(of: agent) ?? 0)
+                }
+            }
+            if !working.isEmpty {
+                sectionHeader(
+                    "Working", count: working.reduce(0) { $0 + 1 + $1.subagents.count },
+                    color: AgentEventKind.progress.color)
+                ForEach(working) { group in
+                    workingGroupRow(group)
+                }
+            }
+            if !idle.isEmpty {
+                sectionHeader(
+                    "Idle", count: idle.reduce(0) { $0 + 1 + $1.subagents.count },
+                    color: AgentEventKind.idle.color)
+                ForEach(idle) { group in
+                    agentRow(agent: group.lead)
+                    ForEach(group.subagents) { sub in
+                        agentRow(agent: sub)
                     }
                 }
             }
             recentActivitySection
         }
+    }
+
+    private func workingGroupRow(_ group: AgentRosterGroup) -> some View {
+        VStack(spacing: 0) {
+            agentRow(agent: group.lead)
+            if !group.subagents.isEmpty {
+                subagentToggle(group)
+                if expandedGroups.contains(group.id) {
+                    ForEach(group.subagents) { sub in
+                        agentRow(agent: sub)
+                            .padding(.leading, 18)
+                            .overlay(alignment: .leading) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.12))
+                                    .frame(width: 1)
+                                    .padding(.leading, 22)
+                            }
+                    }
+                }
+            }
+        }
+    }
+
+    private func subagentToggle(_ group: AgentRosterGroup) -> some View {
+        let expanded = expandedGroups.contains(group.id)
+        return Button {
+            if expanded {
+                expandedGroups.remove(group.id)
+            } else {
+                expandedGroups.insert(group.id)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.45))
+                Text(
+                    expanded
+                        ? "Hide subagents"
+                        : "+\(group.subagents.count) subagent\(group.subagents.count == 1 ? "" : "s")"
+                )
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.45))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 34)
+            .frame(height: 22)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(expanded ? "Collapse subagents" : "Expand subagents")
+        .accessibilityLabel(
+            expanded
+                ? "Collapse \(group.subagents.count) subagents"
+                : "Expand \(group.subagents.count) subagents")
+    }
+
+    private func approvalCard(agent: AgentSnapshot, index: Int) -> some View {
+        ApprovalCardView(
+            agent: agent,
+            queueIndex: index,
+            queueTotal: attentionAgents.count,
+            queueSelections: $queueSelections,
+            onReview: {
+                PeekPanelController.shared.show(agent: agent, adapter: adapter)
+            },
+            onFocus: { onFocus(agent) }
+        )
     }
 
     private var flatAgentRows: some View {
@@ -82,11 +183,17 @@ struct NotchRosterView: View {
                     if index > 0 {
                         Rectangle().fill(.white.opacity(0.04)).frame(height: 1)
                     }
-                    agentRow(agent: agent)
-                        .background(
-                            focusedRow == index
-                                ? Color.accentColor.opacity(0.18) : Color.clear
-                        )
+                    if agent.kind == .accessRequest || agent.kind == .waiting {
+                        approvalCard(
+                            agent: agent,
+                            index: attentionAgents.firstIndex(of: agent) ?? 0)
+                    } else {
+                        agentRow(agent: agent)
+                            .background(
+                                focusedRow == index
+                                    ? Color.accentColor.opacity(0.18) : Color.clear
+                            )
+                    }
                 }
                 .transition(.opacity)
             }
@@ -179,7 +286,6 @@ struct NotchRosterView: View {
             composingPaneId: $composingPaneId,
             promptText: $promptText,
             promptFocused: $promptFocused,
-            queueSelections: $queueSelections,
             reduceMotion: reduceMotion,
             now: now,
             onFocus: onFocus,
@@ -190,7 +296,8 @@ struct NotchRosterView: View {
     }
 }
 
-/// Attention triage view: only agents that need input or failed.
+/// Attention triage view: approval cards for blocked agents, compact rows
+/// for failures. Anything that needs input is actionable inline.
 struct NotchAttentionView: View {
     let mergedRoster: [AgentSnapshot]
     let adapter: PlexerAdapter
@@ -206,8 +313,16 @@ struct NotchAttentionView: View {
     let onCancelComposing: () -> Void
     let onBeginComposing: (AgentSnapshot) -> Void
 
+    private var attentionAgents: [AgentSnapshot] {
+        IslandMetrics.attentionFilter(mergedRoster)
+    }
+
+    private var blockedAgents: [AgentSnapshot] {
+        attentionAgents.filter { $0.kind == .accessRequest || $0.kind == .waiting }
+    }
+
     var body: some View {
-        let rows = IslandMetrics.attentionFilter(mergedRoster)
+        let rows = attentionAgents
         return VStack(spacing: 0) {
             if rows.isEmpty {
                 Text("Nothing needs you")
@@ -217,21 +332,33 @@ struct NotchAttentionView: View {
                     .frame(height: IslandMetrics.rowHeight)
             }
             ForEach(rows) { agent in
-                AgentRowView(
-                    agent: agent,
-                    adapter: adapter,
-                    hoveredRow: $hoveredRow,
-                    composingPaneId: $composingPaneId,
-                    promptText: $promptText,
-                    promptFocused: $promptFocused,
-                    queueSelections: $queueSelections,
-                    reduceMotion: reduceMotion,
-                    now: now,
-                    onFocus: onFocus,
-                    onSubmitPrompt: onSubmitPrompt,
-                    onCancelComposing: onCancelComposing,
-                    onBeginComposing: onBeginComposing
-                )
+                if agent.kind == .accessRequest || agent.kind == .waiting {
+                    ApprovalCardView(
+                        agent: agent,
+                        queueIndex: blockedAgents.firstIndex(of: agent) ?? 0,
+                        queueTotal: blockedAgents.count,
+                        queueSelections: $queueSelections,
+                        onReview: {
+                            PeekPanelController.shared.show(agent: agent, adapter: adapter)
+                        },
+                        onFocus: { onFocus(agent) }
+                    )
+                } else {
+                    AgentRowView(
+                        agent: agent,
+                        adapter: adapter,
+                        hoveredRow: $hoveredRow,
+                        composingPaneId: $composingPaneId,
+                        promptText: $promptText,
+                        promptFocused: $promptFocused,
+                        reduceMotion: reduceMotion,
+                        now: now,
+                        onFocus: onFocus,
+                        onSubmitPrompt: onSubmitPrompt,
+                        onCancelComposing: onCancelComposing,
+                        onBeginComposing: onBeginComposing
+                    )
+                }
             }
             Spacer(minLength: 0)
         }

@@ -181,12 +181,40 @@ struct NotchStatusView: View {
             chipWidth: closedPillWidth)
     }
 
-    /// Number of section headers the grouped roster will draw (0 when
-    /// grouping is off). Fed into the height math so the panel grows to fit
-    /// its headers instead of clipping the roster against the rounded bottom.
-    private var rosterGroupCount: Int {
-        guard NotchHUDConfig.shared.expandedGroupByState else { return 0 }
-        return IslandMetrics.groupHeaderCount(kinds: visibleAgents.map(\.kind))
+    /// Structured v2 layout metrics for the inbox: approval cards, working
+    /// rows, and idle rows each carry their own height so the panel fits
+    /// its content instead of clipping against uniform-row math.
+    private var rosterMetrics: IslandMetrics.RosterLayoutMetrics {
+        let blocked = approvalQueueAgents.count
+        let working = mergedRoster.filter {
+            $0.kind != .accessRequest && $0.kind != .waiting
+                && ($0.isWorking || $0.kind == .failed)
+        }.count
+        let idle = max(mergedRoster.count - blocked - working, 0)
+        var groups = 0
+        if blocked > 0 { groups += 1 }
+        if working > 0 { groups += 1 }
+        if idle > 0 { groups += 1 }
+        return IslandMetrics.RosterLayoutMetrics(
+            approvalCardCount: blocked,
+            workingRowCount: working,
+            idleRowCount: idle,
+            groupCount: groups)
+    }
+
+    /// Panel size for the agents inbox. Falls back to the legacy two-row
+    /// minimum when the roster is empty so the empty state never clips.
+    private var agentPanelSize: CGSize {
+        let shelfVisible = NotchHUDConfig.shared.showShelfTab
+        if mergedRoster.isEmpty {
+            return IslandMetrics.expandedSize(
+                topInset: chipTopOffset, agentCount: 2, queueCount: 0,
+                shelfTabVisible: shelfVisible, overflowCount: 0, groupCount: 0,
+                footerVisible: false)
+        }
+        return IslandMetrics.expandedSize(
+            topInset: chipTopOffset, roster: rosterMetrics,
+            shelfTabVisible: shelfVisible, footerVisible: false)
     }
 
     private var islandHeight: CGFloat {
@@ -211,14 +239,7 @@ struct NotchStatusView: View {
                     overflowCount: 0, groupCount: 0, footerVisible: false
                 ).height
             } else {
-                return IslandMetrics.expandedSize(
-                    topInset: chipTopOffset, agentCount: max(mergedRoster.count, 2),
-                    queueCount: 0,
-                    shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
-                    overflowCount: 0,
-                    groupCount: rosterGroupCount,
-                    footerVisible: false
-                ).height
+                return agentPanelSize.height
             }
         }
         if hasActiveNotification {
@@ -257,13 +278,7 @@ struct NotchStatusView: View {
                 groupCount: 0,
                 footerVisible: false)
         } else {
-            return IslandMetrics.contentHeight(
-                isExpanded: isExpanded, topInset: chipTopOffset,
-                agentCount: max(mergedRoster.count, 2), queueCount: 0,
-                shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
-                overflowCount: 0,
-                groupCount: rosterGroupCount,
-                footerVisible: false)
+            return agentPanelSize.height - chipTopOffset
         }
     }
 
@@ -1561,7 +1576,7 @@ struct NotchStatusView: View {
             }
 
             if NotchHUDConfig.shared.showShelfTab {
-                NotchTabBarView(selectedTab: $selectedTab)
+                NotchTabBarView(selectedTab: $selectedTab, shelfDropGlow: shelfDropGlow)
             }
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
@@ -1635,9 +1650,8 @@ struct NotchStatusView: View {
         if visibleAgents.isEmpty {
             return max(available, 92)
         }
-        return IslandMetrics.stableRosterHeight(
-            agentCount: mergedRoster.count, availableHeight: available,
-            groupCount: rosterGroupCount)
+        let natural = IslandMetrics.rosterHeight(rosterMetrics)
+        return max(min(max(natural, IslandMetrics.workingRowHeight), max(available, 0)), 0)
     }
 
     private func cleanHUDText(_ text: String) -> String {

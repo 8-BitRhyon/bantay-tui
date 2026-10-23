@@ -17,7 +17,7 @@ struct HumanizedAgentStatus: Equatable, Sendable {
 
 /// One project group in the inbox. Subagents stay nested under their parent
 /// workspace so N identical `project branch` rows collapse into one entry.
-struct AgentRosterGroup: Equatable, Sendable {
+struct AgentRosterGroup: Equatable, Identifiable, Sendable {
     let id: String
     let project: String
     let branch: String?

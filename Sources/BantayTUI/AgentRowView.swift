@@ -2,8 +2,12 @@ import AppKit
 import SwiftUI
 
 /// Individual agent row within the expanded Notch HUD roster.
-/// Extracted from NotchStatusView to decouple the monolithic view builder
-/// and dramatically slash Swift compiler type-checking build times.
+///
+/// Two-line working rows (48pt) show project context plus a humanized activity
+/// line; finished rows collapse to a single compact line (34pt). Clicking a
+/// row focuses the agent's window; secondary actions live behind hover
+/// affordances and the context menu. Approval prompts render as
+/// `ApprovalCardView`, never as cramped row icons.
 struct AgentRowView: View {
     let agent: AgentSnapshot
     let adapter: PlexerAdapter
@@ -11,7 +15,6 @@ struct AgentRowView: View {
     @Binding var composingPaneId: String?
     @Binding var promptText: String
     @FocusState.Binding var promptFocused: Bool
-    @Binding var queueSelections: [String: Set<Int>]
     let reduceMotion: Bool
     let now: Date
     let onFocus: (AgentSnapshot) -> Void
@@ -31,10 +34,25 @@ struct AgentRowView: View {
         hoveredRow == agent.id
     }
 
+    /// Finished agents get a compact single line; active work gets two lines.
+    private var isCompact: Bool {
+        switch agent.kind {
+        case .completed, .idle, .cancelled, .clear: return true
+        case .accessRequest, .waiting, .progress, .started, .failed: return false
+        }
+    }
+
+    private var rowHeight: CGFloat {
+        isCompact ? IslandMetrics.idleRowHeight : IslandMetrics.workingRowHeight
+    }
+
+    private var status: HumanizedAgentStatus {
+        AgentPresentation.status(for: agent)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                // Pulsing status dot for working agents.
                 Circle()
                     .fill(Color(hex: agent.kind.color))
                     .frame(width: 6, height: 6)
@@ -48,20 +66,30 @@ struct AgentRowView: View {
                 if isComposing {
                     composingFieldView
                 } else {
-                    agentDetailsAndActionsView
+                    rowContentView
+                    hoverActionsView
                 }
             }
             .padding(.horizontal, 16)
-            .frame(height: IslandMetrics.rowHeight)
+            .frame(height: rowHeight)
+            .contentShape(Rectangle())
+            .onTapGesture { onFocus(agent) }
         }
         .background(isRowHovered ? Color.white.opacity(0.07) : Color.clear)
-        .contentShape(Rectangle())
         .modifier(AgentRowAccessibility(agent: agent))
         .onHover { hovering in
             hoveredRow = hovering ? agent.id : nil
         }
         .contextMenu {
             Button("Focus \(agent.source.capitalized)") { onFocus(agent) }
+            Button("Review live output") {
+                PeekPanelController.shared.show(agent: agent, adapter: adapter)
+            }
+            if agent.kind == .waiting || agent.kind == .completed
+                || agent.kind == .progress || agent.kind == .started
+            {
+                Button("Reply to agent") { onBeginComposing(agent) }
+            }
             if let title = agent.title {
                 Button("Copy Title") { copyToClipboard(title) }
             }
@@ -122,122 +150,71 @@ struct AgentRowView: View {
         }
     }
 
-    private var agentDetailsAndActionsView: some View {
-        HStack(spacing: 6) {
-            agentTitleAndSubtitleView
-
-            if agent.kind == .accessRequest || agent.kind == .waiting {
-                approvalControlsView
-            }
-
-            hoverActionButtonsView
-        }
-    }
-
-    private var agentTitleAndSubtitleView: some View {
-        HStack(spacing: 6) {
-            VStack(alignment: .leading, spacing: 1) {
-                agentTitleRow
-                agentSubtitleRow
-            }
-            Spacer(minLength: 4)
-            if let title = agent.title, agent.kind != .idle, !agent.kind.isOngoing {
-                let clean = IslandMetrics.cleanHUDText(title)
-                if !clean.isEmpty {
-                    Text(clean)
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.white.opacity(0.6))
+    private var rowContentView: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                if let ctx = agent.projectContext {
+                    Text(ctx.project)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if let branch = ctx.branch {
+                        Text(branch)
+                            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.4))
+                            .lineLimit(1)
+                    }
+                    if let diff = ctx.diffStat {
+                        Text(diff)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundColor(Color.green.opacity(0.9))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(Color.green.opacity(0.12))
+                            )
+                            .lineLimit(1)
+                    }
+                } else {
+                    Text(agent.source)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                Spacer(minLength: 4)
+                if NotchHUDConfig.shared.showElapsedTime,
+                    let startedAt = agent.startedAt,
+                    agent.kind.isOngoing
+                {
+                    Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+            }
+            if !isCompact {
+                Text(status.headline)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(
+                        agent.kind == .failed
+                            ? Color(hex: AgentEventKind.failed.color)
+                            : .white.opacity(0.75)
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { onBeginComposing(agent) }
         .frame(maxWidth: .infinity, alignment: .leading)
         .layoutPriority(0)
     }
 
-    private var agentTitleRow: some View {
-        HStack(spacing: 5) {
-            if let ctx = agent.projectContext {
-                Text(ctx.project)
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if let branch = ctx.branch {
-                    Text(branch)
-                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.4))
-                        .lineLimit(1)
-                }
-                if let diff = ctx.diffStat {
-                    Text(diff)
-                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                        .monospacedDigit()
-                        .foregroundColor(Color.green.opacity(0.9))
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 0.5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(Color.green.opacity(0.12))
-                        )
-                        .lineLimit(1)
-                }
-            } else {
-                Text(agent.source)
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
-    }
-
-    private var agentSubtitleRow: some View {
-        HStack(spacing: 5) {
-            if agent.kind == .failed, let reason = agent.message {
-                Text(IslandMetrics.cleanHUDText(reason))
-                    .font(.system(size: 8.5, weight: .medium))
-                    .foregroundColor(Color(hex: AgentEventKind.failed.color))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            } else if let live = agent.title ?? agent.message,
-                agent.kind.isOngoing,
-                !IslandMetrics.cleanHUDText(live).isEmpty
-            {
-                Text(IslandMetrics.cleanHUDText(live))
-                    .font(.system(size: 8.5, weight: .medium))
-                    .foregroundColor(.white.opacity(0.75))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            } else {
-                Text(agent.kind.label)
-                    .font(.system(size: 8.5, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
-            if NotchHUDConfig.shared.showElapsedTime,
-                let startedAt = agent.startedAt,
-                agent.kind.isOngoing
-            {
-                Text(IslandMetrics.elapsedLabel(since: startedAt, now: now))
-                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var approvalControlsView: some View {
-        inlineApprovalControls(agent: agent)
-            .layoutPriority(1)
-    }
-
-    private var hoverActionButtonsView: some View {
-        Group {
-            let rowHovered = isRowHovered
+    /// Hover affordances only: an explicit Open button plus an overflow menu.
+    /// Stop, browser view, mute, and diagnostics moved out of the row.
+    private var hoverActionsView: some View {
+        HStack(spacing: 2) {
             TactileRowButton(
                 systemName: "arrow.up.right",
                 helpText: "Focus \(agent.source)"
@@ -245,156 +222,57 @@ struct AgentRowView: View {
                 onFocus(agent)
             }
             .layoutPriority(1)
-            .opacity(rowHovered ? 1 : 0)
+            .opacity(isRowHovered ? 1 : 0)
             .animation(
-                rowHovered ? .easeOut(duration: 0.12) : .easeOut(duration: 0.06), value: rowHovered)
+                isRowHovered ? .easeOut(duration: 0.12) : .easeOut(duration: 0.06),
+                value: isRowHovered)
 
-            TactileRowButton(
-                systemName: "stop.fill",
-                color: .red,
-                helpText: "Stop \(agent.source)"
-            ) {
-                if let paneId = IslandMetrics.actionablePaneId(
-                    paneId: agent.paneId, source: agent.source)
+            Menu {
+                Button("Review live output + git diff") {
+                    PeekPanelController.shared.show(agent: agent, adapter: adapter)
+                }
+                if agent.kind == .waiting || agent.kind == .completed
+                    || agent.kind == .progress || agent.kind == .started
                 {
-                    AgentEventManager.shared.stop(paneId: paneId)
+                    Button("Reply to agent") { onBeginComposing(agent) }
                 }
+                Divider()
+                Button("Stop \(agent.source)", role: .destructive) {
+                    if let paneId = IslandMetrics.actionablePaneId(
+                        paneId: agent.paneId, source: agent.source)
+                    {
+                        AgentEventManager.shared.stop(paneId: paneId)
+                    }
+                }
+                Button("Open session in browser") {
+                    let slug = agent.projectContext?.project ?? agent.source
+                    let clean = StandaloneAgentDispatcher.cleanAgentName(
+                        from: agent.paneId ?? agent.source)
+                    RichSessionViewer.openInBrowser(
+                        agentName: clean.isEmpty ? agent.source : clean,
+                        projectSlug: slug,
+                        cwd: agent.cwd,
+                        isWorking: agent.kind == .progress || agent.kind == .started,
+                        sessionPath: agent.sessionPath
+                    )
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
+            .menuStyle(.borderlessButton)
             .layoutPriority(1)
-            .opacity(rowHovered ? 1 : 0)
+            .opacity(isRowHovered ? 1 : 0)
             .animation(
-                rowHovered ? .easeOut(duration: 0.12) : .easeOut(duration: 0.06), value: rowHovered)
-
-            TactileRowButton(
-                systemName: "eye",
-                helpText: "View live output + git diff"
-            ) {
-                PeekPanelController.shared.show(agent: agent, adapter: adapter)
-            }
-            .layoutPriority(1)
-            .opacity(rowHovered ? 1 : 0)
-            .animation(
-                rowHovered ? .easeOut(duration: 0.12) : .easeOut(duration: 0.06), value: rowHovered)
-
-            TactileRowButton(
-                systemName: "safari",
-                helpText: "Open session in browser (Chrome / Dia)"
-            ) {
-                let slug = agent.projectContext?.project ?? agent.source
-                let clean = StandaloneAgentDispatcher.cleanAgentName(
-                    from: agent.paneId ?? agent.source)
-                RichSessionViewer.openInBrowser(
-                    agentName: clean.isEmpty ? agent.source : clean,
-                    projectSlug: slug,
-                    cwd: agent.cwd,
-                    isWorking: agent.kind == .progress || agent.kind == .started,
-                    sessionPath: agent.sessionPath
-                )
-            }
-            .layoutPriority(1)
-            .opacity(rowHovered ? 1 : 0)
-            .animation(
-                rowHovered ? .easeOut(duration: 0.12) : .easeOut(duration: 0.06), value: rowHovered)
+                isRowHovered ? .easeOut(duration: 0.12) : .easeOut(duration: 0.06),
+                value: isRowHovered
+            )
+            .help("More actions")
+            .accessibilityLabel("More actions for \(agent.source)")
         }
-    }
-
-    @ViewBuilder
-    private func inlineApprovalControls(agent: AgentSnapshot) -> some View {
-        let effectivePaneId =
-            IslandMetrics.actionablePaneId(paneId: agent.paneId, source: agent.source)
-            ?? "standalone:\(agent.source)"
-        let controls = agent.approval
-        let resolving = AgentEventManager.shared.isResolving(paneId: effectivePaneId)
-
-        if controls.isYesNo {
-            approvalActionButton(
-                systemName: "checkmark.circle.fill", color: .green, help: "Approve",
-                disabled: resolving
-            ) {
-                AgentEventManager.shared.approve(paneId: effectivePaneId)
-            }
-            approvalActionButton(
-                systemName: "xmark.circle.fill", color: .red, help: "Deny",
-                disabled: resolving
-            ) {
-                AgentEventManager.shared.deny(paneId: effectivePaneId)
-            }
-        } else if controls.isMulti {
-            let labels = controls.displayedLabels()
-            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                let optionText =
-                    controls.choices.indices.contains(index)
-                    ? controls.choices[index] : "Option \(label)"
-                approvalActionButton(
-                    label: Text(label),
-                    color: queueSelections[effectivePaneId]?.contains(
-                        IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    ) == true ? .green : .white.opacity(0.6),
-                    help: optionText,
-                    disabled: false,
-                    accessibilityLabel: optionText
-                ) {
-                    queueSelections[effectivePaneId] = IslandMetrics.ApprovalControls.toggling(
-                        queueSelections[effectivePaneId] ?? [], index: index)
-                }
-            }
-            let overflow = controls.overflowCount()
-            if overflow > 0 {
-                Text("+\(overflow)")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.45))
-            }
-            approvalActionButton(
-                systemName: "checkmark.circle.fill", color: .green, help: "Submit",
-                disabled: resolving
-            ) {
-                let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-                    queueSelections[effectivePaneId] ?? [])
-                AgentEventManager.shared.approveMulti(
-                    paneId: effectivePaneId, selections: numbers)
-                queueSelections.removeValue(forKey: effectivePaneId)
-            }
-        } else {
-            let labels = controls.displayedLabels()
-            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                let optionText =
-                    controls.choices.indices.contains(index)
-                    ? controls.choices[index] : "Option \(label)"
-                approvalActionButton(
-                    label: Text(label),
-                    color: .white,
-                    help: optionText,
-                    disabled: resolving,
-                    accessibilityLabel: optionText
-                ) {
-                    let choiceNum = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    AgentEventManager.shared.approveChoice(
-                        paneId: effectivePaneId, choice: choiceNum)
-                }
-            }
-            let overflow = controls.overflowCount()
-            if overflow > 0 {
-                Text("+\(overflow)")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.45))
-            }
-            if controls.optionLabels.isEmpty {
-                approvalActionButton(
-                    systemName: "checkmark.circle.fill", color: .green, help: "Approve",
-                    disabled: resolving
-                ) {
-                    AgentEventManager.shared.approve(paneId: effectivePaneId)
-                }
-            }
-        }
-
-        Button(action: { onFocus(agent) }) {
-            Image(systemName: "terminal.fill").font(.system(size: 9))
-                .foregroundColor(.white.opacity(0.7))
-        }
-        .buttonStyle(.plain)
-        .help("Focus \(agent.source) window")
-        .accessibilityLabel("Focus \(agent.source)")
     }
 
     private func openWorkspaceInFinder(_ workspaceId: String) {
