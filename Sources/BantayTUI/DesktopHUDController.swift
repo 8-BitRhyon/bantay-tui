@@ -12,7 +12,6 @@ final class DesktopHUDController: ObservableObject {
     static let panelWidth: CGFloat = 720
     static let panelHeight: CGFloat = 168
     static let bottomMargin: CGFloat = 24
-    static let autoHideDelay: TimeInterval = 1.8
 
     @Published private(set) var isVisible = false
     @Published private(set) var windowCount = 0
@@ -83,8 +82,9 @@ final class DesktopHUDController: ObservableObject {
         hideTask?.cancel()
         hideTask = nil
         guard !hovering, !isPinned, isVisible else { return }
+        let delay = NotchHUDConfig.shared.desktopHUDAutoHideSeconds
         hideTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.autoHideDelay))
+            try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else { return }
             if !self.isPinned { self.hide() }
         }

@@ -5096,11 +5096,19 @@ struct LogicCheckMain {
         check(
             SystemHUDMonitor.shared.activeHUD?.type.iconName == "battery.100.bolt",
             "L74 system HUD icon mapped")
-        GlobalHotkeyManager.shared.registerGlobalHotkey()
-        let isProxy = ApprovalNotificationController.hasBundleProxy
+        // L74 System HUD & single global-hotkey monitor. The manager no
+        // longer installs its own Option+Space monitor (that double-toggled
+        // the island); it forwards to AppDelegate, which owns the only one.
+        // Headless harness asserts the persisted sub-flag defaults instead.
         check(
-            GlobalHotkeyManager.shared.isRegistered == isProxy,
-            "L74 global hotkey manager registered")
+            NotchHUDConfig.shared.globalHotkeyApproveEnabled,
+            "L74 approve hotkey defaults on")
+        check(
+            NotchHUDConfig.shared.globalHotkeyDenyEnabled,
+            "L74 deny hotkey defaults on")
+        check(
+            !NotchHUDConfig.shared.globalHotkeySnoozeEnabled,
+            "L74 snooze hotkey defaults off")
 
         // L75 RemindersProvider macOS 14+ Availability & Access Test
         let auth = RemindersProvider.shared.isAuthorized

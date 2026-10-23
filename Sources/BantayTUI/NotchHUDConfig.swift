@@ -117,6 +117,22 @@ final class NotchHUDConfig {
             defaults.set(openCodeGoAllowanceUSD, forKey: "openCodeGoAllowanceUSD")
         }
     }
+    /// Show the notch quota badge only when remaining quota drops below this
+    /// percent. 100 keeps the badge always visible while a live quota exists.
+    var quotaBadgeThresholdPercent: Double = 100 {
+        didSet {
+            quotaBadgeThresholdPercent = min(max(quotaBadgeThresholdPercent, 5), 100)
+            defaults.set(quotaBadgeThresholdPercent, forKey: "quotaBadgeThresholdPercent")
+        }
+    }
+    /// Desktop HUD auto-hide delay in seconds after the pointer leaves.
+    /// Ignored while pinned.
+    var desktopHUDAutoHideSeconds: Double = 1.8 {
+        didSet {
+            desktopHUDAutoHideSeconds = min(max(desktopHUDAutoHideSeconds, 0.5), 10)
+            defaults.set(desktopHUDAutoHideSeconds, forKey: "desktopHUDAutoHideSeconds")
+        }
+    }
     /// High burn velocity threshold in tokens per minute (default 2500.0).
     var highBurnThresholdTPM: Double = 2500.0 {
         didSet {
@@ -571,6 +587,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "openCodeGoAllowanceUSD") as? NSNumber {
             openCodeGoAllowanceUSD = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "quotaBadgeThresholdPercent") as? NSNumber {
+            quotaBadgeThresholdPercent = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "desktopHUDAutoHideSeconds") as? NSNumber {
+            desktopHUDAutoHideSeconds = v.doubleValue
         }
         if let v = defaults.object(forKey: "highBurnThresholdTPM") as? NSNumber {
             highBurnThresholdTPM = v.doubleValue

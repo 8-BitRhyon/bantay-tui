@@ -62,6 +62,9 @@ struct SettingsView: View {
     @State private var idleMaxChips = NotchHUDConfig.shared.clampedIdleMaxChips
     @State private var expandedGroupByState = NotchHUDConfig.shared.expandedGroupByState
     @State private var hotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
+    @State private var hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
+    @State private var hotkeyDeny = NotchHUDConfig.shared.globalHotkeyDenyEnabled
+    @State private var hotkeySnooze = NotchHUDConfig.shared.globalHotkeySnoozeEnabled
     @State private var keyboardShortcuts = NotchHUDConfig.shared.keyboardShortcuts
     @State private var edgeGlow = NotchHUDConfig.shared.edgeGlowEnabled
     @State private var showElapsed = NotchHUDConfig.shared.showElapsedTime
@@ -113,7 +116,8 @@ struct SettingsView: View {
     @State private var showNotesTab = NotchHUDConfig.shared.showNotesTab
     @State private var hoverSensitivity = NotchHUDConfig.shared.hoverSensitivityPreset
     @State private var enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
-    @State private var globalHotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
+    @State private var quotaBadgeThreshold = NotchHUDConfig.shared.quotaBadgeThresholdPercent
+    @State private var desktopHUDAutoHide = NotchHUDConfig.shared.desktopHUDAutoHideSeconds
     @State private var soundThemePreset = NotchHUDConfig.shared.soundThemePreset
     @State private var approvalSoundName = NotchHUDConfig.shared.approvalSoundName
     @State private var completionSoundName = NotchHUDConfig.shared.completionSoundName
@@ -427,7 +431,7 @@ struct SettingsView: View {
                 "Remote ingest (SSH bridge)",
             ]
         case .advanced:
-            ["Capture", "Remote ingest (SSH bridge)", "Quick actions"]
+            ["Capture"]
         }
     }
     /// All settings sections, gated by the selected sidebar category and
@@ -693,7 +697,7 @@ struct SettingsView: View {
 
             if selectedCategory == .notch && matchesSearch("Shelf") {
                 Section("Shelf") {
-                    Toggle("Shelf tab in expanded view", isOn: $showShelf)
+                    Toggle("Shelf utilities in expanded view", isOn: $showShelf)
                         .help("Clipboard history + dropped files next to agents.")
                         .onChange(of: showShelf) { newValue in
                             NotchHUDConfig.shared.showShelfTab = newValue
@@ -832,7 +836,8 @@ struct SettingsView: View {
                         }
                         GridRow {
                             Text("⌃⌥R").font(.system(size: 11, weight: .bold, design: .monospaced))
-                            Text("Cycle column width (25% → 100%)").foregroundColor(.secondary)
+                            Text("Cycle column width (25% → 33% → 50% → 67% → 75% → 100%)")
+                                .foregroundColor(.secondary)
                         }
                         GridRow {
                             Text("⌃⌥F").font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -886,8 +891,16 @@ struct SettingsView: View {
                         .onChange(of: desktopHUDPinned) { newValue in
                             DesktopHUDController.shared.isPinned = newValue
                         }
+                    Stepper(
+                        "Auto-hide after \(String(format: "%.1f", desktopHUDAutoHide)) s",
+                        value: $desktopHUDAutoHide, in: 0.5...10, step: 0.5
+                    )
+                    .help("Delay before the HUD hides after the pointer leaves, unless pinned.")
+                    .onChange(of: desktopHUDAutoHide) { newValue in
+                        NotchHUDConfig.shared.desktopHUDAutoHideSeconds = newValue
+                    }
                     Text(
-                        "Bottom-center window map. Auto-hides 1.8s after the pointer leaves unless pinned. Never appears in full screen."
+                        "Bottom-center window map. Never appears in full screen."
                     )
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -1431,12 +1444,16 @@ struct SettingsView: View {
                         .onChange(of: enableQuotaAxiGauge) { newValue in
                             NotchHUDConfig.shared.enableQuotaAxiGauge = newValue
                         }
-                    Toggle("⌨️ Global Hotkey (⌥Space)", isOn: $globalHotkeyEnabled)
-                        .help("Press Option+Space from anywhere to toggle the Dynamic Island.")
-                        .onChange(of: globalHotkeyEnabled) { newValue in
-                            NotchHUDConfig.shared.globalHotkeyEnabled = newValue
-                            GlobalHotkeyManager.shared.registerGlobalHotkey()
-                        }
+                    Stepper(
+                        "Quota badge below \(Int(quotaBadgeThreshold))%",
+                        value: $quotaBadgeThreshold, in: 5...100, step: 5
+                    )
+                    .help(
+                        "Header quota badge appears only when remaining quota drops below this percent."
+                    )
+                    .onChange(of: quotaBadgeThreshold) { newValue in
+                        NotchHUDConfig.shared.quotaBadgeThresholdPercent = newValue
+                    }
                 }
             }
 
@@ -1449,9 +1466,27 @@ struct SettingsView: View {
                             AppDelegate.shared?.updateGlobalHotkeyMonitor()
                         }
                     Toggle("Keyboard shortcuts in roster", isOn: $keyboardShortcuts)
-                        .help("With the island focused: Y approve, N deny, 1-9 choose.")
+                        .help("With the island focused: Y approve, N deny, R reply, 1-9 choose.")
                         .onChange(of: keyboardShortcuts) { newValue in
                             NotchHUDConfig.shared.keyboardShortcuts = newValue
+                        }
+                    Toggle("Global approve hotkey (⌥Y)", isOn: $hotkeyApprove)
+                        .help("Approve the top approval from any app.")
+                        .onChange(of: hotkeyApprove) { newValue in
+                            NotchHUDConfig.shared.globalHotkeyApproveEnabled = newValue
+                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
+                        }
+                    Toggle("Global deny hotkey (⌥N)", isOn: $hotkeyDeny)
+                        .help("Deny the top approval from any app.")
+                        .onChange(of: hotkeyDeny) { newValue in
+                            NotchHUDConfig.shared.globalHotkeyDenyEnabled = newValue
+                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
+                        }
+                    Toggle("Global snooze hotkey (⌥S)", isOn: $hotkeySnooze)
+                        .help("Snooze the island for 15 minutes from any app.")
+                        .onChange(of: hotkeySnooze) { newValue in
+                            NotchHUDConfig.shared.globalHotkeySnoozeEnabled = newValue
+                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
                         }
                     Toggle("Edge glow on pending approvals", isOn: $edgeGlow)
                         .help("Pulsing amber border when agents need you.")
@@ -1506,6 +1541,12 @@ struct SettingsView: View {
         stripChevrons = stripCfg.showNavigationChevrons
         desktopHUDPinned = DesktopHUDController.shared.isPinned
         openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
+        hotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
+        hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
+        hotkeyDeny = NotchHUDConfig.shared.globalHotkeyDenyEnabled
+        hotkeySnooze = NotchHUDConfig.shared.globalHotkeySnoozeEnabled
+        quotaBadgeThreshold = NotchHUDConfig.shared.quotaBadgeThresholdPercent
+        desktopHUDAutoHide = NotchHUDConfig.shared.desktopHUDAutoHideSeconds
         hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
         DispatchQueue.main.async {
             isRefreshingConfig = false
