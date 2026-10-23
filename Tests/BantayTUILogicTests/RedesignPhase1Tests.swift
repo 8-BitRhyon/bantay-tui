@@ -71,11 +71,10 @@
                 approvalCardCount: 1, workingRowCount: 2, idleRowCount: 1,
                 groupCount: 2)
             let height = IslandMetrics.rosterHeight(metrics)
-            let expected =
-                IslandMetrics.approvalCardHeight
-                + 2 * IslandMetrics.workingRowHeight
-                + IslandMetrics.idleRowHeight
-                + 2 * IslandMetrics.sectionHeaderHeight
+            var expected = IslandMetrics.approvalCardHeight
+            expected += IslandMetrics.workingRowHeight * 2
+            expected += IslandMetrics.idleRowHeight
+            expected += IslandMetrics.sectionHeaderHeight * 2
             #expect(abs(height - expected) < 0.001)
             let size = IslandMetrics.expandedSize(topInset: 47, roster: metrics)
             #expect(size.height <= IslandMetrics.maxExpandedHeight)

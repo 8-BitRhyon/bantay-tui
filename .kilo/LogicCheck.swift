@@ -8446,7 +8446,10 @@ struct LogicCheckMain {
         let rosterMetrics = IslandMetrics.RosterLayoutMetrics(
             approvalCardCount: 1, workingRowCount: 2, idleRowCount: 1, groupCount: 2)
         let rosterHeight = IslandMetrics.rosterHeight(rosterMetrics)
-        let expectedRosterHeight: CGFloat = 136 + 2 * 48 + 34 + 2 * 18
+        var expectedRosterHeight = IslandMetrics.approvalCardHeight
+        expectedRosterHeight += IslandMetrics.workingRowHeight * 2
+        expectedRosterHeight += IslandMetrics.idleRowHeight
+        expectedRosterHeight += IslandMetrics.sectionHeaderHeight * 2
         check(
             abs(rosterHeight - expectedRosterHeight) < 0.001,
             "P1 structured roster height math (got \(rosterHeight))")
