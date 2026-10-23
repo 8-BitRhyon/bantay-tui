@@ -299,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         Self.shared = self
         FullScreenMonitor.shared.start()
         bindFullScreenMonitor()
+        QuotaMonitor.shared.startPolling()
         // Data dir + events file always exist (setup.sh parity) so the
         // events pipeline and LaunchAgent logs have a home.
         LaunchAgent.ensureDataDirectory()

@@ -8349,6 +8349,138 @@ struct LogicCheckMain {
             )
         }
 
+        // MARK: - Phase 1 redesign foundations
+
+        func snapshot(
+            id: String, source: String, kind: AgentEventKind, title: String? = nil,
+            message: String? = nil, paneId: String? = nil, workspaceId: String? = nil,
+            cwd: String? = nil
+        ) -> AgentSnapshot {
+            AgentSnapshot(
+                id: id, source: source, kind: kind, title: title, message: message,
+                paneId: paneId, workspaceId: workspaceId, cwd: cwd, variance: nil,
+                choices: nil, startedAt: nil, projectContext: nil)
+        }
+
+        let gitStatus = AgentPresentation.status(
+            for: snapshot(
+                id: "p1", source: "claude", kind: .progress,
+                title: "spawning process command=git args=[status, --short]",
+                paneId: "w1:p1", workspaceId: "w1", cwd: "/Users/test/bantay-tui"))
+        check(
+            gitStatus.headline == "Checking git status",
+            "P1 raw git status humanizes (got \(gitStatus.headline))")
+        check(gitStatus.tool == "git", "P1 git tool extracted")
+
+        let destructive = AgentPresentation.status(
+            for: snapshot(
+                id: "p2", source: "claude", kind: .accessRequest,
+                title: "Bash: rm -rf /tmp/build", paneId: "w1:p2", workspaceId: "w1"))
+        check(destructive.risk == .high, "P1 rm -rf classifies high risk")
+        check(
+            destructive.headline.lowercased().contains("deleting"),
+            "P1 destructive command humanizes (got \(destructive.headline))")
+
+        let genericApproval = AgentPresentation.status(
+            for: snapshot(
+                id: "p3", source: "codex", kind: .waiting, title: "blocked",
+                paneId: "w1:p3", workspaceId: "w1"))
+        check(
+            genericApproval.headline == "Waiting for your approval",
+            "P1 generic blocked text humanizes (got \(genericApproval.headline))")
+
+        let parent = snapshot(
+            id: "g1", source: "opencode", kind: .progress, paneId: "w2:p1",
+            workspaceId: "w2", cwd: "/Users/test/proj")
+        let childA = snapshot(
+            id: "g2", source: "opencode", kind: .progress, paneId: "w2:p2",
+            workspaceId: "w2", cwd: "/Users/test/proj")
+        let childB = snapshot(
+            id: "g3", source: "opencode", kind: .accessRequest,
+            title: "Edit Sources/App.swift", paneId: "w2:p3", workspaceId: "w2",
+            cwd: "/Users/test/proj")
+        let groups = AgentPresentation.groupRoster([parent, childA, childB])
+        check(groups.count == 1, "P1 same workspace groups into one entry")
+        check(groups.first?.subagents.count == 2, "P1 subagents nest under lead")
+        check(
+            groups.first?.lead.kind == .accessRequest,
+            "P1 approval hoists to group lead")
+        check(groups.first?.needsAttention == true, "P1 group flags attention")
+
+        check(
+            SettingsRoute.resolve(cliArgument: "desktop") == .desktop,
+            "P1 CLI desktop resolves")
+        check(
+            SettingsRoute.resolve(cliArgument: "STRIP") == .desktop,
+            "P1 CLI strip aliases desktop")
+        check(
+            SettingsRoute.resolve(cliArgument: "approvals") == .approvals,
+            "P1 CLI approvals resolves")
+        check(
+            SettingsRoute.resolve(cliArgument: "nope") == nil,
+            "P1 unknown CLI route is nil")
+        check(
+            SettingsRoute.desktop.categoryName == "Infinite Strip"
+                && SettingsRoute.desktop.sectionTitle == "Infinite Strip",
+            "P1 desktop route anchors to current settings")
+        check(
+            SettingsRoute.notch.categoryName == "Appearance",
+            "P1 notch route anchors to current settings")
+
+        let rosterMetrics = IslandMetrics.RosterLayoutMetrics(
+            approvalCardCount: 1, workingRowCount: 2, idleRowCount: 1, groupCount: 2)
+        let rosterHeight = IslandMetrics.rosterHeight(rosterMetrics)
+        check(
+            abs(
+                rosterHeight - (136 + 2 * 48 + 34 + 2 * 18)) < 0.001,
+            "P1 structured roster height math (got \(rosterHeight))")
+        let rosterSize = IslandMetrics.expandedSize(topInset: 47, roster: rosterMetrics)
+        check(
+            rosterSize.height <= IslandMetrics.maxExpandedHeight,
+            "P1 structured expanded size caps height")
+        check(
+            IslandMetrics.expandedSize(topInset: 47, roster: rosterMetrics).height
+                > IslandMetrics.expandedSize(
+                    topInset: 47,
+                    roster: IslandMetrics.RosterLayoutMetrics()).height,
+            "P1 roster content grows the panel")
+
+        var desktopFlags = NSEvent.ModifierFlags()
+        desktopFlags.insert(.control)
+        desktopFlags.insert(.option)
+        check(
+            IslandMetrics.desktopHotkeyAction(keyCode: 49, modifiers: desktopFlags)
+                == .toggleDesktopHUD,
+            "P1 ctrl-option-space toggles desktop HUD")
+        var optionOnly = NSEvent.ModifierFlags()
+        optionOnly.insert(.option)
+        check(
+            IslandMetrics.desktopHotkeyAction(keyCode: 49, modifiers: optionOnly) == nil,
+            "P1 option-space alone is not a desktop hotkey")
+
+        check(
+            QuotaMonitor.shouldRefresh(lastRefresh: nil) == true,
+            "P1 quota monitor refreshes with no baseline")
+        check(
+            QuotaMonitor.shouldRefresh(
+                lastRefresh: Date(), now: Date().addingTimeInterval(10)) == false,
+            "P1 quota monitor caches within the interval")
+        check(
+            QuotaMonitor.shouldRefresh(
+                lastRefresh: Date().addingTimeInterval(-120), now: Date()) == true,
+            "P1 quota monitor refreshes after the interval")
+        check(
+            QuotaMonitor.minRemainingPercent(quotas: []) == 100,
+            "P1 empty quotas default to 100 percent")
+        check(
+            QuotaMonitor.hasUsageData(
+                kiloDetected: false, totalTokens: 0, tokensPerMinute: 0) == false,
+            "P1 no usage signals means no usage data")
+        check(
+            QuotaMonitor.hasUsageData(
+                kiloDetected: true, totalTokens: 0, tokensPerMinute: 0) == true,
+            "P1 kilo detection counts as usage data")
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 

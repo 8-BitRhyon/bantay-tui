@@ -3,6 +3,7 @@ import SwiftUI
 /// Header bar displayed at the top of the expanded Notch HUD panel.
 struct NotchHeaderBarView: View {
     @ObservedObject var eventManager: AgentEventManager
+    @ObservedObject private var quotaMonitor = QuotaMonitor.shared
     let counts: IslandMetrics.AgentCounts
     let mascotState: MascotState
     @Binding var selectedTab: ShelfTab
@@ -14,8 +15,7 @@ struct NotchHeaderBarView: View {
     let onExpandTo: (Bool) -> Void
 
     private var hasUsageData: Bool {
-        KiloUsageAdapter.detect() || eventManager.usage.totalTokens > 0
-            || (eventManager.usageRate.tokensPerMinute ?? 0) > 0
+        quotaMonitor.hasUsageData
     }
 
     var body: some View {
@@ -177,15 +177,7 @@ struct NotchHeaderBarView: View {
     }
 
     private var quotaAxiBadge: some View {
-        let active = Array(Set(eventManager.agents.map(\.source)))
-        let quotas = QuotaAxiTracker.probeLiveQuotas(
-            activeProviders: active,
-            costUSD: eventManager.usage.costUSD,
-            budgetUSD: NotchHUDConfig.shared.dailyBudgetUSD,
-            burnRateTPM: eventManager.usageRate.tokensPerMinute ?? 0.0
-        )
-        let minQuota = quotas.min(by: { $0.remainingPercent < $1.remainingPercent })
-        let percentInt = Int(minQuota?.remainingPercent ?? 100)
+        let percentInt = quotaMonitor.minRemainingPercent
         let color: Color =
             percentInt <= 20
             ? BantayTheme.statusFailed

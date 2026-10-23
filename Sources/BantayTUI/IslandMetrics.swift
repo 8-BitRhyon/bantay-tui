@@ -174,6 +174,18 @@ public enum IslandMetrics: Sendable {
     /// Height of one approval-queue card. Reserves room for the optional live
     /// "peek" tail (captureTail) that drops in below the controls on hover.
     public static let queueCardHeight: CGFloat = 56
+    /// Height of one expanded inbox approval card: request summary plus a
+    /// full-height action row. Used by the v2 roster layout math.
+    public static let approvalCardHeight: CGFloat = 136
+    /// Height of one active/working agent row: project line plus humanized
+    /// activity line. Used by the v2 roster layout math.
+    public static let workingRowHeight: CGFloat = 48
+    /// Height of one idle/standby agent row. Used by the v2 roster layout math.
+    public static let idleRowHeight: CGFloat = 34
+    /// Height of the inline reply composer reserved while composing.
+    public static let replyComposerHeight: CGFloat = 76
+    /// Height of the dismissible while-away recap card.
+    public static let awayDigestHeight: CGFloat = 64
     /// Shelf tab bar height (Agents/Shelf switcher).
     public static let shelfTabBarHeight: CGFloat = 22
     /// Divider between the header/tabs and the list.
@@ -279,6 +291,76 @@ public enum IslandMetrics: Sendable {
 
         let h = topInset + contentH
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+    }
+
+    /// Structured v2 roster layout. Replaces flat `agentCount * rowHeight`
+    /// math so approval cards, working rows, and idle rows can each have
+    /// their own height without clipping the panel.
+    public struct RosterLayoutMetrics: Equatable, Sendable {
+        public let approvalCardCount: Int
+        public let workingRowCount: Int
+        public let idleRowCount: Int
+        public let groupCount: Int
+        public let isComposing: Bool
+        public let hasAwayDigest: Bool
+
+        public init(
+            approvalCardCount: Int = 0,
+            workingRowCount: Int = 0,
+            idleRowCount: Int = 0,
+            groupCount: Int = 0,
+            isComposing: Bool = false,
+            hasAwayDigest: Bool = false
+        ) {
+            self.approvalCardCount = approvalCardCount
+            self.workingRowCount = workingRowCount
+            self.idleRowCount = idleRowCount
+            self.groupCount = groupCount
+            self.isComposing = isComposing
+            self.hasAwayDigest = hasAwayDigest
+        }
+    }
+
+    /// Natural roster height for structured v2 rows.
+    public static func rosterHeight(_ roster: RosterLayoutMetrics) -> CGFloat {
+        CGFloat(max(roster.approvalCardCount, 0)) * approvalCardHeight
+            + CGFloat(max(roster.workingRowCount, 0)) * workingRowHeight
+            + CGFloat(max(roster.idleRowCount, 0)) * idleRowHeight
+            + CGFloat(max(roster.groupCount, 0)) * sectionHeaderHeight
+            + (roster.isComposing ? replyComposerHeight : 0)
+            + (roster.hasAwayDigest ? awayDigestHeight : 0)
+    }
+
+    /// Expanded panel height from structured v2 roster rows. The legacy
+    /// flat-count overload below stays untouched for current callers.
+    public static func expandedSize(
+        topInset: CGFloat, roster: RosterLayoutMetrics,
+        shelfTabVisible: Bool = false, overflowCount: Int = 0,
+        headerHeight: CGFloat = headerHeight, footerVisible: Bool = true
+    ) -> CGSize {
+        let chrome =
+            (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
+            + CGFloat(max(overflowCount, 0)) * overflowRowHeight
+        let contentH =
+            headerHeight + chrome + rosterHeight(roster)
+            + (footerVisible ? footerHeight : 0) + contentSpacing
+        let h = topInset + contentH
+        return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+    }
+
+    /// Desktop strip hotkeys use Control + Option only. Space toggles the
+    /// Desktop HUD; the existing strip letter shortcuts stay untouched.
+    public enum DesktopHotkeyAction: Sendable, Equatable {
+        case toggleDesktopHUD
+    }
+
+    public static func desktopHotkeyAction(
+        keyCode: UInt16, modifiers: NSEvent.ModifierFlags
+    ) -> DesktopHotkeyAction? {
+        let flags = modifiers.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.control), flags.contains(.option) else { return nil }
+        guard !flags.contains(.shift), !flags.contains(.command) else { return nil }
+        return keyCode == 49 ? .toggleDesktopHUD : nil
     }
 
     // MARK: - Multi-monitor placement
