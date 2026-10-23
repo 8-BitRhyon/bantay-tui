@@ -13,6 +13,11 @@ public final class StripWindowRegistry {
 
     private var axElements: [String: AXUIElement] = [:]
 
+    /// The system prompt is modal and easy to miss. Asking at most once per
+    /// process keeps a stale TCC grant from producing a prompt loop on every
+    /// strip start or toggle.
+    private static var didPromptForAccessibility = false
+
     private init() {}
 
     /// Checks whether Bantay has Accessibility permissions granted.
@@ -21,7 +26,10 @@ public final class StripWindowRegistry {
     }
 
     /// Requests accessibility permission prompt if not already granted.
+    /// Only prompts once per process.
     public static func promptAccessibilityPermission() {
+        guard !didPromptForAccessibility else { return }
+        didPromptForAccessibility = true
         let options = ["AXTrustedCheckOptionPrompt" as CFString: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
     }
@@ -193,6 +201,44 @@ public final class StripWindowRegistry {
         return results
     }
 
+    /// Returns the CGWindowID of the frontmost app's focused window as the
+    /// same string key used by `scanWindows`. Focus tracking needs the exact
+    /// window, not the PID: one app can own several strip windows.
+    public func frontmostWindowID() -> String? {
+        guard Self.hasAccessibilityPermission(),
+            let app = NSWorkspace.shared.frontmostApplication
+        else { return nil }
+
+        let appRef = AXUIElementCreateApplication(app.processIdentifier)
+        var focusRef: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                appRef, kAXFocusedWindowAttribute as CFString, &focusRef) == .success,
+            let focusRef,
+            CFGetTypeID(focusRef) == AXUIElementGetTypeID()
+        else { return nil }
+
+        var windowID: CGWindowID = 0
+        guard _AXUIElementGetWindow(focusRef as! AXUIElement, &windowID) == .success,
+            windowID != 0
+        else { return nil }
+        return "\(windowID)"
+    }
+
+    /// True when the tracked window reports a full-screen state. Used as a
+    /// safety net so a stale monitor tick can never resize a full-screen app.
+    public func isWindowFullScreen(windowID: String) -> Bool {
+        guard let windowRef = axElements[windowID] else { return false }
+        var value: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                windowRef, "AXFullScreen" as CFString, &value) == .success,
+            let value,
+            CFGetTypeID(value) == CFBooleanGetTypeID()
+        else { return false }
+        return value as? Bool ?? false
+    }
+
     /// Positions and resizes a native macOS window.
     public func applyFrame(windowID: String, frame: StripRect) {
         guard let windowRef = axElements[windowID] else { return }
@@ -213,19 +259,15 @@ public final class StripWindowRegistry {
         }
     }
 
-    /// Focuses and raises a native macOS window.
-    public func focusWindow(windowID: String) {
+    /// Focuses and raises a native macOS window. The PID is passed explicitly
+    /// because AX window identifiers are CGWindowIDs, not PID-prefixed keys.
+    public func focusWindow(windowID: String, pid: Int32) {
         guard let windowRef = axElements[windowID] else { return }
         AXUIElementSetAttributeValue(windowRef, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(windowRef, kAXRaiseAction as CFString)
 
-        // Extract PID to activate parent app
-        let components = windowID.split(separator: ":")
-        if let pidStr = components.first, let pid = Int32(pidStr) {
-            if let app = NSRunningApplication(processIdentifier: pid) {
-                app.activate(options: [.activateIgnoringOtherApps])
-            }
-        }
+        guard pid > 0, let app = NSRunningApplication(processIdentifier: pid) else { return }
+        app.activate(options: [.activateIgnoringOtherApps])
     }
 
     /// Resolves agent family and status from process information and window titles.

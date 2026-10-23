@@ -56,7 +56,7 @@ final class ApprovalNotificationController: NSObject,
             choiceActions.append(
                 UNNotificationAction(
                     identifier: Self.choiceActionIDPrefix + String(index),
-                    title: "\(index + 1)…",
+                    title: "Choice \(index + 1)",
                     options: [.authenticationRequired]))
         }
         let viewSession = UNNotificationAction(
@@ -252,12 +252,12 @@ final class ApprovalNotificationController: NSObject,
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                manager.approve(paneId: paneId)
             case Self.denyActionID:
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+                manager.deny(paneId: paneId)
             case Self.viewSessionActionID:
                 let slug = cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? source
                 RichSessionViewer.openInBrowser(
@@ -288,9 +288,7 @@ final class ApprovalNotificationController: NSObject,
                         Self.choiceActionIDPrefix.count)
                     guard let index = Int(indexString) else { return }
                     let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    manager.performAction(paneId: paneId) {
-                        $0.approveChoice(paneId: paneId, choice: number)
-                    }
+                    manager.approveChoice(paneId: paneId, choice: number)
                 }
             }
         }

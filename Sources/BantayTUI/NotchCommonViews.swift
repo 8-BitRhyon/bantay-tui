@@ -82,21 +82,19 @@ struct AgentRowAccessibility: ViewModifier {
             .accessibilityLabel(labelString)
             .accessibilityValue(valueString)
             .accessibilityAction(named: "Approve") {
-                if let paneId = agent.paneId,
+                if let paneId = IslandMetrics.actionablePaneId(
+                    paneId: agent.paneId, source: agent.source),
                     agent.kind == .accessRequest || agent.kind == .waiting
                 {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.approve(paneId: paneId)
-                    }
+                    AgentEventManager.shared.approve(paneId: paneId)
                 }
             }
             .accessibilityAction(named: "Deny") {
-                if let paneId = agent.paneId,
+                if let paneId = IslandMetrics.actionablePaneId(
+                    paneId: agent.paneId, source: agent.source),
                     agent.kind == .accessRequest || agent.kind == .waiting
                 {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.deny(paneId: paneId)
-                    }
+                    AgentEventManager.shared.deny(paneId: paneId)
                 }
             }
     }

@@ -254,14 +254,10 @@ struct AgentRowView: View {
                 color: .red,
                 helpText: "Stop \(agent.source)"
             ) {
-                if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.stop(paneId: paneId)
-                    }
-                } else {
-                    let clean = StandaloneAgentDispatcher.cleanAgentName(
-                        from: agent.paneId ?? agent.source)
-                    StandaloneAgentDispatcher.dispatchAbort(agentName: clean, cwd: agent.cwd)
+                if let paneId = IslandMetrics.actionablePaneId(
+                    paneId: agent.paneId, source: agent.source)
+                {
+                    AgentEventManager.shared.stop(paneId: paneId)
                 }
             }
             .layoutPriority(1)
@@ -304,42 +300,24 @@ struct AgentRowView: View {
 
     @ViewBuilder
     private func inlineApprovalControls(agent: AgentSnapshot) -> some View {
-        let isMuxManaged = agent.paneId != nil && !agent.paneId!.hasPrefix("standalone:")
-        let effectivePaneId = agent.paneId ?? "standalone:\(agent.source)"
+        let effectivePaneId =
+            IslandMetrics.actionablePaneId(paneId: agent.paneId, source: agent.source)
+            ?? "standalone:\(agent.source)"
         let controls = agent.approval
-        let resolving =
-            isMuxManaged ? AgentEventManager.shared.isResolving(paneId: effectivePaneId) : false
+        let resolving = AgentEventManager.shared.isResolving(paneId: effectivePaneId)
 
         if controls.isYesNo {
             approvalActionButton(
                 systemName: "checkmark.circle.fill", color: .green, help: "Approve",
                 disabled: resolving
             ) {
-                if isMuxManaged, let paneId = agent.paneId {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.approve(paneId: paneId)
-                    }
-                } else {
-                    let clean = StandaloneAgentDispatcher.cleanAgentName(
-                        from: agent.paneId ?? agent.source)
-                    StandaloneAgentDispatcher.dispatchApproval(
-                        agentName: clean, approved: true, cwd: agent.cwd)
-                }
+                AgentEventManager.shared.approve(paneId: effectivePaneId)
             }
             approvalActionButton(
                 systemName: "xmark.circle.fill", color: .red, help: "Deny",
                 disabled: resolving
             ) {
-                if isMuxManaged, let paneId = agent.paneId {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.deny(paneId: paneId)
-                    }
-                } else {
-                    let clean = StandaloneAgentDispatcher.cleanAgentName(
-                        from: agent.paneId ?? agent.source)
-                    StandaloneAgentDispatcher.dispatchApproval(
-                        agentName: clean, approved: false, cwd: agent.cwd)
-                }
+                AgentEventManager.shared.deny(paneId: effectivePaneId)
             }
         } else if controls.isMulti {
             let labels = controls.displayedLabels()
@@ -372,17 +350,8 @@ struct AgentRowView: View {
             ) {
                 let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
                     queueSelections[effectivePaneId] ?? [])
-                if isMuxManaged, let paneId = agent.paneId {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.approveMulti(paneId: paneId, selections: numbers)
-                    }
-                } else {
-                    let clean = StandaloneAgentDispatcher.cleanAgentName(
-                        from: agent.paneId ?? agent.source)
-                    let optionStr = numbers.map(String.init).joined(separator: " ")
-                    StandaloneAgentDispatcher.dispatchOption(
-                        agentName: clean, option: optionStr, cwd: agent.cwd)
-                }
+                AgentEventManager.shared.approveMulti(
+                    paneId: effectivePaneId, selections: numbers)
                 queueSelections.removeValue(forKey: effectivePaneId)
             }
         } else {
@@ -399,16 +368,8 @@ struct AgentRowView: View {
                     accessibilityLabel: optionText
                 ) {
                     let choiceNum = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    if isMuxManaged, let paneId = agent.paneId {
-                        AgentEventManager.shared.performAction(paneId: paneId) {
-                            $0.approveChoice(paneId: paneId, choice: choiceNum)
-                        }
-                    } else {
-                        let clean = StandaloneAgentDispatcher.cleanAgentName(
-                            from: agent.paneId ?? agent.source)
-                        StandaloneAgentDispatcher.dispatchOption(
-                            agentName: clean, option: "\(choiceNum)", cwd: agent.cwd)
-                    }
+                    AgentEventManager.shared.approveChoice(
+                        paneId: effectivePaneId, choice: choiceNum)
                 }
             }
             let overflow = controls.overflowCount()
@@ -422,16 +383,7 @@ struct AgentRowView: View {
                     systemName: "checkmark.circle.fill", color: .green, help: "Approve",
                     disabled: resolving
                 ) {
-                    if isMuxManaged, let paneId = agent.paneId {
-                        AgentEventManager.shared.performAction(paneId: paneId) {
-                            $0.approve(paneId: paneId)
-                        }
-                    } else {
-                        let clean = StandaloneAgentDispatcher.cleanAgentName(
-                            from: agent.paneId ?? agent.source)
-                        StandaloneAgentDispatcher.dispatchApproval(
-                            agentName: clean, approved: true, cwd: agent.cwd)
-                    }
+                    AgentEventManager.shared.approve(paneId: effectivePaneId)
                 }
             }
         }

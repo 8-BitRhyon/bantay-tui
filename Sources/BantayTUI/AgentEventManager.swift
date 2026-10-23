@@ -285,6 +285,13 @@ final class AgentEventManager: ObservableObject {
     /// numbered-choice, and multi-select controls inline.
     var pendingApprovals: [String: (variance: ApprovalVariance?, choices: [String]?)] =
         [:]
+    /// Panes answered from Bantay recently. Status hooks can repeat the same
+    /// `blocked` line after the answer lands; suppressing that duplicate stops
+    /// the popup from re-asking for a permission the user just granted. Any
+    /// non-approval status clears the entry, so a genuinely new prompt still
+    /// shows immediately.
+    private var acknowledgedApprovals: [String: Date] = [:]
+    private let acknowledgmentWindow: TimeInterval = 12
     /// Panes with an in-flight user action to prevent duplicate clicks.
     private var resolvingPanes: Set<String> = []
     /// Caps how long a pane stays in the resolving state if the next poll
@@ -530,7 +537,14 @@ final class AgentEventManager: ObservableObject {
         {
             return
         }
+        if event.kind != .accessRequest && event.kind != .waiting {
+            clearAcknowledgments(for: event)
+        } else if isAcknowledged(event) {
+            return
+        }
         let key = event.identityKey
+        let actionablePaneId = IslandMetrics.actionablePaneId(
+            paneId: event.paneId, source: event.source)
         // ntfy.sh push for events that need attention even away from the
         // terminal: approvals/blocked always; failures and completions too.
         if let source = event.source {
@@ -542,7 +556,7 @@ final class AgentEventManager: ObservableObject {
                 source: source,
                 kind: event.kind,
                 title: event.title ?? event.message,
-                paneId: event.paneId,
+                paneId: actionablePaneId,
                 choices: event.choices,
                 cwd: snap?.cwd,
                 sessionPath: snap?.sessionPath,
@@ -565,7 +579,7 @@ final class AgentEventManager: ObservableObject {
             // The pane stopped blocking: drop any pending notification so a
             // stale Approve/Deny can't inject a keypress into the pane now.
             if event.paneId != nil || event.source != nil {
-                let paneKey = event.paneId ?? event.source ?? key
+                let paneKey = actionablePaneId ?? event.paneId ?? event.source ?? key
                 ApprovalNotificationController.shared.removeForPane(paneKey)
             }
         }
@@ -1140,9 +1154,13 @@ extension AgentEventManager {
         resolvingPanes.contains(paneId)
     }
 
-    /// Convenience: resolves the agent's paneId and checks `isResolving`.
+    /// Convenience: resolves the agent's actionable pane id (including the
+    /// synthetic id used for standalone agents) and checks `isResolving`.
     func isResolving(agent: AgentSnapshot?) -> Bool {
-        guard let paneId = agent?.paneId else { return false }
+        guard
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: agent?.paneId, source: agent?.source)
+        else { return false }
         return resolvingPanes.contains(paneId)
     }
 
@@ -1167,6 +1185,11 @@ extension AgentEventManager {
     /// Approves an agent request via the active adapter, routing OpenCode panes to the decision file.
     func approve(paneId: String) {
         AwayDigestStore.shared.recordApprovalAnswered()
+        acknowledgeApproval(paneId: paneId)
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneApproval(paneId: paneId, approved: true)
+            return
+        }
         if OpenCodeActionWriter.isOpenCodePane(paneId) {
             OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
         }
@@ -1175,6 +1198,11 @@ extension AgentEventManager {
 
     /// Denies an agent request via the active adapter, routing OpenCode panes to the decision file.
     func deny(paneId: String) {
+        acknowledgeApproval(paneId: paneId)
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneApproval(paneId: paneId, approved: false)
+            return
+        }
         if OpenCodeActionWriter.isOpenCodePane(paneId) {
             OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
         }
@@ -1185,12 +1213,164 @@ extension AgentEventManager {
     /// routing OpenCode panes to the decision file with choice index.
     func approveChoice(paneId: String, choice: Int) {
         AwayDigestStore.shared.recordApprovalAnswered()
+        acknowledgeApproval(paneId: paneId)
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneOption(paneId: paneId, option: String(choice))
+            return
+        }
         if OpenCodeActionWriter.isOpenCodePane(paneId) {
             OpenCodeActionWriter.writeDecision(
                 paneId: paneId, approve: true, choiceIndex: choice
             )
         }
         performAction(paneId: paneId) { $0.approveChoice(paneId: paneId, choice: choice) }
+    }
+
+    /// Submits a multi-select answer. Standalone agents receive the selected
+    /// numbers as one space-separated line, matching the roster's inline path.
+    func approveMulti(paneId: String, selections: [Int]) {
+        AwayDigestStore.shared.recordApprovalAnswered()
+        acknowledgeApproval(paneId: paneId)
+        let joined = selections.map(String.init).joined(separator: " ")
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneOption(paneId: paneId, option: joined)
+            return
+        }
+        performAction(paneId: paneId) { $0.approveMulti(paneId: paneId, selections: selections) }
+    }
+
+    /// Record that the user answered `paneId` and drop the visible prompt.
+    /// Duplicate `blocked` events for the same pane are ignored for
+    /// `acknowledgmentWindow` seconds, or until the agent reports a
+    /// non-approval status (which clears the window).
+    func acknowledgeApproval(paneId: String) {
+        let now = Date()
+        var keys = [paneId]
+        if paneId.hasPrefix("standalone:") {
+            keys.append(String(paneId.dropFirst("standalone:".count)))
+        }
+        if let current = currentEvent, event(current, matches: paneId) {
+            keys.append(current.identityKey)
+            currentEvent = nil
+            clearTask?.cancel()
+        }
+        for key in keys {
+            acknowledgedApprovals[key] = now
+        }
+        pruneAcknowledgments(now: now)
+        for key in pendingApprovals.keys
+        where matches(paneId: paneId, identityKey: key) {
+            pendingApprovals.removeValue(forKey: key)
+        }
+        ApprovalNotificationController.shared.removeForPane(paneId)
+    }
+
+    private func event(_ event: AgentEvent, matches paneId: String) -> Bool {
+        if let id = event.paneId { return id == paneId }
+        return matches(paneId: paneId, identityKey: event.identityKey)
+    }
+
+    private func matches(paneId: String, identityKey key: String) -> Bool {
+        if key == paneId { return true }
+        guard paneId.hasPrefix("standalone:") else { return false }
+        let source = String(paneId.dropFirst("standalone:".count))
+        return key == source || key.hasPrefix(source + ":")
+    }
+
+    private func acknowledgmentKeys(for event: AgentEvent) -> [String] {
+        var keys = [event.identityKey]
+        if let actionable = IslandMetrics.actionablePaneId(
+            paneId: event.paneId, source: event.source)
+        {
+            keys.append(actionable)
+        }
+        if let source = event.source {
+            keys.append(source)
+        }
+        return keys
+    }
+
+    private func isAcknowledged(_ event: AgentEvent) -> Bool {
+        let now = Date()
+        for key in acknowledgmentKeys(for: event) {
+            guard let at = acknowledgedApprovals[key] else { continue }
+            if now.timeIntervalSince(at) <= acknowledgmentWindow {
+                return true
+            }
+            acknowledgedApprovals.removeValue(forKey: key)
+        }
+        return false
+    }
+
+    private func clearAcknowledgments(for event: AgentEvent) {
+        for key in acknowledgmentKeys(for: event) {
+            acknowledgedApprovals.removeValue(forKey: key)
+        }
+    }
+
+    private func pruneAcknowledgments(now: Date) {
+        acknowledgedApprovals = acknowledgedApprovals.filter {
+            now.timeIntervalSince($0.value) <= acknowledgmentWindow
+        }
+    }
+
+    /// Routes a stop request to the standalone dispatcher or the multiplexer.
+    func stop(paneId: String) {
+        if paneId.hasPrefix("standalone:") {
+            let agent = agent(forPaneId: paneId)
+            let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+            performStandaloneAction(paneId: paneId) {
+                StandaloneAgentDispatcher.dispatchAbort(
+                    agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
+                    cwd: agent?.cwd)
+            }
+            return
+        }
+        performAction(paneId: paneId) { $0.stop(paneId: paneId) }
+    }
+
+    /// The roster entry that owns `paneId`, including synthetic standalone ids.
+    func agent(forPaneId paneId: String) -> AgentSnapshot? {
+        agents.first { agent in
+            if let id = agent.paneId { return id == paneId }
+            return paneId == "standalone:\(agent.source)"
+                || paneId.hasPrefix("standalone:\(agent.source):")
+        }
+    }
+
+    private func dispatchStandaloneApproval(paneId: String, approved: Bool) {
+        let agent = agent(forPaneId: paneId)
+        let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+        performStandaloneAction(paneId: paneId) {
+            StandaloneAgentDispatcher.dispatchApproval(
+                agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
+                approved: approved,
+                cwd: agent?.cwd)
+        }
+    }
+
+    private func dispatchStandaloneOption(paneId: String, option: String) {
+        let agent = agent(forPaneId: paneId)
+        let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+        performStandaloneAction(paneId: paneId) {
+            StandaloneAgentDispatcher.dispatchOption(
+                agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
+                option: option,
+                cwd: agent?.cwd)
+        }
+    }
+
+    /// Keeps the popup buttons disabled while a standalone keystroke dispatch
+    /// is in flight, mirroring `performAction`'s optimistic resolve state.
+    private func performStandaloneAction(
+        paneId: String, _ action: @escaping @MainActor () -> Void
+    ) {
+        resolvingPanes.insert(paneId)
+        Task { @MainActor in
+            action()
+            try? await Task.sleep(for: .seconds(self.resolvingTimeout))
+            self.resolvingPanes.remove(paneId)
+        }
     }
 
     /// Drop a pane from the resolving set immediately — called when a poll

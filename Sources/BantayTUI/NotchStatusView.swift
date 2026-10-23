@@ -40,6 +40,10 @@ struct NotchStatusView: View {
     @State private var clipboardItems: [ClipboardItem] = []
     @State private var activeNotification: AgentEvent? = nil
     @State private var notificationDismissTask: Task<Void, Never>? = nil
+    /// Live pane excerpt for approvals whose event carries no command or
+    /// prompt (multiplexer status events). Fetched asynchronously.
+    @State private var notificationDetail: String = ""
+    @State private var notificationDetailTask: Task<Void, Never>?
     /// Brief glow on the shelf panel when a drop lands (user feedback).
     @State private var shelfDropGlow = false
     /// The persisted, thumbnail-rendering shelf (ShelfStore owns files).
@@ -140,6 +144,19 @@ struct NotchStatusView: View {
         !isExpanded && activeNotification != nil
     }
 
+    private var activeNotificationCardHeight: CGFloat {
+        IslandMetrics.notificationCardHeight(for: activeNotification?.kind)
+    }
+
+    /// Closed notifications start below the physical notch. Idle chips still
+    /// sit flush in the notch row; only the card content moves down.
+    private var contentTopOffset: CGFloat {
+        if hasActiveNotification {
+            return IslandMetrics.notificationTopOffset(topInset: AppDelegate.topInset)
+        }
+        return chipTopOffset
+    }
+
     private var islandWidth: CGFloat {
         if isExpanded {
             return IslandMetrics.expandedWidth
@@ -207,9 +224,10 @@ struct NotchStatusView: View {
         }
         if hasActiveNotification {
             return IslandMetrics.closedSize(
-                topInset: chipTopOffset,
+                topInset: AppDelegate.topInset,
                 notchWidth: IslandMetrics.notificationWidth,
-                hasNotification: true
+                hasNotification: true,
+                cardHeight: activeNotificationCardHeight
             ).height
         }
         return IslandMetrics.closedSize(topInset: chipTopOffset, notchWidth: islandWidth).height
@@ -217,7 +235,7 @@ struct NotchStatusView: View {
 
     private var contentHeight: CGFloat {
         if hasActiveNotification {
-            return IslandMetrics.notificationHeight
+            return activeNotificationCardHeight
         }
         if showTasks {
             return IslandMetrics.contentHeightForTasks(
@@ -309,7 +327,7 @@ struct NotchStatusView: View {
             islandBackground
             content
                 .frame(width: contentFrameWidth, height: contentHeight, alignment: .top)
-                .offset(y: chipTopOffset)
+                .offset(y: contentTopOffset)
         }
         .overlay(edgeGlow)
         .overlay(SystemHUDOverlayView(), alignment: .bottom)
@@ -495,7 +513,8 @@ struct NotchStatusView: View {
             canHandleRosterShortcuts,
             !eventManager.isResolving(agent: approvalQueueAgents.first),
             let agent = approvalQueueAgents.first,
-            let paneId = agent.paneId
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: agent.paneId, source: agent.source)
         else {
             return false
         }
@@ -507,25 +526,21 @@ struct NotchStatusView: View {
             if agent.approval.isMulti {
                 let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
                     queueSelections[paneId] ?? [])
-                eventManager.performAction(paneId: paneId) {
-                    $0.approveMulti(paneId: paneId, selections: numbers)
-                }
+                eventManager.approveMulti(paneId: paneId, selections: numbers)
                 queueSelections.removeValue(forKey: paneId)
             } else {
-                eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                eventManager.approve(paneId: paneId)
             }
             return true
         case .deny:
-            eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+            eventManager.deny(paneId: paneId)
             return true
         case .option(let number):
             if agent.approval.isMulti {
                 queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
                     queueSelections[paneId] ?? [], index: number - 1)
             } else {
-                eventManager.performAction(paneId: paneId) {
-                    $0.approveChoice(paneId: paneId, choice: number)
-                }
+                eventManager.approveChoice(paneId: paneId, choice: number)
             }
             return true
         }
@@ -567,8 +582,11 @@ struct NotchStatusView: View {
             $0.paneId == agent.paneId
                 && ($0.kind == .accessRequest || $0.kind == .waiting)
         }) {
-            guard let paneId = agent.paneId else { return }
-            eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+            guard
+                let paneId = IslandMetrics.actionablePaneId(
+                    paneId: agent.paneId, source: agent.source)
+            else { return }
+            eventManager.approve(paneId: paneId)
         } else {
             showDetail = true
             fetchPeek(paneId: agent.paneId ?? agent.source)
@@ -812,7 +830,9 @@ struct NotchStatusView: View {
         } else if let notif = activeNotification {
             notchNotificationCard(event: notif)
                 .transition(contentTransition)
-        } else if let event = eventManager.currentEvent, let paneId = event.paneId,
+        } else if let event = eventManager.currentEvent,
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: event.paneId, source: event.source),
             IslandMetrics.requiresApproval(event.kind.rawValue)
         {
             approvalPill(event: event, paneId: paneId)
@@ -868,12 +888,173 @@ struct NotchStatusView: View {
 
     @ViewBuilder
     private func notchNotificationCard(event: AgentEvent) -> some View {
-        let isApproval = event.kind == .accessRequest || event.kind == .waiting
+        let paneId = IslandMetrics.actionablePaneId(
+            paneId: event.paneId, source: event.source)
+        let agent = mergedRoster.first {
+            (event.paneId != nil && $0.paneId == event.paneId)
+                || $0.source == event.sourceKey
+        }
+        if event.kind == .accessRequest || event.kind == .waiting {
+            approvalNotificationCard(event: event, paneId: paneId, agent: agent)
+        } else {
+            compactNotificationCard(event: event, paneId: paneId, agent: agent)
+        }
+    }
+
+    /// Approval popup with the exact pending request. The command, path, or
+    /// question gets three wrapped monospaced lines; source, project, cwd and
+    /// the tool hint sit around it. A live pane excerpt fills in when the
+    /// event carries no title (multiplexer status events).
+    private func approvalNotificationCard(
+        event: AgentEvent, paneId: String?, agent: AgentSnapshot?
+    ) -> some View {
+        let controls = notificationApprovalControls(event: event, agent: agent)
+        let resolving = paneId.map { eventManager.isResolving(paneId: $0) } ?? false
+        let projectLabel = notificationProjectLabel(event: event, agent: agent)
+        let hasTitle = !IslandMetrics.isGenericApprovalText(event.title)
+        let detail: String = {
+            if let title = event.title, hasTitle {
+                let cleaned = IslandMetrics.cleanApprovalDetail(title)
+                if !cleaned.isEmpty { return cleaned }
+            }
+            if !notificationDetail.isEmpty {
+                let cleaned = IslandMetrics.cleanApprovalDetail(notificationDetail)
+                if !cleaned.isEmpty { return cleaned }
+            }
+            if let message = event.message,
+                !IslandMetrics.isGenericApprovalText(message)
+            {
+                let cleaned = IslandMetrics.cleanApprovalDetail(message)
+                if !cleaned.isEmpty { return cleaned }
+            }
+            return "Agent requires input"
+        }()
+        let contextLine: String? = {
+            var parts: [String] = []
+            if let message = event.message,
+                !IslandMetrics.isGenericApprovalText(message)
+            {
+                let cleaned = IslandMetrics.cleanApprovalDetail(
+                    message, maxCharacters: 110)
+                if !cleaned.isEmpty, cleaned != detail {
+                    parts.append(cleaned)
+                }
+            }
+            if let cwd = agent?.cwd, !cwd.isEmpty {
+                let short = (cwd as NSString).abbreviatingWithTildeInPath
+                parts.append(
+                    short.count <= 68 ? short : "..." + String(short.suffix(65)))
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }()
+        let choiceSummary = notificationChoiceSummary(controls)
+        let fromLivePane = !hasTitle && !notificationDetail.isEmpty
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: event.kind.color))
+                Text(event.sourceKey.capitalized)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                if let projectLabel {
+                    Text("· \(projectLabel)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 2)
+                Text(fromLivePane ? "LIVE PANE" : "NEEDS INPUT")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .textCase(.uppercase)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Color(hex: event.kind.color).opacity(0.25), in: Capsule()
+                    )
+                    .foregroundColor(Color(hex: event.kind.color))
+                    .fixedSize()
+            }
+
+            Text(detail)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.92))
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+
+            if let contextLine {
+                Text(contextLine)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.48))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let choiceSummary {
+                Text(choiceSummary)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.cyan.opacity(0.85))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                if let paneId {
+                    notificationApprovalActions(
+                        event: event, paneId: paneId, controls: controls,
+                        resolving: resolving)
+                    TactileRowButton(
+                        systemName: "arrow.up.right",
+                        color: Color.white.opacity(0.6),
+                        helpText: "Focus agent"
+                    ) {
+                        focusAgentPane(paneId)
+                    }
+                    .disabled(resolving)
+                    .opacity(resolving ? 0.4 : 1)
+                    TactileRowButton(
+                        systemName: "chevron.down",
+                        color: Color.white.opacity(0.6),
+                        helpText: "Open control plane for this agent"
+                    ) {
+                        withAnimation(morphAnimation) { expandTo(true) }
+                    }
+                } else {
+                    notificationDismissButton(event.id)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(
+            width: IslandMetrics.notificationWidth,
+            height: IslandMetrics.approvalNotificationHeight
+        )
+        .contentShape(Rectangle())
+    }
+
+    /// Compact completion/failure notice. No approval controls, no extra
+    /// height.
+    private func compactNotificationCard(
+        event: AgentEvent, paneId: String?, agent: AgentSnapshot?
+    ) -> some View {
         let isCompleted = event.kind == .completed
         let isFailed = event.kind == .failed
-        let paneId = event.paneId
+        let projectLabel = notificationProjectLabel(event: event, agent: agent)
+        let prompt =
+            (event.title ?? event.message).map {
+                IslandMetrics.cleanHUDText($0, maxCharacters: 96)
+            }.flatMap { $0.isEmpty ? nil : $0 }
+            ?? (isCompleted ? "Task completed successfully" : "Agent requires input")
 
-        HStack(spacing: 12) {
+        return HStack(spacing: 12) {
             ZStack {
                 Circle()
                     .fill(Color(hex: event.kind.color).opacity(0.18))
@@ -882,11 +1063,9 @@ struct NotchStatusView: View {
                     .strokeBorder(Color(hex: event.kind.color).opacity(0.4), lineWidth: 1.5)
                     .frame(width: 36, height: 36)
                 Image(
-                    systemName: isApproval
-                        ? "exclamationmark.triangle.fill"
-                        : (isCompleted
-                            ? "checkmark.circle.fill"
-                            : (isFailed ? "xmark.octagon.fill" : "bell.fill"))
+                    systemName: isCompleted
+                        ? "checkmark.circle.fill"
+                        : (isFailed ? "xmark.octagon.fill" : "bell.fill")
                 )
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(Color(hex: event.kind.color))
@@ -898,13 +1077,13 @@ struct NotchStatusView: View {
                     Text(event.sourceKey.capitalized)
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
-                    if let pane = paneId, pane.hasPrefix("standalone:") {
-                        let project = pane.split(separator: ":").last.map(String.init) ?? ""
-                        Text("· \(project)")
+                    if let projectLabel {
+                        Text("· \(projectLabel)")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(.white.opacity(0.6))
+                            .lineLimit(1)
                     }
-                    Spacer()
+                    Spacer(minLength: 2)
                     Text(event.kind.label)
                         .font(.system(size: 9, weight: .bold))
                         .textCase(.uppercase)
@@ -912,57 +1091,20 @@ struct NotchStatusView: View {
                         .padding(.vertical, 2)
                         .background(Color(hex: event.kind.color).opacity(0.25), in: Capsule())
                         .foregroundColor(Color(hex: event.kind.color))
+                        .fixedSize()
                 }
 
-                Text(
-                    (event.title ?? event.message).map {
-                        IslandMetrics.cleanHUDText($0, maxCharacters: 80)
-                    }.flatMap { $0.isEmpty ? nil : $0 }
-                        ?? (isCompleted ? "Task completed successfully" : "Agent requires input")
-                )
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
-                .lineLimit(2)
-                .truncationMode(.tail)
+                Text(prompt)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.85))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
 
             Spacer(minLength: 4)
 
             HStack(spacing: 6) {
-                if isApproval, let paneId {
-                    TactileRowButton(
-                        systemName: "checkmark",
-                        title: "Approve",
-                        color: Color.green.opacity(0.85),
-                        helpText: "Approve request"
-                    ) {
-                        eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
-                        withAnimation(morphAnimation) {
-                            activeNotification = nil
-                        }
-                    }
-                    TactileRowButton(
-                        systemName: "xmark",
-                        title: "Deny",
-                        color: Color.red.opacity(0.85),
-                        helpText: "Deny request"
-                    ) {
-                        eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
-                        withAnimation(morphAnimation) {
-                            activeNotification = nil
-                        }
-                    }
-                    TactileRowButton(
-                        systemName: "arrow.up.right",
-                        color: Color.white.opacity(0.6),
-                        helpText: "Focus agent"
-                    ) {
-                        focusAgentPane(paneId)
-                    }
-                } else if isCompleted {
-                    let agent = eventManager.agents.first {
-                        $0.paneId == paneId || $0.source == event.sourceKey
-                    }
+                if isCompleted {
                     TactileRowButton(
                         systemName: "safari",
                         title: "View Diff",
@@ -981,57 +1123,238 @@ struct NotchStatusView: View {
                             sessionPath: agent?.sessionPath
                         )
                     }
+                } else if isFailed, let paneId {
                     TactileRowButton(
-                        systemName: "xmark",
-                        color: Color.white.opacity(0.5),
-                        helpText: "Dismiss notification"
+                        systemName: "arrow.up.right",
+                        title: "Focus",
+                        color: Color.orange.opacity(0.85),
+                        helpText: "Focus agent"
                     ) {
-                        withAnimation(morphAnimation) {
-                            activeNotification = nil
-                        }
-                    }
-                } else if isFailed {
-                    if let paneId {
-                        TactileRowButton(
-                            systemName: "arrow.up.right",
-                            title: "Focus",
-                            color: Color.orange.opacity(0.85),
-                            helpText: "Focus agent"
-                        ) {
-                            focusAgentPane(paneId)
-                        }
-                    }
-                    TactileRowButton(
-                        systemName: "xmark",
-                        color: Color.white.opacity(0.5),
-                        helpText: "Dismiss notification"
-                    ) {
-                        withAnimation(morphAnimation) {
-                            activeNotification = nil
-                        }
-                    }
-                } else {
-                    TactileRowButton(
-                        systemName: "xmark",
-                        color: Color.white.opacity(0.5),
-                        helpText: "Dismiss notification"
-                    ) {
-                        withAnimation(morphAnimation) {
-                            activeNotification = nil
-                        }
+                        focusAgentPane(paneId)
                     }
                 }
+                notificationDismissButton(event.id)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .frame(width: IslandMetrics.notificationWidth, height: IslandMetrics.notificationHeight)
+        .frame(
+            width: IslandMetrics.notificationWidth,
+            height: IslandMetrics.notificationHeight
+        )
         .contentShape(Rectangle())
-        .onTapGesture {
-            if let paneId {
-                focusAgentPane(paneId)
+    }
+
+    private func notificationProjectLabel(
+        event: AgentEvent, agent: AgentSnapshot?
+    ) -> String? {
+        let project =
+            agent?.projectContext?.project
+            ?? agent?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+        guard let project, !project.isEmpty,
+            project.lowercased() != event.sourceKey.lowercased()
+        else { return nil }
+        return project
+    }
+
+    private func notificationDismissButton(_ id: UUID) -> some View {
+        TactileRowButton(
+            systemName: "xmark",
+            color: Color.white.opacity(0.5),
+            helpText: "Dismiss notification"
+        ) {
+            dismissNotification(id)
+        }
+    }
+
+    private func dismissNotification(_ id: UUID) {
+        withAnimation(morphAnimation) {
+            if activeNotification?.id == id {
+                activeNotification = nil
             }
         }
+        cancelNotificationDetail()
+    }
+
+    /// Fetch a live pane excerpt when the approval event has no concrete
+    /// title. Multiplexer status events often say only "blocked"; the pane
+    /// tail is where the actual command or question lives.
+    private func loadNotificationDetail(for event: AgentEvent) {
+        notificationDetailTask?.cancel()
+        notificationDetail = ""
+        guard event.kind == .accessRequest || event.kind == .waiting,
+            IslandMetrics.isGenericApprovalText(event.title)
+        else { return }
+
+        let expectedID = event.id
+        let paneId = event.paneId
+        let source = event.sourceKey
+        let agent = mergedRoster.first {
+            (event.paneId != nil && $0.paneId == event.paneId)
+                || $0.source == event.sourceKey
+        }
+        let sessionPath = agent?.sessionPath
+        let cwd = agent?.cwd
+
+        notificationDetailTask = Task.detached { [adapter] in
+            var raw = ""
+            if let paneId, !paneId.isEmpty,
+                !paneId.hasPrefix(OpenCodeActionWriter.panePrefix),
+                !paneId.hasPrefix("standalone:")
+            {
+                raw = await adapter.captureTail(paneId: paneId, lines: 18)
+            }
+            var excerpt = IslandMetrics.approvalExcerpt(from: raw, maxLines: 4)
+            if excerpt.isEmpty {
+                let transcript = AgentDetector.recentTranscriptOutput(
+                    forAgent: source, sessionPath: sessionPath, cwd: cwd,
+                    maxLines: 18)
+                excerpt = transcript.suffix(4).joined(separator: "\n")
+            }
+            await MainActor.run {
+                guard self.activeNotification?.id == expectedID else { return }
+                self.notificationDetail = excerpt
+            }
+        }
+    }
+
+    private func cancelNotificationDetail() {
+        notificationDetailTask?.cancel()
+        notificationDetailTask = nil
+        notificationDetail = ""
+    }
+
+    /// Approval shape for the popup. Prefers the merged roster row (which
+    /// carries the decoded variance/choices) and falls back to parsing a
+    /// numbered prompt out of the event title.
+    private func notificationApprovalControls(
+        event: AgentEvent, agent: AgentSnapshot?
+    ) -> IslandMetrics.ApprovalControls {
+        let base =
+            agent?.approval
+            ?? IslandMetrics.ApprovalControls.make(
+                variance: event.variance, choices: event.choices)
+        guard base.isYesNo, let title = event.title ?? event.message else { return base }
+        let extracted = ChoiceExtractor.extractChoices(from: title)
+        guard extracted.count >= 2 else { return base }
+        return IslandMetrics.ApprovalControls.make(
+            variance: .choices, choices: extracted.map(\.label))
+    }
+
+    private func notificationChoiceSummary(
+        _ controls: IslandMetrics.ApprovalControls
+    ) -> String? {
+        guard !controls.isYesNo, !controls.choices.isEmpty else { return nil }
+        let shown = controls.choices.prefix(3).enumerated().map {
+            "\($0.offset + 1). \($0.element)"
+        }
+        var summary = shown.joined(separator: "  ")
+        if controls.choices.count > 3 {
+            summary += "  +\(controls.choices.count - 3)"
+        }
+        return summary
+    }
+
+    @ViewBuilder
+    private func notificationApprovalActions(
+        event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
+        resolving: Bool
+    ) -> some View {
+        if controls.isMulti {
+            notificationMultiActions(
+                event: event, paneId: paneId, controls: controls, resolving: resolving)
+        } else if controls.isYesNo {
+            notificationActionButton(
+                title: "Approve", systemName: "checkmark", color: .green,
+                helpText: "Approve request (Y)", disabled: resolving
+            ) {
+                eventManager.approve(paneId: paneId)
+                dismissNotification(event.id)
+            }
+            notificationActionButton(
+                title: "Deny", systemName: "xmark", color: .red,
+                helpText: "Deny request (N)", disabled: resolving
+            ) {
+                eventManager.deny(paneId: paneId)
+                dismissNotification(event.id)
+            }
+        } else {
+            notificationChoiceActions(
+                event: event, paneId: paneId, controls: controls, resolving: resolving)
+        }
+    }
+
+    @ViewBuilder
+    private func notificationChoiceActions(
+        event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
+        resolving: Bool
+    ) -> some View {
+        let options = Array(controls.choices.prefix(3))
+        if options.isEmpty {
+            notificationActionButton(
+                title: "Approve", systemName: "checkmark", color: .green,
+                helpText: "Approve request (Y)", disabled: resolving
+            ) {
+                eventManager.approve(paneId: paneId)
+                dismissNotification(event.id)
+            }
+        } else {
+            ForEach(Array(options.enumerated()), id: \.offset) { index, label in
+                approvalActionButton(
+                    label: Text("\(index + 1)"),
+                    color: .white,
+                    help: label,
+                    disabled: resolving,
+                    accessibilityLabel: label
+                ) {
+                    eventManager.approveChoice(paneId: paneId, choice: index + 1)
+                    dismissNotification(event.id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func notificationMultiActions(
+        event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
+        resolving: Bool
+    ) -> some View {
+        let options = Array(controls.choices.prefix(3))
+        ForEach(Array(options.enumerated()), id: \.offset) { index, label in
+            let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+            let selected = queueSelections[paneId]?.contains(number) == true
+            approvalActionButton(
+                label: Text("\(number)"),
+                color: selected ? .green : .white.opacity(0.65),
+                help: label,
+                accessibilityLabel: "\(number). \(label)"
+            ) {
+                queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
+                    queueSelections[paneId] ?? [], index: index)
+            }
+        }
+        approvalActionButton(
+            systemName: "checkmark.circle.fill", color: .green,
+            help: "Submit selections", disabled: resolving
+        ) {
+            let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
+                queueSelections[paneId] ?? [])
+            eventManager.approveMulti(paneId: paneId, selections: numbers)
+            queueSelections.removeValue(forKey: paneId)
+            dismissNotification(event.id)
+        }
+    }
+
+    private func notificationActionButton(
+        title: String, systemName: String, color: Color, helpText: String,
+        disabled: Bool, action: @escaping @MainActor () -> Void
+    ) -> some View {
+        TactileRowButton(
+            systemName: systemName, title: title, color: color, helpText: helpText,
+            action: action
+        )
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
     }
 
     private func approvalPill(event: AgentEvent, paneId: String) -> some View {
@@ -1085,13 +1408,13 @@ struct NotchStatusView: View {
                 systemName: "checkmark.circle.fill", color: .green, help: "Approve",
                 disabled: resolving
             ) {
-                eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                eventManager.approve(paneId: paneId)
             }
             approvalActionButton(
                 systemName: "xmark.circle.fill", color: .red, help: "Deny",
                 disabled: resolving
             ) {
-                eventManager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+                eventManager.deny(paneId: paneId)
             }
         case .choices:
             let options: [ChoiceOption] = {
@@ -1115,9 +1438,7 @@ struct NotchStatusView: View {
                     Menu {
                         ForEach(options) { opt in
                             Button("\(opt.id). \(opt.label)") {
-                                eventManager.performAction(paneId: paneId) {
-                                    $0.approveChoice(paneId: paneId, choice: opt.id)
-                                }
+                                eventManager.approveChoice(paneId: paneId, choice: opt.id)
                             }
                         }
                     } label: {
@@ -1141,9 +1462,7 @@ struct NotchStatusView: View {
                         help: opt.label,
                         disabled: resolving
                     ) {
-                        eventManager.performAction(paneId: paneId) {
-                            $0.approveChoice(paneId: paneId, choice: opt.id)
-                        }
+                        eventManager.approveChoice(paneId: paneId, choice: opt.id)
                     }
                 }
             } else {
@@ -1151,7 +1470,7 @@ struct NotchStatusView: View {
                     systemName: "checkmark.circle.fill", color: .green, help: "Approve",
                     disabled: resolving
                 ) {
-                    eventManager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                    eventManager.approve(paneId: paneId)
                 }
             }
         case .multi:
@@ -1172,9 +1491,7 @@ struct NotchStatusView: View {
             ) {
                 let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
                     queueSelections[paneId] ?? [])
-                eventManager.performAction(paneId: paneId) {
-                    $0.approveMulti(paneId: paneId, selections: numbers)
-                }
+                eventManager.approveMulti(paneId: paneId, selections: numbers)
                 queueSelections.removeValue(forKey: paneId)
             }
         }
@@ -1234,7 +1551,9 @@ struct NotchStatusView: View {
                 }
             }
 
-            if stripManager.config.isEnabled && !StripWindowRegistry.hasAccessibilityPermission() {
+            if stripManager.config.isEnabled && !stripManager.isFullScreen
+                && !StripWindowRegistry.hasAccessibilityPermission()
+            {
                 Button(action: {
                     StripWindowRegistry.openAccessibilitySettings()
                 }) {
@@ -1271,14 +1590,25 @@ struct NotchStatusView: View {
                 .padding(.vertical, 2)
             }
 
-            if stripManager.config.isEnabled && !stripManager.columns.isEmpty {
+            if stripManager.config.isEnabled && !stripManager.isFullScreen
+                && !stripManager.columns.isEmpty
+            {
                 ScrollView(.horizontal, showsIndicators: false) {
                     StripMiniMapHUD(
                         columns: stripManager.columns,
                         activeColumnIndex: stripManager.activeColumnIndex,
                         visibleWindowIDs: stripManager.layoutResult.visibleWindowIDs,
                         onSelectColumn: { index in
-                            stripManager.jumpToColumn(index: index)
+                            // A second tap on the active column cycles its
+                            // windows instead of doing nothing.
+                            if index == stripManager.activeColumnIndex,
+                                stripManager.columns.indices.contains(index),
+                                stripManager.columns[index].windows.count > 1
+                            {
+                                stripManager.focusNextWindow()
+                            } else {
+                                stripManager.jumpToColumn(index: index)
+                            }
                         }
                     )
                 }
@@ -1556,12 +1886,17 @@ struct NotchStatusView: View {
         hoverTask?.cancel()
         isHovered = hovering
         if hovering {
+            guard
+                IslandMetrics.shouldExpandOnHover(
+                    hovering: hovering, isExpanded: isExpanded,
+                    hasPopup: hasActiveNotification)
+            else { return }
             hoverTask = Task { @MainActor in
                 let delay = NotchHUDConfig.shared.hoverDelaySeconds
                 if delay > 0.01 {
                     try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
                 }
-                guard !Task.isCancelled, isHovered else { return }
+                guard !Task.isCancelled, isHovered, !hasActiveNotification else { return }
                 expandTo(true)
             }
         } else if IslandMetrics.shouldCollapseOnHoverExit(
@@ -1590,6 +1925,11 @@ struct NotchStatusView: View {
                 withAnimation(morphAnimation) {
                     activeNotification = event
                 }
+                if event.kind == .accessRequest || event.kind == .waiting {
+                    loadNotificationDetail(for: event)
+                } else {
+                    cancelNotificationDetail()
+                }
                 notificationDismissTask?.cancel()
                 if event.kind == .completed || event.kind == .failed {
                     notificationDismissTask = Task { @MainActor in
@@ -1610,6 +1950,7 @@ struct NotchStatusView: View {
                     withAnimation(morphAnimation) {
                         activeNotification = nil
                     }
+                    cancelNotificationDetail()
                 }
             }
 
@@ -1657,6 +1998,7 @@ struct NotchStatusView: View {
                 withAnimation(morphAnimation) {
                     activeNotification = nil
                 }
+                cancelNotificationDetail()
             }
         }
     }

@@ -615,8 +615,56 @@ struct LogicCheckMain {
             "keep expanded while composing prompt")
         check(IslandMetrics.requiresApproval("accessRequest"), "accessRequest requires approval")
         check(IslandMetrics.requiresApproval("access_request"), "access_request requires approval")
+        check(IslandMetrics.requiresApproval("waiting"), "waiting requires approval")
         check(!IslandMetrics.requiresApproval("progress"), "progress does not require approval")
         check(!IslandMetrics.requiresApproval("idle"), "idle does not require approval")
+
+        // -- Popup hover must not steal the approval card (bug: island expands
+        // over the popup and its buttons become unclickable)
+
+        check(
+            IslandMetrics.shouldExpandOnHover(
+                hovering: true, isExpanded: false, hasPopup: false),
+            "hover expands when no popup is visible")
+        check(
+            !IslandMetrics.shouldExpandOnHover(
+                hovering: true, isExpanded: false, hasPopup: true),
+            "hover does not expand over an approval popup")
+        check(
+            !IslandMetrics.shouldExpandOnHover(
+                hovering: true, isExpanded: true, hasPopup: false),
+            "hover does not re-expand an expanded island")
+        check(
+            !IslandMetrics.shouldExpandOnHover(
+                hovering: false, isExpanded: false, hasPopup: false),
+            "no expansion without hover")
+
+        // -- Actionable pane ids route pane-less standalone agents
+
+        check(
+            IslandMetrics.actionablePaneId(paneId: "w3:p1", source: "claude") == "w3:p1",
+            "multiplexer pane id is actionable")
+        check(
+            IslandMetrics.actionablePaneId(paneId: nil, source: "claude")
+                == "standalone:claude",
+            "standalone agent gets a synthetic pane id")
+        check(
+            IslandMetrics.actionablePaneId(paneId: "", source: "opencode")
+                == "standalone:opencode",
+            "empty pane id falls back to standalone")
+        check(
+            IslandMetrics.actionablePaneId(paneId: nil, source: nil) == nil,
+            "no pane and no source has no actionable id")
+
+        // -- Peek anchors to the visible island, not the 504x560 host window
+
+        let peekAnchor = IslandMetrics.screenRect(
+            fromGlobalRect: CGRect(x: 24, y: 0, width: 456, height: 82),
+            windowFrame: CGRect(x: 600, y: 530, width: 504, height: 560))
+        check(peekAnchor.minX == 624, "global rect x maps to screen x")
+        check(peekAnchor.maxY == 1090, "global rect top maps to window top")
+        check(peekAnchor.minY == 1008, "global rect bottom maps to screen y")
+        check(peekAnchor.width == 456, "visible island width is preserved")
 
         // -- Approval variance
 
@@ -1822,6 +1870,40 @@ struct LogicCheckMain {
             check(
                 manager.currentEventForTesting == nil,
                 "L14 moved-on prompt self-clears (phantom kill)")
+
+            // Answered prompts must not re-appear when a status hook repeats
+            // the same blocked line. A progress event clears the window, so a
+            // genuinely new request still surfaces.
+            let answered = AgentEvent(
+                source: "claude", kind: .accessRequest, title: "rm -rf build",
+                message: "Claude wants to use Bash", paneId: "ack-1",
+                workspaceId: nil, variance: .yesNo, choices: nil,
+                playSound: false, persistent: false)
+            manager.publishEventForTesting(answered)
+            check(
+                manager.currentEventForTesting?.paneId == "ack-1",
+                "L14 answered prompt initially visible")
+            manager.acknowledgeApproval(paneId: "ack-1")
+            check(
+                manager.currentEventForTesting == nil,
+                "L14 acknowledge clears the visible prompt")
+            manager.publishEventForTesting(answered)
+            check(
+                manager.currentEventForTesting == nil,
+                "L14 duplicate blocked event stays suppressed after answer")
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "claude", kind: .progress, title: "working",
+                    message: nil, paneId: "ack-1", workspaceId: nil,
+                    variance: nil, choices: nil, playSound: false,
+                    persistent: false))
+            check(
+                manager.currentEventForTesting?.kind == .progress,
+                "L14 progress clears the answered window")
+            manager.publishEventForTesting(answered)
+            check(
+                manager.currentEventForTesting?.kind == .accessRequest,
+                "L14 a new prompt after progress is not suppressed")
         }
 
         // L15. Full-screen & space policy: pure visibility policy and
@@ -6357,9 +6439,34 @@ struct LogicCheckMain {
             topInset: 32, notchWidth: 200, hasNotification: true
         )
         check(
-            closedNotificationSize.height == 32 + IslandMetrics.notificationHeight
+            closedNotificationSize.height
+                == 32 + IslandMetrics.notificationTopGap + IslandMetrics.notificationHeight
                 && closedNotificationSize.width == IslandMetrics.notificationWidth,
-            "L142 closedSize with hasNotification true matches notification dimensions"
+            "L142 closedSize adds the notch gap above a notification"
+        )
+        check(
+            IslandMetrics.notificationTopOffset(topInset: 38)
+                == 38 + IslandMetrics.notificationTopGap,
+            "L142 notification starts below the notch"
+        )
+        check(
+            IslandMetrics.notificationCardHeight(for: .accessRequest)
+                == IslandMetrics.approvalNotificationHeight,
+            "L142 approval cards use the taller detail height"
+        )
+        check(
+            IslandMetrics.notificationCardHeight(for: .completed)
+                == IslandMetrics.notificationHeight,
+            "L142 completion cards keep the compact height"
+        )
+        let approvalNotificationSize = IslandMetrics.closedSize(
+            topInset: 38, notchWidth: 200, hasNotification: true,
+            cardHeight: IslandMetrics.approvalNotificationHeight)
+        check(
+            approvalNotificationSize.height
+                == 38 + IslandMetrics.notificationTopGap
+                + IslandMetrics.approvalNotificationHeight,
+            "L142 approval popup clears the notch"
         )
         let standardClosedSize = IslandMetrics.closedSize(
             topInset: 32, notchWidth: 200, hasNotification: false
@@ -6367,6 +6474,40 @@ struct LogicCheckMain {
         check(
             standardClosedSize.height == 32 + IslandMetrics.pillHeight,
             "L142 closedSize without notification matches topInset + pillHeight"
+        )
+
+        // Approval details keep the exact command and path. The HUD cleaner
+        // shortens absolute paths, which is wrong for a security prompt.
+        let rawApproval = "\u{001B}[31mBash\u{001B}[0m\nrm -rf /Users/test/Projects/demo/build"
+        let cleanedApproval = IslandMetrics.cleanApprovalDetail(rawApproval)
+        check(
+            cleanedApproval.contains("/Users/test/Projects/demo/build"),
+            "L142 approval detail preserves the full path (got \(cleanedApproval))"
+        )
+        check(
+            !cleanedApproval.contains("\u{001B}"),
+            "L142 approval detail strips ANSI escapes"
+        )
+        check(
+            IslandMetrics.isGenericApprovalText(nil)
+                && IslandMetrics.isGenericApprovalText("Agent requires input")
+                && IslandMetrics.isGenericApprovalText("Claude needs approval"),
+            "L142 generic approval text is detected"
+        )
+        check(
+            !IslandMetrics.isGenericApprovalText("rm -rf build"),
+            "L142 concrete commands are not generic"
+        )
+        let excerpt = IslandMetrics.approvalExcerpt(
+            from: "line1\n──────\nDo you want to proceed?\nEsc to interrupt",
+            maxLines: 4)
+        check(
+            excerpt.contains("Do you want to proceed?"),
+            "L142 pane excerpt keeps the prompt (got \(excerpt))"
+        )
+        check(
+            !excerpt.contains("Esc to interrupt"),
+            "L142 pane excerpt drops status-bar chrome"
         )
 
         // 2. ApprovalNotificationController action and category constants
@@ -7718,19 +7859,22 @@ struct LogicCheckMain {
             )
 
             // 2. Minimal Reveal Target Calculation
-            let reveal0 = StripLayoutEngine.revealTarget(columnIndex: 0, columns: cols, viewport: viewport)
+            let reveal0 = StripLayoutEngine.revealTarget(
+                columnIndex: 0, columns: cols, viewport: viewport)
             check(
                 reveal0 == 0.0,
                 "L152 revealTarget for first column requires 0 scroll"
             )
-            let reveal2 = StripLayoutEngine.revealTarget(columnIndex: 2, columns: cols, viewport: viewport)
+            let reveal2 = StripLayoutEngine.revealTarget(
+                columnIndex: 2, columns: cols, viewport: viewport)
             check(
                 reveal2 > 0.0 && reveal2 <= layout.maxScrollOffset,
                 "L152 revealTarget scrolls just enough to reveal last column"
             )
 
             // 3. Center Target Calculation
-            let center1 = StripLayoutEngine.centerTarget(columnIndex: 1, columns: cols, viewport: viewport)
+            let center1 = StripLayoutEngine.centerTarget(
+                columnIndex: 1, columns: cols, viewport: viewport)
             check(
                 center1 >= 0.0,
                 "L152 centerTarget centers target column"
@@ -7765,19 +7909,22 @@ struct LogicCheckMain {
                 abs(spring.x - 400.0) < 1.0,
                 "L152 DampedSpring converges accurately to target"
             )
-            let rubber = DampedSpring.rubberBand(offset: -50.0, maxOffset: 500.0, screenWidth: 1000.0)
+            let rubber = DampedSpring.rubberBand(
+                offset: -50.0, maxOffset: 500.0, screenWidth: 1000.0)
             check(
                 rubber < 0.0 && rubber > -50.0,
                 "L152 rubberBand applies asymptotic resistance to overscroll"
             )
 
             // 7. Topology Mutations (Stack, Unstack, Reorder)
-            let stacked = StripLayoutEngine.stack(sourceColIndex: 0, targetColIndex: 1, columns: &cols)
+            let stacked = StripLayoutEngine.stack(
+                sourceColIndex: 0, targetColIndex: 1, columns: &cols)
             check(
                 stacked && cols.count == 2 && cols[0].windows.count == 2,
                 "L152 stack merges column 0 into column 1"
             )
-            let unstacked = StripLayoutEngine.unstack(columnIndex: 0, popToRight: true, columns: &cols)
+            let unstacked = StripLayoutEngine.unstack(
+                columnIndex: 0, popToRight: true, columns: &cols)
             check(
                 unstacked && cols.count == 3,
                 "L152 unstack pops window back into dedicated column"
@@ -7789,7 +7936,8 @@ struct LogicCheckMain {
             )
 
             // Layer 153: Overview Zoom Mode, Auto-Chaining, GUI Dispatcher & Ghostty Bundle
-            let overview = StripLayoutEngine.computeOverviewLayout(columns: cols, viewport: viewport)
+            let overview = StripLayoutEngine.computeOverviewLayout(
+                columns: cols, viewport: viewport)
             check(
                 overview.columnFrames.count == 3,
                 "L153 computeOverviewLayout produces scaled frames for all 3 columns"
@@ -7799,31 +7947,153 @@ struct LogicCheckMain {
                 "L153 computeOverviewLayout fits all columns on screen with 0 scroll offset"
             )
             check(
-                overview.visibleWindowIDs.contains("w1") && overview.visibleWindowIDs.contains("w2") && overview.visibleWindowIDs.contains("w3"),
+                overview.visibleWindowIDs.contains("w1") && overview.visibleWindowIDs.contains("w2")
+                    && overview.visibleWindowIDs.contains("w3"),
                 "L153 computeOverviewLayout marks all windows visible"
             )
 
             let testWins = [
-                StripWindowInfo(id: "ide-1", pid: 101, appBundleID: "com.google.antigravity-ide", title: "IDE"),
-                StripWindowInfo(id: "browser-1", pid: 102, appBundleID: "company.thebrowser.dia", title: "localhost:3000"),
-                StripWindowInfo(id: "term-1", pid: 103, appBundleID: "com.mitchellh.ghostty", title: "tests"),
+                StripWindowInfo(
+                    id: "ide-1", pid: 101, appBundleID: "com.google.antigravity-ide", title: "IDE"),
+                StripWindowInfo(
+                    id: "browser-1", pid: 102, appBundleID: "company.thebrowser.dia",
+                    title: "localhost:3000"),
+                StripWindowInfo(
+                    id: "term-1", pid: 103, appBundleID: "com.mitchellh.ghostty", title: "tests"),
             ]
-            let chainedCols = StripLayoutEngine.autoChainWorkflow(windows: testWins, projectSlug: "bantay")
+            let chainedCols = StripLayoutEngine.autoChainWorkflow(
+                windows: testWins, projectSlug: "bantay")
             check(
                 chainedCols.count == 3,
                 "L153 autoChainWorkflow produces 3 triage stages (IDE -> Browser -> Runner)"
             )
             check(
-                chainedCols[0].windows.first?.id == "ide-1" && chainedCols[1].windows.first?.id == "browser-1",
+                chainedCols[0].windows.first?.id == "ide-1"
+                    && chainedCols[1].windows.first?.id == "browser-1",
                 "L153 autoChainWorkflow orders IDE first and browser second"
+            )
+            let threeStageWidth = chainedCols.reduce(0.0) { $0 + $1.widthFraction }
+            check(
+                abs(threeStageWidth - 1.0) < 0.0001
+                    && abs(chainedCols[0].widthFraction - 0.5) < 0.0001
+                    && abs(chainedCols[1].widthFraction - 0.3) < 0.0001
+                    && abs(chainedCols[2].widthFraction - 0.2) < 0.0001,
+                "L153 autoChainWorkflow normalizes three-stage widths to 50/30/20"
+            )
+
+            // Layer 155: Auto-Chain Project Filtering, Role Classification & Width Fit
+            check(
+                StripLayoutEngine.chainRole(
+                    for: StripWindowInfo(
+                        id: "term-role", appBundleID: "com.mitchellh.ghostty", title: "tests")
+                ) == .terminal,
+                "L155 autoChainWorkflow classifies Ghostty as terminal"
+            )
+            check(
+                StripLayoutEngine.chainRole(
+                    for: StripWindowInfo(
+                        id: "notes-role", appBundleID: "com.apple.Notes", title: "tests")
+                ) == .other,
+                "L155 autoChainWorkflow does not mislabel a note titled tests as terminal"
+            )
+            check(
+                StripLayoutEngine.chainRole(
+                    for: StripWindowInfo(
+                        id: "cursor-role",
+                        appBundleID: "com.todesktop.230313mzl4w4u92",
+                        title: "Bantay")
+                ) == .ide,
+                "L155 autoChainWorkflow classifies Cursor by bundle identifier"
+            )
+
+            let projectWins = [
+                StripWindowInfo(
+                    id: "ide-project", appBundleID: "com.google.antigravity-ide",
+                    title: "Bantay-TUI", agentCwd: "/Users/rhyon/Projects/bantay-tui"),
+                StripWindowInfo(
+                    id: "ide-other", appBundleID: "com.google.antigravity-ide",
+                    title: "Other Project", agentCwd: "/Users/rhyon/Projects/other"),
+                StripWindowInfo(
+                    id: "browser-project", appBundleID: "company.thebrowser.dia",
+                    title: "localhost:3000/bantay-tui"),
+                StripWindowInfo(
+                    id: "browser-other", appBundleID: "com.google.chrome",
+                    title: "Other Project Dashboard"),
+                StripWindowInfo(
+                    id: "term-project", appBundleID: "com.mitchellh.ghostty",
+                    title: "bantay-tui", agentCwd: "/Users/rhyon/Projects/bantay-tui"),
+                StripWindowInfo(
+                    id: "term-other", appBundleID: "com.mitchellh.ghostty",
+                    title: "other", agentCwd: "/Users/rhyon/Projects/other"),
+                StripWindowInfo(
+                    id: "notes-project", appBundleID: "com.apple.Notes", title: "Notes"),
+            ]
+            let projectChain = StripLayoutEngine.autoChainWorkflow(
+                windows: projectWins, projectSlug: "bantay-tui")
+            check(
+                projectChain.count == 4,
+                "L155 autoChainWorkflow keeps workflow and Other stages"
+            )
+            check(
+                projectChain[0].windows.map(\.id) == ["ide-project"]
+                    && projectChain[1].windows.map(\.id) == ["browser-project"]
+                    && projectChain[2].windows.map(\.id) == ["term-project"],
+                "L155 autoChainWorkflow prefers windows matching the project slug"
+            )
+            check(
+                projectChain[3].windows.map(\.id) == ["notes-project"],
+                "L155 autoChainWorkflow puts non-terminal apps in Other"
+            )
+            let projectWidth = projectChain.reduce(0.0) { $0 + $1.widthFraction }
+            check(
+                abs(projectWidth - 1.0) < 0.0001
+                    && abs(projectChain[0].widthFraction - 5.0 / 11.0) < 0.0001
+                    && abs(projectChain[1].widthFraction - 3.0 / 11.0) < 0.0001
+                    && abs(projectChain[2].widthFraction - 2.0 / 11.0) < 0.0001
+                    && abs(projectChain[3].widthFraction - 1.0 / 11.0) < 0.0001,
+                "L155 autoChainWorkflow normalizes four-stage widths to fit the viewport"
+            )
+
+            let partialMatch = StripLayoutEngine.autoChainWorkflow(
+                windows: [
+                    StripWindowInfo(
+                        id: "ide-match", appBundleID: "com.google.antigravity-ide",
+                        title: "bantay-tui"),
+                    StripWindowInfo(
+                        id: "browser-a", appBundleID: "com.google.chrome", title: "Dashboard"),
+                    StripWindowInfo(
+                        id: "browser-b", appBundleID: "com.google.chrome", title: "Docs"),
+                ],
+                projectSlug: "bantay-tui")
+            check(
+                partialMatch.count == 2
+                    && partialMatch[0].windows.map(\.id) == ["ide-match"]
+                    && Set(partialMatch[1].windows.map(\.id)) == ["browser-a", "browser-b"],
+                "L155 autoChainWorkflow keeps a stage when no window matches the slug"
+            )
+
+            let otherOnly = StripLayoutEngine.autoChainWorkflow(
+                windows: [
+                    StripWindowInfo(
+                        id: "notes-only", appBundleID: "com.apple.Notes", title: "Notes")
+                ])
+            check(
+                otherOnly.count == 1 && abs(otherOnly[0].widthFraction - 1.0) < 0.0001,
+                "L155 autoChainWorkflow gives a single Other window the full width"
+            )
+            check(
+                StripLayoutEngine.autoChainWorkflow(windows: []).isEmpty,
+                "L155 autoChainWorkflow returns no columns for an empty window set"
             )
 
             check(
-                StandaloneAgentDispatcher.isGuiAgent(name: "antigravity") && StandaloneAgentDispatcher.isGuiAgent(name: "cursor"),
+                StandaloneAgentDispatcher.isGuiAgent(name: "antigravity")
+                    && StandaloneAgentDispatcher.isGuiAgent(name: "cursor"),
                 "L153 isGuiAgent identifies Antigravity and Cursor as desktop GUI IDEs"
             )
             check(
-                !StandaloneAgentDispatcher.isGuiAgent(name: "claude") && !StandaloneAgentDispatcher.isGuiAgent(name: "opencode"),
+                !StandaloneAgentDispatcher.isGuiAgent(name: "claude")
+                    && !StandaloneAgentDispatcher.isGuiAgent(name: "opencode"),
                 "L153 isGuiAgent identifies Claude Code and OpenCode as TUI terminal agents"
             )
 
@@ -7831,10 +8101,12 @@ struct LogicCheckMain {
                 "❯ User: Build HUD Phase 3",
                 "→ Running swift test",
                 "● Phase 3 verified and complete",
-                "│ background process output line"
+                "│ background process output line",
             ])
             check(
-                parsedTurns.count == 4 && parsedTurns[0].kind == .userPrompt && parsedTurns[1].kind == .toolCall && parsedTurns[2].kind == .assistant && parsedTurns[3].kind == .raw,
+                parsedTurns.count == 4 && parsedTurns[0].kind == .userPrompt
+                    && parsedTurns[1].kind == .toolCall && parsedTurns[2].kind == .assistant
+                    && parsedTurns[3].kind == .raw,
                 "L153 parseTranscript parses formatted HUD lines into structured Turn cards"
             )
 
@@ -7950,6 +8222,130 @@ struct LogicCheckMain {
                     && ControlGateway.route(method: "strip.unstack") == .stripUnstack
                     && ControlGateway.route(method: "strip.tabbed") == .stripTabbed,
                 "L154 ControlGateway routes strip socket methods to matching verbs"
+            )
+
+            // Layer 156: Full-Screen Strip Suppression & Window Navigation
+            check(
+                !IslandMetrics.FullScreenPolicy.shouldShowStrip(
+                    isEnabled: true, inFullScreen: true),
+                "L156 strip UI hidden while full screen"
+            )
+            check(
+                IslandMetrics.FullScreenPolicy.shouldShowStrip(
+                    isEnabled: true, inFullScreen: false),
+                "L156 strip UI visible outside full screen"
+            )
+            check(
+                !IslandMetrics.FullScreenPolicy.shouldShowStrip(
+                    isEnabled: false, inFullScreen: false),
+                "L156 disabled strip stays hidden"
+            )
+
+            let primaryCG = IslandMetrics.FullScreenPolicy.cgScreenRect(
+                appKitFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                primaryMaxY: 982)
+            check(
+                primaryCG == CGRect(x: 0, y: 0, width: 1512, height: 982),
+                "L156 primary screen frame converts to CG origin"
+            )
+            let aboveCG = IslandMetrics.FullScreenPolicy.cgScreenRect(
+                appKitFrame: CGRect(x: 0, y: 982, width: 1512, height: 800),
+                primaryMaxY: 982)
+            check(
+                aboveCG == CGRect(x: 0, y: -800, width: 1512, height: 800),
+                "L156 display above primary gets a negative CG Y"
+            )
+            let belowCG = IslandMetrics.FullScreenPolicy.cgScreenRect(
+                appKitFrame: CGRect(x: 0, y: -900, width: 1512, height: 900),
+                primaryMaxY: 982)
+            check(
+                belowCG == CGRect(x: 0, y: 982, width: 1512, height: 900),
+                "L156 display below primary gets a positive CG Y"
+            )
+
+            let fullScreenRect = CGRect(x: 0, y: 0, width: 1710, height: 1112)
+            check(
+                IslandMetrics.FullScreenPolicy.coversScreen(
+                    windowFrame: fullScreenRect, screenFrame: fullScreenRect),
+                "L156 exact screen cover is full screen"
+            )
+            check(
+                IslandMetrics.FullScreenPolicy.coversScreen(
+                    windowFrame: CGRect(x: 0, y: 0.5, width: 1710, height: 1112),
+                    screenFrame: fullScreenRect),
+                "L156 sub-point rounding still counts as full screen"
+            )
+            check(
+                !IslandMetrics.FullScreenPolicy.coversScreen(
+                    windowFrame: CGRect(x: 0, y: 25, width: 1710, height: 1087),
+                    screenFrame: fullScreenRect),
+                "L156 menu-bar-inset window is not full screen"
+            )
+
+            let navigationColumns = [
+                StripColumn(
+                    windows: [
+                        StripWindowInfo(id: "nav-a", pid: 1, title: "A"),
+                        StripWindowInfo(id: "nav-b", pid: 1, title: "B"),
+                    ],
+                    widthFraction: 0.5,
+                    isTabbed: true,
+                    focusedRow: 0),
+                StripColumn(
+                    windows: [StripWindowInfo(id: "nav-c", pid: 2, title: "C")],
+                    widthFraction: 0.5,
+                    isTabbed: false,
+                    focusedRow: 0),
+            ]
+            let foundB = StripLayoutEngine.findWindow(id: "nav-b", columns: navigationColumns)
+            check(
+                foundB?.column == 0 && foundB?.row == 1,
+                "L156 findWindow locates a tabbed row"
+            )
+            let foundC = StripLayoutEngine.findWindow(id: "nav-c", columns: navigationColumns)
+            check(
+                foundC?.column == 1 && foundC?.row == 0,
+                "L156 findWindow locates a separate column"
+            )
+            check(
+                StripLayoutEngine.findWindow(id: "missing", columns: navigationColumns) == nil,
+                "L156 findWindow returns nil for an unknown window"
+            )
+            check(
+                StripLayoutEngine.nextRow(current: 0, count: 3) == 1
+                    && StripLayoutEngine.nextRow(current: 2, count: 3) == 0,
+                "L156 nextRow advances and wraps"
+            )
+            check(
+                StripLayoutEngine.previousRow(current: 0, count: 3) == 2
+                    && StripLayoutEngine.previousRow(current: 1, count: 3) == 0,
+                "L156 previousRow rewinds and wraps"
+            )
+            check(
+                StripLayoutEngine.nextRow(current: 5, count: 3) == 0
+                    && StripLayoutEngine.previousRow(current: 5, count: 3) == 1,
+                "L156 row helpers clamp out-of-range input"
+            )
+            check(
+                StripLayoutEngine.nextRow(current: 0, count: 0) == 0
+                    && StripLayoutEngine.previousRow(current: 0, count: 0) == 0,
+                "L156 row helpers handle an empty column"
+            )
+
+            let fullScreenSnapshot = StripStatusSnapshot(
+                enabled: true,
+                defaultWidthPreset: 0.5,
+                gap: 12,
+                inset: 12,
+                overview: false,
+                isFullScreen: true,
+                activeColumnIndex: 0,
+                accessibility: true,
+                columns: []
+            )
+            check(
+                fullScreenSnapshot.jsonObject["isFullScreen"] as? Bool == true,
+                "L156 strip status exposes full-screen suspension"
             )
         }
 

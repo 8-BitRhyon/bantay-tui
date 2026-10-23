@@ -14,6 +14,17 @@ private enum FileDropTypes {
 @MainActor
 public enum IslandHitTracker {
     public static var interactiveRect: NSRect = .zero
+
+    /// The island's interactive bounds in screen coordinates. SwiftUI reports
+    /// `.global` frames in window content space with a top-left origin, while
+    /// AppKit windows use a bottom-left screen origin. Returns nil until the
+    /// island has reported a non-empty frame.
+    public static func interactiveScreenRect(in window: NSWindow) -> NSRect? {
+        let rect = interactiveRect
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        return IslandMetrics.screenRect(
+            fromGlobalRect: rect, windowFrame: window.frame)
+    }
 }
 
 /// AppKit drag destination hosting SwiftUI island content.

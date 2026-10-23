@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Network
 import SwiftUI
 
@@ -79,20 +80,32 @@ struct DynamicIslandApp: App {
             let sub =
                 CommandLine.arguments.indices.contains(stripIdx + 1)
                 ? CommandLine.arguments[stripIdx + 1] : "toggle"
+            let argumentStart = stripIdx + 2
+            func option(_ flag: String, default defaultValue: String) -> String {
+                let arguments = CommandLine.arguments
+                if let flagIndex = arguments.indices.first(where: {
+                    $0 >= argumentStart && arguments[$0] == flag
+                }), arguments.indices.contains(flagIndex + 1) {
+                    return arguments[flagIndex + 1]
+                }
+                if arguments.indices.contains(argumentStart) {
+                    let candidate = arguments[argumentStart]
+                    if !candidate.hasPrefix("--") {
+                        return candidate
+                    }
+                }
+                return defaultValue
+            }
             switch sub {
             case "toggle":
                 sendSocketCommand(method: "strip.toggle", params: [:])
             case "focus":
-                let dir =
-                    CommandLine.arguments.indices.contains(stripIdx + 2)
-                    ? CommandLine.arguments[stripIdx + 2] : "right"
+                let dir = option("--dir", default: "right")
                 sendSocketCommand(method: "strip.focus", params: ["direction": dir])
             case "center":
                 sendSocketCommand(method: "strip.center", params: [:])
             case "width":
-                let mode =
-                    CommandLine.arguments.indices.contains(stripIdx + 2)
-                    ? CommandLine.arguments[stripIdx + 2] : "cycle"
+                let mode = option("--mode", default: "cycle")
                 sendSocketCommand(method: "strip.width", params: ["mode": mode])
             case "approval":
                 sendSocketCommand(method: "strip.approval", params: [:])
@@ -101,19 +114,29 @@ struct DynamicIslandApp: App {
             case "overview":
                 sendSocketCommand(method: "strip.overview", params: [:])
             case "reorder":
-                let from =
-                    Int(
-                        CommandLine.arguments.indices.contains(stripIdx + 2)
-                            ? CommandLine.arguments[stripIdx + 2] : "0") ?? 0
-                let to =
-                    Int(
-                        CommandLine.arguments.indices.contains(stripIdx + 3)
-                            ? CommandLine.arguments[stripIdx + 3] : "1") ?? 1
+                let arguments = CommandLine.arguments
+                let from: Int
+                let to: Int
+                if let fromIndex = arguments.firstIndex(of: "--from"),
+                    let toIndex = arguments.firstIndex(of: "--to"),
+                    arguments.indices.contains(fromIndex + 1),
+                    arguments.indices.contains(toIndex + 1)
+                {
+                    from = Int(arguments[fromIndex + 1]) ?? 0
+                    to = Int(arguments[toIndex + 1]) ?? 1
+                } else {
+                    let fromRaw =
+                        arguments.indices.contains(stripIdx + 2)
+                        ? arguments[stripIdx + 2] : "0"
+                    let toRaw =
+                        arguments.indices.contains(stripIdx + 3)
+                        ? arguments[stripIdx + 3] : "1"
+                    from = Int(fromRaw) ?? 0
+                    to = Int(toRaw) ?? 1
+                }
                 sendSocketCommand(method: "strip.reorder", params: ["from": from, "to": to])
             case "autochain":
-                let slug =
-                    CommandLine.arguments.indices.contains(stripIdx + 2)
-                    ? CommandLine.arguments[stripIdx + 2] : ""
+                let slug = option("--slug", default: "")
                 sendSocketCommand(
                     method: "strip.autochain", params: slug.isEmpty ? [:] : ["slug": slug])
             case "pin":
@@ -174,6 +197,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor static var didShowOnce = false
     /// True while the user has forced the island visible via the tray menu.
     @MainActor static var isForcedVisible = false
+    /// The island hid itself for a full-screen app and should return when the
+    /// user leaves that Space.
+    @MainActor static var fullScreenHidIsland = false
     /// Set at launch when the one-time welcome sheet must appear.
     @MainActor static var pendingWelcome = false
     /// Mirror of the island's F2 compose field state (set by NotchStatusView)
@@ -182,9 +208,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor static var composingPaneId: String?
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
-    private var fullScreenObserver: NSObjectProtocol?
-    private var fullScreenExitObserver: NSObjectProtocol?
     private var spaceChangeObserver: NSObjectProtocol?
+    private var fullScreenCancellable: AnyCancellable?
     private var wakeObserver: NSObjectProtocol?
     @MainActor private static var settleTask: Task<Void, Never>?
     private var hotkeyMonitors: [Any] = []
@@ -272,6 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
+        FullScreenMonitor.shared.start()
+        bindFullScreenMonitor()
         // Data dir + events file always exist (setup.sh parity) so the
         // events pipeline and LaunchAgent logs have a home.
         LaunchAgent.ensureDataDirectory()
@@ -368,7 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             queue: .main
         ) { note in
             let slug = note.userInfo?["slug"] as? String
-            MainActor.assumeIsolated {
+            _ = MainActor.assumeIsolated {
                 StripWindowManager.shared.autoChainCurrentProject(slug: slug)
             }
         }
@@ -412,6 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 StripWindowManager.shared.toggleTabbed(columnIndex: col)
             }
         }
+        StripStatusProvider.current = { StripWindowManager.shared.statusSnapshot() }
         StripWindowManager.shared.start()
         Self.dbg(
             "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
@@ -427,14 +455,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         {
             openSettings()
         }
+        let shouldShowAtLaunch =
+            Self.isForcedVisible
+            || IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: FullScreenMonitor.shared.isFullScreen,
+                showInFullScreen: config.showInFullScreen)
         if config.hideAtStartup && !config.showIslandWhenIdle {
             Self.dbg("launch: hideAtStartup set, island stays hidden until an event")
-        } else {
+        } else if shouldShowAtLaunch {
             Self.dbg(
                 "launch: showing island (hideAtStartup=\(config.hideAtStartup) idleShow=\(config.showIslandWhenIdle))"
             )
             Self.showAtNotch()
+        } else {
+            Self.dbg("launch: full screen active, island stays hidden")
         }
+    }
+
+    @MainActor
+    private func bindFullScreenMonitor() {
+        fullScreenCancellable = FullScreenMonitor.shared.$isFullScreen
+            .receive(on: DispatchQueue.main)
+            .sink { isFullScreen in
+                Task { @MainActor in
+                    AppDelegate.handleFullScreenStateChange(isFullScreen)
+                }
+            }
     }
 
     @MainActor
@@ -511,20 +557,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         ) { _ in
             MainActor.assumeIsolated { AppDelegate.handleDisplayChange() }
         }
-        fullScreenObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didEnterFullScreenNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition(entering: true) }
-        }
-        fullScreenExitObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didExitFullScreenNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition(entering: false) }
-        }
         spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
@@ -550,6 +582,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             try? await Task.sleep(
                 for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
             guard !Task.isCancelled else { return }
+            FullScreenMonitor.shared.refreshNow()
+            applyFullScreenPolicy(isFullScreen: FullScreenMonitor.shared.isFullScreen)
             reanchorIfGhosted()
             reposition()
             if window?.isVisible == true { showAtNotch() }
@@ -570,29 +604,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    /// Re-evaluate island visibility after a full-screen transition and
-    /// re-anchor once the WindowServer settles the new frame.
+    /// Re-evaluate island visibility after a full-screen change and re-anchor
+    /// once the WindowServer settles the new frame.
     @MainActor
-    static func handleFullScreenTransition(entering: Bool) {
+    static func handleFullScreenStateChange(_ isFullScreen: Bool) {
+        applyFullScreenPolicy(isFullScreen: isFullScreen)
         settleTask?.cancel()
-        if IslandMetrics.FullScreenPolicy.shouldShow(
-            inFullScreen: entering, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
-        {
-            showAtNotch()
-        } else {
-            hide()
-        }
         settleTask = Task { @MainActor in
             try? await Task.sleep(
                 for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
             guard !Task.isCancelled else { return }
-            if IslandMetrics.FullScreenPolicy.shouldShow(
-                inFullScreen: entering, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
-            {
-                showAtNotch()
-            } else {
-                hide()
+            applyFullScreenPolicy(isFullScreen: isFullScreen)
+        }
+    }
+
+    /// Applies the user's "Keep island in full screen" preference without
+    /// resurrecting an island the user or launch settings left hidden.
+    @MainActor
+    static func applyFullScreenPolicy(isFullScreen: Bool) {
+        let shouldShow =
+            isForcedVisible
+            || IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: isFullScreen,
+                showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
+
+        guard shouldShow else {
+            if window?.isVisible == true {
+                fullScreenHidIsland = true
             }
+            hide()
+            return
+        }
+
+        if isFullScreen {
+            // Keep an already-visible island anchored. Do not reveal one that
+            // hideAtStartup or the tray left hidden.
+            if window?.isVisible == true || isForcedVisible {
+                showAtNotch()
+            }
+            return
+        }
+
+        if fullScreenHidIsland {
+            fullScreenHidIsland = false
+            showAtNotch()
+        } else if window?.isVisible == true || isForcedVisible {
+            showAtNotch()
         }
     }
 
@@ -604,6 +661,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             try? await Task.sleep(
                 for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
             guard !Task.isCancelled else { return }
+            FullScreenMonitor.shared.refreshNow()
+            applyFullScreenPolicy(isFullScreen: FullScreenMonitor.shared.isFullScreen)
             reposition()
             if window?.isVisible == true { showAtNotch() }
         }
@@ -886,7 +945,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let agents = AgentEventManager.shared.agents
         let topApproval = agents.first { $0.kind == .accessRequest || $0.kind == .waiting }
-        if let topApproval, let paneId = topApproval.paneId {
+        if let topApproval,
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: topApproval.paneId, source: topApproval.source)
+        {
             let cleanPrompt =
                 topApproval.title.flatMap {
                     let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
@@ -948,7 +1010,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
 
-                if isBlocked, let paneId = agent.paneId {
+                if isBlocked,
+                    let paneId = IslandMetrics.actionablePaneId(
+                        paneId: agent.paneId, source: agent.source)
+                {
                     let header = NSMenuItem(
                         title: "\(agent.source) needs approval", action: nil, keyEquivalent: "")
                     header.isEnabled = false
@@ -1189,9 +1254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard parts.count == 2, let index = Int(parts[1]) else { return }
         let paneId = parts[0]
         let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-        AgentEventManager.shared.performAction(paneId: paneId) {
-            $0.approveChoice(paneId: paneId, choice: number)
-        }
+        AgentEventManager.shared.approveChoice(paneId: paneId, choice: number)
     }
 
     @MainActor
@@ -1218,8 +1281,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         Self.isForcedVisible.toggle()
         if Self.isForcedVisible {
             Self.didShowOnce = true
+            Self.fullScreenHidIsland = false
             Self.showAtNotch()
         } else {
+            Self.fullScreenHidIsland = false
             Self.hide()
         }
         NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
@@ -1319,7 +1384,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         window.contentMinSize = NSSize(width: 640, height: 480)
         window.delegate = self
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        window.level = .floating
+        // Stay above the island panel (`.statusBar + 8`) so opening Settings
+        // never leaves the notch covering its controls.
+        window.level = .statusBar + 9
         Self.dbg("makeSettingsWindow: 4 done")
         return window
     }

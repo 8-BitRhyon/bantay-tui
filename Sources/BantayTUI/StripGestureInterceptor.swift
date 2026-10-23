@@ -77,6 +77,26 @@ public final class StripGestureInterceptor {
             return
         }
 
+        // Up/Down cycles the windows inside the active column.
+        if keyCode == 126 {
+            StripWindowManager.shared.focusPreviousWindow()
+            return
+        }
+        if keyCode == 125 {
+            StripWindowManager.shared.focusNextWindow()
+            return
+        }
+
+        // Home/End jumps to the first/last column.
+        if keyCode == 115 {
+            StripWindowManager.shared.focusFirstColumn()
+            return
+        }
+        if keyCode == 119 {
+            StripWindowManager.shared.focusLastColumn()
+            return
+        }
+
         switch chars {
         case "r":
             StripWindowManager.shared.cycleWidth()
@@ -84,6 +104,9 @@ public final class StripGestureInterceptor {
             StripWindowManager.shared.toggleFullWidth()
         case "c":
             StripWindowManager.shared.centerCurrentColumn()
+        case "m":
+            StripWindowManager.shared.autoChainCurrentProject(
+                slug: StripWindowManager.shared.currentProjectSlug())
         case "a":
             StripWindowManager.shared.jumpToApproval()
         case "p":
@@ -114,7 +137,9 @@ public final class StripGestureInterceptor {
     }
 
     private func handleScrollEvent(_ event: NSEvent) {
-        guard StripWindowManager.shared.config.isEnabled else { return }
+        guard StripWindowManager.shared.config.isEnabled,
+            !StripWindowManager.shared.isFullScreen
+        else { return }
 
         // Trigger on horizontal trackpad swipe with ⌃⌥ or momentum scroll
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)

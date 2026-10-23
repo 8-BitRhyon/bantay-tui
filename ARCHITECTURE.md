@@ -46,11 +46,24 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 - `SettingsView.swift`: Configuration view covering idle styles, dock sides, quota budgets, push notifications, and keybindings.
 
 ### 2. Infinite Strip Window Manager
-- `StripLayoutEngine.swift`: Pure layout calculation engine. Computes column coordinates, viewport scroll targets, width presets, overview zoom scaling, and agent auto-chaining pipelines.
-- `StripWindowManager.swift`: Manages native window frames and coordinates with macOS Accessibility APIs (`AXUIElement`). Handles column focusing, window reordering, and layout updates.
-- `StripGestureInterceptor.swift`: Intercepts two-finger trackpad gestures for smooth horizontal strip scrolling with direction locking.
-- `StripOverlayRenderer.swift`: Renders floating ambient status halos around windows corresponding to agent state (amber for pending approval, green for active work).
+- `StripLayoutEngine.swift`: Pure layout calculation engine. Computes column coordinates, viewport scroll targets, width presets, overview zoom scaling, and agent auto-chaining pipelines. Auto-chain classifies IDE, browser, terminal, and other windows. It prefers project-slug matches per stage and normalizes widths to 1.0.
+- `StripWindowManager.swift`: Manages native window frames with macOS Accessibility APIs (`AXUIElement`). Scans live windows for auto-chain. Tracks the focused `CGWindowID` for focus and navigation. Skips window tiling when a full-screen app is active.
+- `StripStatusProvider.swift`: Sendable snapshot bridge between the AppKit strip manager and the control gateway. Keeps the pure logic harness free of UI-only imports.
+- `FullScreenMonitor.swift`: Polls the frontmost app and publishes `isFullScreen`. Uses the Accessibility `AXFullScreen` attribute first. Falls back to window bounds for apps that do not expose the attribute.
+- `StripGestureInterceptor.swift`: Intercepts global strip hotkeys and two-finger trackpad gestures. Column and window navigation use `⌃⌥` chords. Scroll gestures stay disabled in full screen.
+- `StripOverlayRenderer.swift`: Renders floating ambient status halos around windows corresponding to agent state (amber for pending approval, green for active work). Halo and chevron panels hide independently. All overlay panels hide in full screen.
 - `StripViewportAnimator.swift`: Numerical solver for damped harmonic springs with asymptotic resistance outside canvas bounds.
+
+#### Full-Screen Suppression
+
+`FullScreenMonitor` reports the full-screen state of the frontmost app. When the state is true, the strip manager takes these actions:
+
+1. Hide status halos, navigation chevrons, and the HUD minimap.
+2. Stop the viewport animator.
+3. Skip `syncWindows` and frame application.
+4. Resume layout when the state becomes false.
+
+A per-window `AXFullScreen` check also guards `applyComputedFrames`. This check prevents a stale timer tick from resizing a full-screen window. The island uses the same monitor. Its `showInFullScreen` setting stays independent from the strip.
 
 ### 3. Agent Telemetry & Event Ingestion
 - `AgentEventManager.swift`: Core coordination actor. Merges push events and periodic scans into a unified agent roster, calculates active run-rates, and tracks pending approvals.
@@ -62,7 +75,7 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 
 ### 4. Input & Keystroke Automation
 - `StandaloneAgentDispatcher.swift`: Synthesizes keystrokes into target applications. For desktop GUI IDEs, it focuses the chat input with `⌘L`, pastes text with `⌘V`, and presses Return. For terminal agents, it writes directly into the shell.
-- `TerminalFocusser.swift`: Resolves the target process and activates its hosting application using macOS Accessibility and AppleScript. Prioritizes running terminals and IDEs via an ordered registry.
+- `TerminalFocusser.swift`: Resolves the target process and activates its hosting application with `NSWorkspace`. Prioritizes running terminals and IDEs via an ordered registry.
 - `PlexerAdapter.swift`: Common interface for multiplexers. Automatically resolves active adapters to `TmuxAdapter`, `ZellijAdapter`, or `HerdrSocketAdapter`.
 
 ### 5. Control Gateway & External Tools
@@ -85,7 +98,23 @@ Approval prompts support three variance types:
 
 - **Yes or No Prompts**: Sends positive or negative confirmation (`y` or `n` followed by Return).
 - **Numbered Choices**: Sends the selected index (`1` through `9` followed by Return).
-- **Multi-Select Prompts**: Sends selected indices as a comma-separated list (`1,3` followed by Return).
+- **Multi-Select Prompts**: Sends selected indices as one space-separated line (`1 3` followed by Return).
+
+Every approval surface routes through `AgentEventManager`: the notch popup, roster rows, Peek drawer, Notification Center actions, and menu-bar actions. The manager writes OpenCode decisions and sends multiplexer actions. It sends standalone keystrokes through `StandaloneAgentDispatcher`.
+
+Standalone agents have no multiplexer pane id. `IslandMetrics.actionablePaneId` derives a synthetic `standalone:<source>` id. This id keeps the popup, Notification Center, and menu bar in agreement and resolves the agent cwd for dispatch.
+
+The closed notch shows an approval popup with Approve and Deny controls, numbered choice controls, or multi-select controls. Hover expansion is suppressed while this popup is visible. The popup keeps its buttons under the pointer.
+
+The popup starts below the physical notch. It shows the exact command, file path, tool, or question instead of a generic label. When a multiplexer event has no title, the popup reads a live pane excerpt. Approval detail text skips the HUD cleaner because that cleaner shortens absolute paths.
+
+Approval input synthesis uses Core Graphics keyboard events. This reuses the Accessibility grant that Bantay already holds and avoids AppleScript or System Events, which trigger a separate macOS Automation prompt.
+
+macOS TCC ties Accessibility grants to a code requirement. Ad-hoc signatures use the per-build cdhash, so every rebuild looks like a new app. Local installs therefore use a stable self-signed `Bantay Local Dev` certificate, created by `scripts/ensure-dev-signing-identity.sh` on first setup. The resulting requirement is anchored to the certificate, so the Accessibility grant survives later rebuilds. Distribution builds still use Developer ID signing and notarization.
+
+The Accessibility prompt is shown at most once per app process. A stale grant cannot create a prompt loop when the strip starts or toggles.
+
+After an approval action, the manager clears any pending state for that pane and removes the visible prompt. Duplicate `blocked` or `waiting` events for the same pane stay suppressed for 12 seconds, or until the agent reports a different status. This prevents a repeated popup for a request the user just answered.
 
 The approval heartbeat checks pending prompts against live processes on every cycle. If an agent advances or terminates independently, stale prompts clear automatically.
 
@@ -93,7 +122,7 @@ The approval heartbeat checks pending prompts against live processes on every cy
 
 | Subsystem | Implementation Strategy |
 |---|---|
-| Full-Screen & Spaces | Observes workspace changes and full-screen events. Delays re-anchoring by 350ms to ensure correct window placement across Spaces. |
+| Full-Screen & Spaces | Observes workspace changes and full-screen state. Delays re-anchoring by 350ms for correct placement. Hides strip overlays and tiling in full screen. |
 | Menu Bar Clearance | Measures auxiliary menu bar areas reported by macOS. Clamps idle status chips to available clear space. |
 | Clamshell & Display Wake | Listens for display configuration changes. Re-anchors windows if coordinates fall outside visible screen bounds. |
 | Process Safety | Runs heavy I/O, SQLite inspection, and transcript parsing in detached background tasks off the main thread. |

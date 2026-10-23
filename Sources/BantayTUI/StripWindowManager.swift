@@ -20,6 +20,10 @@ public final class StripWindowManager: ObservableObject {
     @Published public private(set) var viewport: StripViewport
     @Published public private(set) var layoutResult: StripLayoutResult = StripLayoutResult()
     @Published public var isOverviewMode: Bool = false
+    /// True while the frontmost app is full screen. The strip suspends its
+    /// overlays and window tiling so it cannot cover or resize the full-screen
+    /// app the user is working in.
+    @Published public private(set) var isFullScreen: Bool = false
 
     private let registry = StripWindowRegistry.shared
     private let animator: StripViewportAnimator
@@ -30,6 +34,8 @@ public final class StripWindowManager: ObservableObject {
     private var screenChangeObserver: Any?
     private var syncTimer: Timer?
     private var eventCancellable: AnyCancellable?
+    private var fullScreenCancellable: AnyCancellable?
+    private var viewportScreen: NSScreen?
 
     private init() {
         let loadedConfig = StripConfiguration.load()
@@ -67,6 +73,15 @@ public final class StripWindowManager: ObservableObject {
 
         updateViewportBounds()
         interceptor.start()
+        FullScreenMonitor.shared.start()
+        bindFullScreenMonitor()
+
+        // Mirror the current value immediately; the strip may start while the
+        // user is already inside a full-screen app.
+        isFullScreen = FullScreenMonitor.shared.isFullScreen
+        if isFullScreen {
+            overlay.hideAll()
+        }
 
         // 1. Observe active application switches
         appActivateObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -133,6 +148,25 @@ public final class StripWindowManager: ObservableObject {
         syncTimer = nil
         eventCancellable?.cancel()
         eventCancellable = nil
+        fullScreenCancellable?.cancel()
+        fullScreenCancellable = nil
+    }
+
+    private func bindFullScreenMonitor() {
+        fullScreenCancellable?.cancel()
+        fullScreenCancellable = FullScreenMonitor.shared.$isFullScreen
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in
+                guard let self, self.isFullScreen != value else { return }
+                self.isFullScreen = value
+                if value {
+                    self.overlay.hideAll()
+                    self.animator.stop()
+                } else {
+                    self.syncWindows()
+                    self.updateLayout(animate: true)
+                }
+            }
     }
 
     /// Toggles the strip window manager on or off.
@@ -160,6 +194,7 @@ public final class StripWindowManager: ObservableObject {
             NSScreen.screens.first(where: { NSMouseInRect(mouseLoc, $0.frame, false) })
             ?? NSScreen.main ?? NSScreen.screens.first
         let vf = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1710, height: 1000)
+        viewportScreen = screen
 
         viewport.screenOriginX = vf.origin.x
         viewport.screenOriginY = vf.origin.y
@@ -171,9 +206,14 @@ public final class StripWindowManager: ObservableObject {
 
     /// Discovers system windows and reconciles them into strip columns.
     public func syncWindows() {
-        guard config.isEnabled else { return }
+        guard config.isEnabled, !isFullScreen else { return }
         let discovered = registry.scanWindows(ignoredBundleIDs: config.ignoredBundleIDs)
         guard !discovered.isEmpty else { return }
+
+        // Track the exact focused window, not just the frontmost PID. This
+        // keeps the active column and focused tab correct when one app owns
+        // several windows on different parts of the strip.
+        let focusedWindowID = registry.frontmostWindowID()
 
         let discoveredMap = Dictionary(uniqueKeysWithValues: discovered.map { ($0.id, $0) })
         var updatedColumns: [StripColumn] = []
@@ -212,7 +252,9 @@ public final class StripWindowManager: ObservableObject {
             }
             self.columns = updatedColumns
             activeColumnIndex = targetIdx
-            updateLayout(animate: true)
+            let oldActive = activeColumnIndex
+            reconcileFocusedWindow(focusedWindowID)
+            updateLayout(animate: oldActive != activeColumnIndex)
             return
         }
 
@@ -221,11 +263,36 @@ public final class StripWindowManager: ObservableObject {
             activeColumnIndex = max(0, columns.count - 1)
         }
 
-        updateLayout(animate: false)
+        let oldActive = activeColumnIndex
+        reconcileFocusedWindow(focusedWindowID)
+        updateLayout(animate: oldActive != activeColumnIndex)
+    }
+
+    /// Keeps the active column and focused tab on the window the user is
+    /// actually using. A PID match is not enough: one app can own several
+    /// windows in different columns or tabs.
+    private func reconcileFocusedWindow(_ windowID: String?) {
+        guard let windowID,
+            let location = StripLayoutEngine.findWindow(id: windowID, columns: columns)
+        else { return }
+        activeColumnIndex = location.column
+        columns[location.column].focusedRow = location.row
     }
 
     private func handleAppActivated() {
-        guard config.isEnabled else { return }
+        guard config.isEnabled, !isFullScreen else { return }
+        FullScreenMonitor.shared.scheduleRefresh(after: 0.1)
+
+        let focusedWindowID = registry.frontmostWindowID()
+        if let focusedWindowID,
+            let location = StripLayoutEngine.findWindow(id: focusedWindowID, columns: columns)
+        {
+            activeColumnIndex = location.column
+            columns[location.column].focusedRow = location.row
+            centerCurrentColumn()
+            return
+        }
+
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         for (colIdx, col) in columns.enumerated() {
             if let rowIdx = col.windows.firstIndex(where: { $0.pid == frontPID }) {
@@ -263,6 +330,11 @@ public final class StripWindowManager: ObservableObject {
     }
 
     private func applyComputedFrames() {
+        guard config.isEnabled else {
+            overlay.hideAll()
+            return
+        }
+
         if isOverviewMode {
             layoutResult = StripLayoutEngine.computeOverviewLayout(
                 columns: columns, viewport: viewport)
@@ -270,8 +342,19 @@ public final class StripWindowManager: ObservableObject {
             layoutResult = StripLayoutEngine.computeLayout(columns: columns, viewport: viewport)
         }
 
-        // Apply frames to native windows
-        for (winID, frame) in layoutResult.windowFrames {
+        // Full screen suspends the strip. Computing the layout keeps status
+        // snapshots fresh, but applying frames here would resize the
+        // full-screen window and can drop it out of full screen.
+        guard !isFullScreen else {
+            overlay.hideAll()
+            return
+        }
+
+        // Apply frames to native windows. A full-screen window is skipped even
+        // if the global monitor tick is one frame behind, so the strip can
+        // never resize an app out of full screen.
+        for (winID, frame) in layoutResult.windowFrames
+        where !registry.isWindowFullScreen(windowID: winID) {
             registry.applyFrame(windowID: winID, frame: frame)
         }
 
@@ -281,7 +364,10 @@ public final class StripWindowManager: ObservableObject {
             ? columns[activeColumnIndex].activeWindow?.id
             : nil
 
-        let screenRect = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1710, height: 1000)
+        let screenRect =
+            viewportScreen?.frame
+            ?? NSScreen.main?.frame
+            ?? NSRect(x: 0, y: 0, width: 1710, height: 1000)
 
         let allWindows = columns.flatMap(\.windows)
         overlay.updateHalos(
@@ -313,14 +399,76 @@ public final class StripWindowManager: ObservableObject {
         updateLayout(animate: true)
     }
 
-    /// Automatically chains windows into an agent triage workflow:
-    /// IDE/Editor (0.50) -> Browser Preview (0.35) -> Tests/Runner (0.25).
-    public func autoChainCurrentProject(slug: String? = nil) {
-        let allWindows = columns.flatMap(\.windows)
-        let chained = StripLayoutEngine.autoChainWorkflow(windows: allWindows, projectSlug: slug)
-        self.columns = chained
-        self.activeColumnIndex = 0
-        updateLayout(animate: true)
+    /// Automatically chains every open window into an agent triage workflow.
+    /// Scans the live window roster so the chain includes windows that were
+    /// never synced into a column. Enables the strip when needed.
+    @discardableResult
+    public func autoChainCurrentProject(slug: String? = nil) -> Bool {
+        let wasEnabled = config.isEnabled
+        if !wasEnabled {
+            config.isEnabled = true
+        }
+
+        let scanned = registry.scanWindows(ignoredBundleIDs: config.ignoredBundleIDs)
+        let candidates = scanned.isEmpty ? columns.flatMap(\.windows) : scanned
+        let chained = StripLayoutEngine.autoChainWorkflow(windows: candidates, projectSlug: slug)
+        guard !chained.isEmpty else { return false }
+
+        columns = chained
+        activeColumnIndex = 0
+
+        if wasEnabled {
+            updateLayout(animate: true)
+        } else {
+            start()
+        }
+        return true
+    }
+
+    /// Best-effort project slug from the active window's agent working
+    /// directory. Returns nil when the active window is not an agent.
+    public func currentProjectSlug() -> String? {
+        guard columns.indices.contains(activeColumnIndex),
+            let cwd = columns[activeColumnIndex].activeWindow?.agentCwd,
+            !cwd.isEmpty
+        else { return nil }
+        let name = URL(fileURLWithPath: cwd).lastPathComponent
+        return name.isEmpty ? nil : name
+    }
+
+    /// Sendable snapshot of the live strip state for the control gateway.
+    public func statusSnapshot() -> StripStatusSnapshot {
+        StripStatusSnapshot(
+            enabled: config.isEnabled,
+            defaultWidthPreset: config.defaultWidthPreset,
+            gap: config.gap,
+            inset: config.inset,
+            overview: isOverviewMode,
+            isFullScreen: isFullScreen,
+            activeColumnIndex: activeColumnIndex,
+            accessibility: StripWindowRegistry.hasAccessibilityPermission(),
+            columns: columns.enumerated().map { index, column in
+                StripStatusSnapshot.Column(
+                    index: index,
+                    widthFraction: column.widthFraction,
+                    isTabbed: column.isTabbed,
+                    isPinned: column.isPinned,
+                    activeWindowID: column.activeWindow?.id ?? "",
+                    activeWindowTitle: column.activeWindow?.title ?? "",
+                    windows: column.windows.map { window in
+                        StripStatusSnapshot.Window(
+                            id: window.id,
+                            pid: window.pid,
+                            appBundleID: window.appBundleID,
+                            title: window.title,
+                            agent: window.agentName ?? "",
+                            agentCwd: window.agentCwd ?? "",
+                            status: window.agentStatus.rawValue
+                        )
+                    }
+                )
+            }
+        )
     }
 
     // MARK: - Navigation & Window Actions
@@ -337,6 +485,41 @@ public final class StripWindowManager: ObservableObject {
         activeColumnIndex = min(columns.count - 1, activeColumnIndex + 1)
         focusActiveWindow()
         scrollToColumn(activeColumnIndex, animated: true)
+    }
+
+    /// Cycles to the next window inside the active column. Works for tabbed
+    /// stacks and for columns that show several windows vertically.
+    public func focusNextWindow() {
+        cycleFocusedRow(forward: true)
+    }
+
+    /// Cycles to the previous window inside the active column.
+    public func focusPreviousWindow() {
+        cycleFocusedRow(forward: false)
+    }
+
+    private func cycleFocusedRow(forward: Bool) {
+        guard columns.indices.contains(activeColumnIndex) else { return }
+        let count = columns[activeColumnIndex].windows.count
+        guard count > 1 else { return }
+        let current = columns[activeColumnIndex].focusedRow
+        columns[activeColumnIndex].focusedRow =
+            forward
+            ? StripLayoutEngine.nextRow(current: current, count: count)
+            : StripLayoutEngine.previousRow(current: current, count: count)
+        focusActiveWindow()
+        updateLayout(animate: false)
+    }
+
+    /// Jumps to the first column on the strip.
+    public func focusFirstColumn() {
+        jumpToColumn(index: 0)
+    }
+
+    /// Jumps to the last column on the strip.
+    public func focusLastColumn() {
+        guard !columns.isEmpty else { return }
+        jumpToColumn(index: columns.count - 1)
     }
 
     public func moveLeft() {
@@ -532,6 +715,6 @@ public final class StripWindowManager: ObservableObject {
         guard columns.indices.contains(activeColumnIndex),
             let win = columns[activeColumnIndex].activeWindow
         else { return }
-        registry.focusWindow(windowID: win.id)
+        registry.focusWindow(windowID: win.id, pid: win.pid)
     }
 }

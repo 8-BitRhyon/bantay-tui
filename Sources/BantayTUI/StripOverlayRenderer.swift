@@ -159,55 +159,55 @@ public final class StripOverlayRenderer {
         canFocusRight: Bool,
         screenBounds: NSRect
     ) {
-        guard enabled else {
-            hideAll()
-            return
-        }
+        if enabled {
+            var activeIDs = Set<String>()
 
-        var activeIDs = Set<String>()
+            for win in windows {
+                guard let frame = frames[win.id] else { continue }
 
-        for win in windows {
-            guard let frame = frames[win.id] else { continue }
+                let isAgent = win.agentName != nil || win.agentStatus != .idle
+                let isFocused = (win.id == focusedWindowID)
+                guard isAgent || isFocused || dimInactive else { continue }
 
-            let isAgent = win.agentName != nil || win.agentStatus != .idle
-            let isFocused = (win.id == focusedWindowID)
-            guard isAgent || isFocused || dimInactive else { continue }
-
-            // Check if frame intersects screen bounds
-            let winNSRect = NSRect(
-                x: frame.x,
-                // AppKit coordinates flip Y (origin is bottom-left of screen)
-                y: screenBounds.maxY - frame.y - frame.height,
-                width: frame.width,
-                height: frame.height
-            )
-
-            guard winNSRect.intersects(screenBounds) else { continue }
-
-            activeIDs.insert(win.id)
-            let panel = haloPanels[win.id] ?? makeHaloPanel()
-            haloPanels[win.id] = panel
-
-            panel.contentView = NSHostingView(
-                rootView: StripHaloView(
-                    windowInfo: win,
-                    isFocused: isFocused,
-                    dimInactive: dimInactive
+                // Check if frame intersects screen bounds
+                let winNSRect = NSRect(
+                    x: frame.x,
+                    // AppKit coordinates flip Y (origin is bottom-left of screen)
+                    y: screenBounds.maxY - frame.y - frame.height,
+                    width: frame.width,
+                    height: frame.height
                 )
-            )
-            panel.setFrame(winNSRect, display: true)
-            if !panel.isVisible {
-                panel.orderFrontRegardless()
+
+                guard winNSRect.intersects(screenBounds) else { continue }
+
+                activeIDs.insert(win.id)
+                let panel = haloPanels[win.id] ?? makeHaloPanel()
+                haloPanels[win.id] = panel
+
+                panel.contentView = NSHostingView(
+                    rootView: StripHaloView(
+                        windowInfo: win,
+                        isFocused: isFocused,
+                        dimInactive: dimInactive
+                    )
+                )
+                panel.setFrame(winNSRect, display: true)
+                if !panel.isVisible {
+                    panel.orderFrontRegardless()
+                }
             }
+
+            // Hide stale panels
+            for (id, panel) in haloPanels where !activeIDs.contains(id) {
+                panel.orderOut(nil)
+                haloPanels.removeValue(forKey: id)
+            }
+        } else {
+            hideHalos()
         }
 
-        // Hide stale panels
-        for (id, panel) in haloPanels where !activeIDs.contains(id) {
-            panel.orderOut(nil)
-            haloPanels.removeValue(forKey: id)
-        }
-
-        // Update navigation chevrons
+        // Chevrons are navigation, not agent status. Keep them independent
+        // of the halo toggle; only the strip's own visibility disables them.
         updateChevrons(
             showChevrons: showChevrons && frames.count > 1,
             canFocusLeft: canFocusLeft,
@@ -259,12 +259,17 @@ public final class StripOverlayRenderer {
         if !rPanel.isVisible { rPanel.orderFrontRegardless() }
     }
 
-    /// Hides all halo and chevron panels.
-    public func hideAll() {
+    /// Hides only the status halos, leaving navigation chevrons alone.
+    public func hideHalos() {
         for panel in haloPanels.values {
             panel.orderOut(nil)
         }
         haloPanels.removeAll()
+    }
+
+    /// Hides all halo and chevron panels.
+    public func hideAll() {
+        hideHalos()
         leftChevronPanel?.orderOut(nil)
         rightChevronPanel?.orderOut(nil)
     }

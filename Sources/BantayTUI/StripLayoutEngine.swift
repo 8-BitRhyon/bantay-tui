@@ -599,6 +599,31 @@ public enum StripLayoutEngine {
         }
     }
 
+    /// Finds a window by ID across every column and row.
+    public static func findWindow(
+        id: String,
+        columns: [StripColumn]
+    ) -> (column: Int, row: Int)? {
+        for (columnIndex, column) in columns.enumerated() {
+            if let row = column.windows.firstIndex(where: { $0.id == id }) {
+                return (columnIndex, row)
+            }
+        }
+        return nil
+    }
+
+    /// Next row in a column, wrapping at the end.
+    public static func nextRow(current: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return (max(0, min(current, count - 1)) + 1) % count
+    }
+
+    /// Previous row in a column, wrapping at the start.
+    public static func previousRow(current: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return (max(0, min(current, count - 1)) + count - 1) % count
+    }
+
     /// Stacks a window from source column into target column.
     public static func stack(
         sourceColIndex: Int,
@@ -726,72 +751,149 @@ public enum StripLayoutEngine {
         )
     }
 
+    /// Role of a window in the automatic agent workflow.
+    public enum StripChainRole: String, Equatable, Sendable, CaseIterable {
+        case ide
+        case browser
+        case terminal
+        case other
+    }
+
+    /// Classifies a window for auto-chaining. Bundle identifiers win over
+    /// title heuristics so a browser tab titled after an editor is not
+    /// mistaken for the editor itself.
+    public static func chainRole(for window: StripWindowInfo) -> StripChainRole {
+        let bundle = window.appBundleID.lowercased()
+        let title = window.title.lowercased()
+        let agent = (window.agentName ?? "").lowercased()
+
+        if isIDEBundle(bundle) || isIDEAgent(agent) {
+            return .ide
+        }
+        if isBrowserBundle(bundle) {
+            return .browser
+        }
+        if isTerminalBundle(bundle) {
+            return .terminal
+        }
+        if title.contains("localhost") || title.contains("127.0.0.1")
+            || title.contains("http://") || title.contains("https://")
+        {
+            return .browser
+        }
+        if isIDETitle(title) {
+            return .ide
+        }
+        return .other
+    }
+
+    /// True when a window belongs to the supplied project slug. The agent
+    /// working directory is the strongest signal; titles cover editors and
+    /// browser tabs that expose the project name.
+    public static func windowMatchesProject(_ window: StripWindowInfo, slug: String) -> Bool {
+        let needle = slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return true }
+        if let cwd = window.agentCwd?.lowercased(), cwd.contains(needle) {
+            return true
+        }
+        return window.title.lowercased().contains(needle)
+    }
+
+    private static func isIDEBundle(_ bundle: String) -> Bool {
+        let markers = [
+            "cursor", "antigravity", "windsurf", "xcode", "vscode",
+            "visual studio code", "zed", "sublime", "jetbrains",
+            "intellij", "pycharm", "webstorm", "goland", "rubymine",
+            "android studio", "neovide", "com.todesktop.",
+        ]
+        return markers.contains { bundle.contains($0) }
+    }
+
+    private static func isIDEAgent(_ agent: String) -> Bool {
+        let markers = ["cursor", "antigravity", "windsurf"]
+        return markers.contains { agent.contains($0) }
+    }
+
+    private static func isIDETitle(_ title: String) -> Bool {
+        let markers = [
+            "visual studio code", " - cursor", " - antigravity", " - windsurf",
+            " - zed", " - sublime text", " - intellij", " - pycharm",
+            " - webstorm", " - goland", " - xcode",
+        ]
+        return markers.contains { title.contains($0) }
+    }
+
+    private static func isBrowserBundle(_ bundle: String) -> Bool {
+        let markers = [
+            "com.apple.safari", "safari", "chrome", "chromium", "edgemac",
+            "microsoft.edge", "brave", "firefox", "opera", "vivaldi",
+            "company.thebrowser.browser", "company.thebrowser.dia",
+            "duckduckgo", "sidekick", "zen-browser", "zen_browser",
+        ]
+        return markers.contains { bundle.contains($0) }
+    }
+
+    private static func isTerminalBundle(_ bundle: String) -> Bool {
+        let markers = [
+            "com.apple.terminal", "iterm", "ghostty", "alacritty", "kitty",
+            "wezterm", "warp", "hyper", "tabby", "termius",
+        ]
+        return markers.contains { bundle.contains($0) }
+    }
+
     /// Automatically chains windows into an agent triage workflow:
-    /// IDE/Editor (0.50) -> Browser Preview (0.35) -> Tests/Runner (0.25).
+    /// IDE (50%) -> Browser (30%) -> Terminal (20%) when all three stages are
+    /// present.
+    ///
+    /// Widths are normalized across the stages that are present, so the
+    /// resulting columns always sum to 1.0 and fit the viewport. A supplied
+    /// project slug makes each stage prefer matching windows. A stage with no
+    /// match keeps its windows, so a browser tab that omits the project name
+    /// does not remove the browser stage. Windows outside the workflow are
+    /// kept in a trailing Other column instead of being mislabeled as tests.
     public static func autoChainWorkflow(
         windows: [StripWindowInfo],
         projectSlug: String? = nil
     ) -> [StripColumn] {
         guard !windows.isEmpty else { return [] }
 
-        var ideWindows: [StripWindowInfo] = []
-        var browserWindows: [StripWindowInfo] = []
-        var terminalWindows: [StripWindowInfo] = []
-
-        for win in windows {
-            let bId = win.appBundleID.lowercased()
-            let title = win.title.lowercased()
-            let name = (win.agentName ?? "").lowercased()
-
-            if bId.contains("cursor") || bId.contains("antigravity") || bId.contains("windsurf")
-                || bId.contains("code") || bId.contains("zed") || name.contains("cursor")
-                || name.contains("antigravity")
-            {
-                ideWindows.append(win)
-            } else if bId.contains("chrome") || bId.contains("safari") || bId.contains("dia")
-                || bId.contains("arc") || bId.contains("firefox") || title.contains("localhost")
-                || title.contains("http")
-            {
-                browserWindows.append(win)
-            } else {
-                terminalWindows.append(win)
-            }
+        var grouped: [StripChainRole: [StripWindowInfo]] = [:]
+        for window in windows {
+            grouped[chainRole(for: window), default: []].append(window)
         }
 
+        let order: [StripChainRole] = [.ide, .browser, .terminal, .other]
+        let weights: [StripChainRole: Double] = [
+            .ide: 5.0,
+            .browser: 3.0,
+            .terminal: 2.0,
+            .other: 1.0,
+        ]
+        let present = order.filter { !(grouped[$0] ?? []).isEmpty }
+        let totalWeight = present.reduce(0.0) { $0 + (weights[$1] ?? 0.0) }
+        guard totalWeight > 0 else { return [] }
+
+        let slug = projectSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var chained: [StripColumn] = []
 
-        if !ideWindows.isEmpty {
+        for role in present {
+            let candidates = grouped[role] ?? []
+            let selected: [StripWindowInfo]
+            if slug.isEmpty {
+                selected = candidates
+            } else {
+                let matches = candidates.filter { windowMatchesProject($0, slug: slug) }
+                selected = matches.isEmpty ? candidates : matches
+            }
             chained.append(
                 StripColumn(
-                    windows: ideWindows,
-                    widthFraction: 0.50,
-                    isTabbed: ideWindows.count > 1
+                    windows: selected,
+                    widthFraction: (weights[role] ?? 0.0) / totalWeight,
+                    isTabbed: selected.count > 1
                 )
             )
         }
 
-        if !browserWindows.isEmpty {
-            chained.append(
-                StripColumn(
-                    windows: browserWindows,
-                    widthFraction: 0.35,
-                    isTabbed: browserWindows.count > 1
-                )
-            )
-        }
-
-        if !terminalWindows.isEmpty {
-            chained.append(
-                StripColumn(
-                    windows: terminalWindows,
-                    widthFraction: 0.25,
-                    isTabbed: terminalWindows.count > 1
-                )
-            )
-        }
-
-        return chained.isEmpty
-            ? [StripColumn(windows: windows, widthFraction: 0.50)]
-            : chained
+        return chained
     }
 }

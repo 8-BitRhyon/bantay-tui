@@ -315,15 +315,26 @@ final class ControlGatewayServer: @unchecked Sendable {
                 id: request.id,
                 result: ["jumped": true])
         case .stripStatus:
-            let config = StripConfiguration.load()
-            return ControlGateway.GatewayResponse.ok(
-                id: request.id,
-                result: [
-                    "enabled": config.isEnabled,
-                    "defaultWidthPreset": config.defaultWidthPreset,
-                    "gap": config.gap,
-                    "inset": config.inset,
-                ])
+            let snapshot: StripStatusSnapshot?
+            if Thread.isMainThread {
+                snapshot = MainActor.assumeIsolated {
+                    StripStatusProvider.current?()
+                }
+            } else {
+                snapshot = DispatchQueue.main.sync {
+                    MainActor.assumeIsolated {
+                        StripStatusProvider.current?()
+                    }
+                }
+            }
+            let result =
+                snapshot?.jsonObject
+                ?? [
+                    "enabled": false,
+                    "columns": [],
+                    "accessibility": false,
+                ]
+            return ControlGateway.GatewayResponse.ok(id: request.id, result: result)
         case .stripOverview:
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .stripOverviewRequested, object: nil)

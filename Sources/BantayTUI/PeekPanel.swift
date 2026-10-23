@@ -53,8 +53,10 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
             let screen = window.screen ?? NSScreen.main
         else { return }
         let contentSize = CGSize(width: 480, height: 440)
+        // Dock beside the visible island, not the full 504x560 host window.
+        let anchor = IslandHitTracker.interactiveScreenRect(in: window) ?? window.frame
         let frame = IslandMetrics.peekFrame(
-            anchor: window.frame, screenFrame: screen.frame, size: contentSize,
+            anchor: anchor, screenFrame: screen.frame, size: contentSize,
             scale: screen.backingScaleFactor)
         let panel = KeyablePanel(
             contentRect: frame,
@@ -208,6 +210,12 @@ private struct PeekPanelView: View {
     @ObservedObject var model: PeekPanelModel
     @State private var appeared = false
 
+    /// Standalone agents have no pane id; the manager accepts the synthetic
+    /// `standalone:<source>` id so approvals use the keystroke dispatcher.
+    private var actionablePaneId: String? {
+        IslandMetrics.actionablePaneId(paneId: model.paneId, source: model.source)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -299,12 +307,8 @@ private struct PeekPanelView: View {
     private var quickActionsDock: some View {
         HStack(spacing: 8) {
             Button {
-                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.stop(paneId: paneId)
-                    }
-                } else {
-                    StandaloneAgentDispatcher.dispatchAbort(agentName: model.source, cwd: model.cwd)
+                if let paneId = actionablePaneId {
+                    AgentEventManager.shared.stop(paneId: paneId)
                 }
             } label: {
                 HStack(spacing: 3) {
@@ -322,13 +326,8 @@ private struct PeekPanelView: View {
             .help("Interrupt agent execution (^C)")
 
             Button {
-                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.approve(paneId: paneId)
-                    }
-                } else {
-                    StandaloneAgentDispatcher.dispatchApproval(
-                        agentName: model.source, approved: true, cwd: model.cwd)
+                if let paneId = actionablePaneId {
+                    AgentEventManager.shared.approve(paneId: paneId)
                 }
             } label: {
                 HStack(spacing: 3) {
@@ -346,13 +345,8 @@ private struct PeekPanelView: View {
             .help("Send 'y' approval")
 
             Button {
-                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
-                    AgentEventManager.shared.performAction(paneId: paneId) {
-                        $0.deny(paneId: paneId)
-                    }
-                } else {
-                    StandaloneAgentDispatcher.dispatchApproval(
-                        agentName: model.source, approved: false, cwd: model.cwd)
+                if let paneId = actionablePaneId {
+                    AgentEventManager.shared.deny(paneId: paneId)
                 }
             } label: {
                 HStack(spacing: 3) {
@@ -434,15 +428,9 @@ private struct PeekPanelView: View {
                     HStack(spacing: 6) {
                         ForEach(choices) { option in
                             Button {
-                                if let paneId = model.paneId, !paneId.hasPrefix("standalone:") {
-                                    AgentEventManager.shared.performAction(paneId: paneId) {
-                                        $0.approveChoice(paneId: paneId, choice: option.id)
-                                    }
-                                } else {
-                                    StandaloneAgentDispatcher.dispatchOption(
-                                        agentName: model.source, option: "\(option.id)",
-                                        cwd: model.cwd
-                                    )
+                                if let paneId = actionablePaneId {
+                                    AgentEventManager.shared.approveChoice(
+                                        paneId: paneId, choice: option.id)
                                 }
                             } label: {
                                 HStack(spacing: 4) {

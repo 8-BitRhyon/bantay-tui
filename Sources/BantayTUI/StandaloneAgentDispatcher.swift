@@ -96,18 +96,7 @@ public enum StandaloneAgentDispatcher {
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            let key = approved ? "y" : "n"
-            let script = """
-                tell application "System Events"
-                    keystroke "\(key)"
-                    delay 0.05
-                    key code 36
-                end tell
-                """
-            if let asObj = NSAppleScript(source: script) {
-                var err: NSDictionary?
-                asObj.executeAndReturnError(&err)
-            }
+            KeyboardSynthesizer.approveOrDeny(approved: approved)
         }
     }
 
@@ -134,15 +123,7 @@ public enum StandaloneAgentDispatcher {
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            let script = """
-                tell application "System Events"
-                    keystroke "c" using control down
-                end tell
-                """
-            if let asObj = NSAppleScript(source: script) {
-                var err: NSDictionary?
-                asObj.executeAndReturnError(&err)
-            }
+            KeyboardSynthesizer.interrupt()
         }
     }
 
@@ -151,32 +132,8 @@ public enum StandaloneAgentDispatcher {
     }
 
     private static func pasteAndReturn(isGui: Bool) {
-        let script: String
-        if isGui {
-            // For VS Code / Antigravity / Cursor: Command+L focuses Chat input, then Command+V pastes and Return submits
-            script = """
-                tell application "System Events"
-                    keystroke "l" using command down
-                    delay 0.12
-                    keystroke "v" using command down
-                    delay 0.08
-                    key code 36
-                end tell
-                """
-        } else {
-            // For Terminal: Command+V pastes directly into active shell/CLI, then Return submits
-            script = """
-                tell application "System Events"
-                    keystroke "v" using command down
-                    delay 0.08
-                    key code 36
-                end tell
-                """
-        }
-
-        if let asObj = NSAppleScript(source: script) {
-            var err: NSDictionary?
-            asObj.executeAndReturnError(&err)
-        }
+        // GUI IDEs focus their chat input with Command+L. Terminal CLIs paste
+        // straight into the active prompt with Command+V.
+        KeyboardSynthesizer.pasteAndReturn(focusChatFirst: isGui)
     }
 }

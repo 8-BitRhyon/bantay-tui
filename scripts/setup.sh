@@ -211,13 +211,22 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Sign bundle with designated requirement so TCC permissions persist across restarts.
+# Sign the bundle with a stable identity so macOS TCC grants survive rebuilds.
+# Ad-hoc signatures use a per-build cdhash as the designated requirement, so
+# Accessibility resets every time the binary changes. The local self-signed
+# identity keeps the requirement anchored to the certificate instead.
 SIGN_IDENTITY="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "Bantay"; then
-  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Bantay" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  SIGN_IDENTITY="$CODESIGN_IDENTITY"
+elif DEV_IDENTITY="$(bash "$ROOT/scripts/ensure-dev-signing-identity.sh")"; then
+  SIGN_IDENTITY="$DEV_IDENTITY"
 fi
 echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui (identity: $SIGN_IDENTITY)"
-codesign --force --deep --sign "$SIGN_IDENTITY" -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
+else
+  codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+fi
 
 # Ensure TCC uses the designated identifier requirement.
 if command -v sqlite3 >/dev/null 2>&1; then

@@ -52,20 +52,11 @@ enum TerminalFocusser {
         guard let app = runningApps.first(where: { $0.bundleIdentifier == target }) else {
             return openSystemTerminal()
         }
+        // Activating through NSWorkspace needs no Automation grant. The old
+        // AppleScript `reopen`/`activate` call added a second permission
+        // prompt on every freshly signed build.
         app.activate(options: [.activateAllWindows])
         NSApp?.deactivate()
-        if let bundleID = app.bundleIdentifier {
-            let script = """
-                tell application id "\(bundleID)"
-                    reopen
-                    activate
-                end tell
-                """
-            if let asObj = NSAppleScript(source: script) {
-                var err: NSDictionary?
-                asObj.executeAndReturnError(&err)
-            }
-        }
         return true
     }
 
@@ -163,18 +154,6 @@ enum TerminalFocusser {
     private static func activateApp(_ app: NSRunningApplication) {
         app.activate(options: [.activateAllWindows])
         NSApp?.deactivate()
-        if let bundleID = app.bundleIdentifier {
-            let script = """
-                tell application id "\(bundleID)"
-                    reopen
-                    activate
-                end tell
-                """
-            if let asObj = NSAppleScript(source: script) {
-                var err: NSDictionary?
-                asObj.executeAndReturnError(&err)
-            }
-        }
     }
 
     /// Traces the parent process of a PID to discover its hosting terminal or GUI app.

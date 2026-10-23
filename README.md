@@ -25,8 +25,10 @@ Bantay includes a horizontal window tiling engine for macOS:
 - **Width Presets**: Set column width to 35%, 50%, 61.8%, 66.7%, or 100%.
 - **Overview Mode**: Scale all columns to fit the screen without scrolling (`bantay strip overview`).
 - **Column Reordering**: Move columns using gestures or the CLI (`bantay strip reorder --from <idx> --to <idx>`).
-- **Auto-Chaining**: Organizes windows into a 3-part layout: IDE (50%) -> Browser (35%) -> Tests (25%).
+- **Auto-Chaining**: Scans every open window and organizes the IDE, browser, and terminal into a 50/30/20 layout. Widths always sum to 100%. A project slug makes each stage prefer matching windows. Other apps go to a trailing `Other` column instead of being mislabeled as tests.
 - **Status Halos**: Displays ambient colored borders on windows to show live agent status.
+- **Full-Screen Aware**: Strip halos, navigation chevrons, HUD controls, and window tiling pause when the frontmost app is in full screen. The strip restores when you leave full screen.
+- **Keyboard Navigation**: Use `⌃⌥←` and `⌃⌥→` to move between columns. Use `⌃⌥↑` and `⌃⌥↓` to cycle windows in the active column. Use `⌃⌥Home` and `⌃⌥End` to jump to the first or last column. Click the active radar card to cycle stacked windows.
 
 ### 3. Agent and Quota Telemetry
 - **Desktop IDE Support**: Sends commands to Google Antigravity IDE, Cursor, Windsurf, Zed, and VS Code. It also supports terminal agents such as Claude Code, OpenCode, Codex, and Gemini.
@@ -47,6 +49,10 @@ Bantay includes a horizontal window tiling engine for macOS:
 | Write prompt to agent | Click the agent row |
 | Add file to shelf | Drag file over the notch |
 | Toggle Infinite Strip | Run `bantay strip toggle` |
+| Move between columns | Press `⌃⌥←` or `⌃⌥→` |
+| Cycle windows in the active column | Press `⌃⌥↑` or `⌃⌥↓` |
+| Jump to the first or last column | Press `⌃⌥Home` or `⌃⌥End` |
+| Chain windows | Press `⌃⌥M` or click `Chain` in the strip HUD |
 | Toggle Overview Mode | Run `bantay strip overview` |
 | Jump to pending approval | Run `bantay strip approval` |
 
@@ -63,8 +69,8 @@ bantay strip center                           # Center the active column
 bantay strip width [--mode cycle|expand|shrink] # Change the column width preset
 bantay strip approval                         # Focus the window waiting for approval
 bantay strip reorder --from 0 --to 1          # Move column 0 to position 1
-bantay strip autochain --slug <project>       # Tile windows for the project
-bantay strip status                           # Output layout state as JSON
+bantay strip autochain [--slug <project>]     # Chain all open windows for the project
+bantay strip status                           # Output live columns, windows, and full-screen state as JSON
 
 # System Commands
 bantay settings                               # Open the Settings window
@@ -104,6 +110,18 @@ Install via Homebrew:
 brew tap 8-BitRhyon/bantay-tui
 brew install --cask bantay-tui
 ```
+
+### Local Development Signing
+
+`scripts/setup.sh` creates a local self-signed certificate named `Bantay Local Dev` on first run and signs the installed app with it. This gives macOS a stable code requirement. Accessibility permission therefore survives rebuilds.
+
+On the first install only, grant Bantay-TUI access in System Settings > Privacy & Security > Accessibility. If a stale entry remains, remove it with the minus button and drag the installed app back in:
+
+```text
+~/Library/Application Support/Bantay-TUI/Bantay-TUI.app
+```
+
+Set `BANTAY_DISABLE_DEV_SIGNING=1` to keep ad-hoc signing. Ad-hoc builds get a new cdhash on every rebuild, which resets Accessibility. Distribution builds continue to use Developer ID signing and notarization.
 
 ### System Requirements
 

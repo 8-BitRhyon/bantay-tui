@@ -70,6 +70,23 @@ public struct StripMiniMapHUD: View {
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                 }
+
+                                if col.windows.count > 1 {
+                                    Text(
+                                        "\(min(col.focusedRow + 1, col.windows.count))/\(col.windows.count)"
+                                    )
+                                    .font(
+                                        .system(size: 8, weight: .bold, design: .monospaced)
+                                    )
+                                    .foregroundColor(
+                                        isActive ? .white : .white.opacity(0.55)
+                                    )
+                                    .padding(.horizontal, 3)
+                                    .padding(.vertical, 1)
+                                    .background(
+                                        Capsule().fill(Color.white.opacity(0.1))
+                                    )
+                                }
                             }
 
                             // Column width indicator bar
@@ -110,47 +127,64 @@ public struct StripMiniMapHUD: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .help(
+                        col.windows.count > 1
+                            ? "Select column. Click again to cycle its \(col.windows.count) windows."
+                            : "Select column.")
                 }
             }
 
             // Row 2: Action Controls Bar (Matching ChainYourMac UI)
             HStack(spacing: 5) {
-                StripActionPill(title: "Focus left", shortcut: "←") {
+                StripActionPill(title: "Chain", shortcut: "⌃⌥M") {
+                    StripWindowManager.shared.autoChainCurrentProject(
+                        slug: StripWindowManager.shared.currentProjectSlug())
+                }
+                StripActionPill(title: "Approval", shortcut: "⌃⌥A") {
+                    StripWindowManager.shared.jumpToApproval()
+                }
+                StripActionPill(title: "Focus left", shortcut: "⌃⌥←") {
                     StripWindowManager.shared.focusLeft()
                 }
-                StripActionPill(title: "Focus right", shortcut: "→") {
+                StripActionPill(title: "Focus right", shortcut: "⌃⌥→") {
                     StripWindowManager.shared.focusRight()
                 }
-                StripActionPill(title: "Move left", shortcut: "⇧←") {
+                StripActionPill(title: "Prev window", shortcut: "⌃⌥↑") {
+                    StripWindowManager.shared.focusPreviousWindow()
+                }
+                StripActionPill(title: "Next window", shortcut: "⌃⌥↓") {
+                    StripWindowManager.shared.focusNextWindow()
+                }
+                StripActionPill(title: "Move left", shortcut: "⌃⌥⇧←") {
                     StripWindowManager.shared.moveLeft()
                 }
-                StripActionPill(title: "Move right", shortcut: "⇧→") {
+                StripActionPill(title: "Move right", shortcut: "⌃⌥⇧→") {
                     StripWindowManager.shared.moveRight()
                 }
-                StripActionPill(title: "Cycle width", shortcut: "R") {
+                StripActionPill(title: "Cycle width", shortcut: "⌃⌥R") {
                     StripWindowManager.shared.cycleWidth()
                 }
-                StripActionPill(title: "Full width", shortcut: "F") {
+                StripActionPill(title: "Full width", shortcut: "⌃⌥F") {
                     StripWindowManager.shared.toggleFullWidth()
                 }
-                StripActionPill(title: "Centre", shortcut: "C") {
+                StripActionPill(title: "Centre", shortcut: "⌃⌥C") {
                     StripWindowManager.shared.centerCurrentColumn()
                 }
                 StripActionPill(
-                    title: "Pin", shortcut: "P",
+                    title: "Pin", shortcut: "⌃⌥P",
                     isHighlighted: columns.indices.contains(activeColumnIndex)
                         && columns[activeColumnIndex].isPinned
                 ) {
                     StripWindowManager.shared.togglePin()
                 }
-                StripActionPill(title: "Stack", shortcut: "]") {
+                StripActionPill(title: "Stack", shortcut: "⌃⌥]") {
                     StripWindowManager.shared.stackRight()
                 }
-                StripActionPill(title: "Pop out", shortcut: "⇧]") {
+                StripActionPill(title: "Pop out", shortcut: "⌃⌥⇧]") {
                     StripWindowManager.shared.unstack(toRight: true)
                 }
                 StripActionPill(
-                    title: "Tabs", shortcut: "⇧T",
+                    title: "Tabs", shortcut: "⌃⌥⇧T",
                     isHighlighted: columns.indices.contains(activeColumnIndex)
                         && columns[activeColumnIndex].isTabbed
                 ) {
@@ -195,7 +229,9 @@ struct StripActionPill: View {
             HStack(spacing: 3) {
                 if let shortcut {
                     Text(shortcut)
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                        .lineLimit(1)
+                        .fixedSize()
                         .foregroundColor(
                             isHighlighted
                                 ? Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)
@@ -210,6 +246,8 @@ struct StripActionPill: View {
                 }
                 Text(title)
                     .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundColor(
                         isHighlighted
                             ? Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)
@@ -233,5 +271,6 @@ struct StripActionPill: View {
             )
         }
         .buttonStyle(.plain)
+        .help(shortcut.map { "\(title) (\($0))" } ?? title)
     }
 }

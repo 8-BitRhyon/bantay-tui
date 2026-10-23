@@ -116,6 +116,8 @@ struct SettingsView: View {
     @State private var stripHotkeys = StripConfiguration.load().hotkeysEnabled
     @State private var stripWidthPreset = StripConfiguration.load().defaultWidthPreset
     @State private var stripSpringOmega = StripConfiguration.load().springOmega
+    @State private var stripDimInactive = StripConfiguration.load().dimInactive
+    @State private var stripChevrons = StripConfiguration.load().showNavigationChevrons
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
 
     private static let sectionKeywords: [String: [String]] = [
@@ -721,18 +723,42 @@ struct SettingsView: View {
             }
 
             if selectedCategory == .strip && matchesSearch("Navigation & Shortcuts") {
-                Section("Keyboard Shortcuts (hold ⌃⌥)") {
+                Section("Navigation & Shortcuts (hold ⌃⌥)") {
                     Toggle("Enable strip global hotkeys", isOn: $stripHotkeys)
                         .onChange(of: stripHotkeys) { _ in updateStripConfig() }
+                    Toggle("Show edge navigation chevrons", isOn: $stripChevrons)
+                        .help("Show clickable left and right arrows at the screen edges.")
+                        .onChange(of: stripChevrons) { _ in updateStripConfig() }
+                    Toggle("Dim inactive windows", isOn: $stripDimInactive)
+                        .help("Darken windows outside the active column.")
+                        .onChange(of: stripDimInactive) { _ in updateStripConfig() }
 
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                         GridRow {
-                            Text("⌃⌥H / ⌃⌥L").font(
+                            Text("⌃⌥← / ⌃⌥→ (or H / L)").font(
                                 .system(size: 11, weight: .bold, design: .monospaced))
                             Text("Focus previous / next column").foregroundColor(.secondary)
                         }
                         GridRow {
-                            Text("⌃⌥⇧H / ⌃⌥⇧L").font(
+                            Text("⌃⌥↑ / ⌃⌥↓").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Focus previous / next window in the active column")
+                                .foregroundColor(
+                                    .secondary
+                                )
+                        }
+                        GridRow {
+                            Text("⌃⌥Home / ⌃⌥End").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Jump to the first / last column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥1 … ⌃⌥9").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Jump directly to a column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥⇧← / ⌃⌥⇧→ (or ⇧H / ⇧L)").font(
                                 .system(size: 11, weight: .bold, design: .monospaced))
                             Text("Move column left / right").foregroundColor(.secondary)
                         }
@@ -754,12 +780,30 @@ struct SettingsView: View {
                                 .secondary)
                         }
                         GridRow {
-                            Text("⌃⌥]").font(.system(size: 11, weight: .bold, design: .monospaced))
-                            Text("Stack window into adjacent column").foregroundColor(.secondary)
+                            Text("⌃⌥M").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Chain every open window into the active project").foregroundColor(
+                                .secondary)
                         }
                         GridRow {
-                            Text("⌃⌥[").font(.system(size: 11, weight: .bold, design: .monospaced))
-                            Text("Pop focused window out of stack").foregroundColor(.secondary)
+                            Text("⌃⌥P").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Pin / unpin the active column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥⇧T").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Toggle tabbed stacking for the active column").foregroundColor(
+                                .secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥] / ⌃⌥[").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Stack the active window right / left").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥⇧] / ⌃⌥⇧[").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Pop the active window out right / left").foregroundColor(
+                                .secondary
+                            )
                         }
                     }
                     .font(.system(size: 11))
@@ -787,6 +831,8 @@ struct SettingsView: View {
                         .help("Stay visible over full-screen apps; re-anchors after transitions.")
                         .onChange(of: showInFullScreen) { newValue in
                             NotchHUDConfig.shared.showInFullScreen = newValue
+                            AppDelegate.applyFullScreenPolicy(
+                                isFullScreen: FullScreenMonitor.shared.isFullScreen)
                         }
                     Toggle("Avoid menu-bar icons", isOn: $avoidMenuBar)
                         .help(
@@ -1368,6 +1414,8 @@ struct SettingsView: View {
         stripHotkeys = stripCfg.hotkeysEnabled
         stripWidthPreset = stripCfg.defaultWidthPreset
         stripSpringOmega = stripCfg.springOmega
+        stripDimInactive = stripCfg.dimInactive
+        stripChevrons = stripCfg.showNavigationChevrons
         hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
         DispatchQueue.main.async {
             isRefreshingConfig = false
@@ -1398,6 +1446,8 @@ struct SettingsView: View {
         cfg.hotkeysEnabled = stripHotkeys
         cfg.defaultWidthPreset = stripWidthPreset
         cfg.springOmega = stripSpringOmega
+        cfg.dimInactive = stripDimInactive
+        cfg.showNavigationChevrons = stripChevrons
         cfg.save()
         StripWindowManager.shared.config = cfg
     }
