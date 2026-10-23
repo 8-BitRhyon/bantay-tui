@@ -229,7 +229,7 @@ struct NotchRosterView: View {
                 let clean = IslandMetrics.cleanHUDText(title)
                 if !clean.isEmpty {
                     Text(clean)
-                        .font(.system(size: 8.5, weight: .regular))
+                        .font(.system(size: 9.5, weight: .regular))
                         .foregroundColor(.white.opacity(0.6))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -241,12 +241,12 @@ struct NotchRosterView: View {
                     IslandMetrics.elapsedLabel(
                         since: Date(timeIntervalSinceNow: -duration), now: Date())
                 )
-                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .monospacedDigit()
                 .foregroundColor(.white.opacity(0.3))
             }
             Text(IslandMetrics.elapsedLabel(since: recent.createdAt, now: now))
-                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .monospacedDigit()
                 .foregroundColor(.white.opacity(0.4))
         }

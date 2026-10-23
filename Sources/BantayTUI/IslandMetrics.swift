@@ -862,6 +862,7 @@ public enum IslandMetrics: Sendable {
         switch char.lowercased() {
         case "y": return .approve
         case "n": return .deny
+        case "r": return .reply
         case "0"..."9": return .option(Int(String(char)) ?? 0)
         default: return nil
         }
@@ -940,6 +941,7 @@ public enum IslandMetrics: Sendable {
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
+        case reply
         case option(Int)
     }
 

@@ -301,6 +301,13 @@ struct NotchStatusView: View {
         return eventManager.agents.filter { !muted.contains($0.source) }
     }
 
+    /// Keyboard-navigation target for reply and review shortcuts: the
+    /// focused row when set, otherwise the top approval.
+    private var focusedAgent: AgentSnapshot? {
+        guard let focusedRow, mergedRoster.indices.contains(focusedRow) else { return nil }
+        return mergedRoster[focusedRow]
+    }
+
     /// The roster as rendered: muted sources dropped, approval variance and
     /// choices attached from the manager's pending-approval bookkeeping.
     private var mergedRoster: [AgentSnapshot] {
@@ -533,6 +540,16 @@ struct NotchStatusView: View {
     /// Returns true when an action was performed, false otherwise.
     @discardableResult
     private func handleShortcut(_ shortcut: IslandMetrics.ApprovalShortcut) -> Bool {
+        if shortcut == .reply {
+            guard NotchHUDConfig.shared.keyboardShortcuts,
+                canHandleRosterShortcuts,
+                let agent = approvalQueueAgents.first ?? focusedAgent
+            else {
+                return false
+            }
+            beginComposing(agent)
+            return true
+        }
         guard NotchHUDConfig.shared.keyboardShortcuts,
             canHandleRosterShortcuts,
             !eventManager.isResolving(agent: approvalQueueAgents.first),
@@ -558,6 +575,9 @@ struct NotchStatusView: View {
             return true
         case .deny:
             eventManager.deny(paneId: paneId)
+            return true
+        case .reply:
+            // Handled before the approval guard above; reply needs no pane.
             return true
         case .option(let number):
             if agent.approval.isMulti {
@@ -1681,10 +1701,10 @@ struct NotchStatusView: View {
             ForEach(Array(displayLines.enumerated()), id: \.offset) { _, line in
                 HStack(spacing: 4) {
                     Text("❯")
-                        .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundColor(.green.opacity(0.7))
                     Text(String(line))
-                        .font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                        .font(.system(size: 9.5, weight: .regular, design: .monospaced))
                         .foregroundColor(.white.opacity(0.85))
                         .lineLimit(1)
                         .truncationMode(.middle)

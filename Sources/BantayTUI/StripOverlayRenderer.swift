@@ -24,9 +24,8 @@ struct StripHaloView: View {
                 break
             }
         }
-        return isFocused
-            ? Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)  // Focus amber border
-            : Color.white.opacity(0.12)
+        // Focus uses cyan so it never reads as an approval, which owns amber.
+        return isFocused ? BantayTheme.statusFocus : Color.white.opacity(0.12)
     }
 
     private var headerTitle: String {
@@ -49,13 +48,13 @@ struct StripHaloView: View {
         guard let name = windowInfo.agentName else { return nil }
         switch windowInfo.agentStatus {
         case .needsApproval:
-            return "🟡 \(name.capitalized): Approval Required (⌃⌥A)"
+            return "\(name.capitalized): Approval Required (⌃⌥A)"
         case .working:
-            return "⚡ \(name.capitalized): Running…"
+            return "\(name.capitalized): Running"
         case .completed:
-            return "🟢 \(name.capitalized): Completed"
+            return "\(name.capitalized): Completed"
         case .failed:
-            return "🔴 \(name.capitalized): Failed"
+            return "\(name.capitalized): Failed"
         case .idle:
             return name.capitalized
         }
@@ -99,7 +98,11 @@ struct StripHaloView: View {
                 .padding(.top, 8)
         }
         .onAppear {
-            if windowInfo.agentStatus == .needsApproval || windowInfo.agentStatus == .working {
+            // Only unresolved approvals pulse, and never under reduce motion.
+            // Working state already reads clearly from the cyan halo.
+            if windowInfo.agentStatus == .needsApproval,
+                !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            {
                 withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
                     pulse = true
                 }

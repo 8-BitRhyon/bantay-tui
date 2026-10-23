@@ -8491,6 +8491,12 @@ struct LogicCheckMain {
         check(
             ControlGateway.GatewayRoute.stripCatalog.contains("strip.hud"),
             "P2 strip.hud is a known gateway method")
+        check(
+            IslandMetrics.shortcutKey(for: "r") == .reply,
+            "P5 R replies to the top agent")
+        check(
+            IslandMetrics.shortcutKey(for: "R") == .reply,
+            "P5 reply shortcut is case-insensitive")
 
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
