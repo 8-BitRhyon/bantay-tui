@@ -674,6 +674,9 @@ public enum IslandMetrics: Sendable {
     /// markdown links, and paths to format clean single-line HUD strings.
     /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.
     public static func cleanHUDText(_ text: String, maxCharacters: Int = 60) -> String {
+        if isBareSyslog(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return ""
+        }
         // 1. Strip ANSI escape sequences, control characters, and braille spinner patterns
         var s = LogFormatter.stripControlCharacters(text)
             .replacingOccurrences(of: "\\n", with: " ")
@@ -725,6 +728,14 @@ public enum IslandMetrics: Sendable {
             options: .regularExpression)
 
         // 4. Strip bare ISO and syslog timestamps (\d{4}-\d{2}-\d{2}[ T]...) and relative time (+40ms)
+        // Syslog lines often carry a process prefix after the timestamp
+        // ("2026-10-16 09:12:48.169514-0500 bantay: Running task"). Drop the
+        // timestamp and the process name together so the status text remains.
+        s = s.replacingOccurrences(
+            of:
+                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+:\\s*",
+            with: "",
+            options: .regularExpression)
         s = s.replacingOccurrences(
             of: "\\b\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\b\\s*",
             with: "",
@@ -775,6 +786,8 @@ public enum IslandMetrics: Sendable {
         s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
+        // A syslog timestamp plus a lone process name carries no status.
+        if isBareSyslog(trimmed) { return "" }
 
         // 11. Reject unparsed JSON, diff markers, compiler trace noise, hostnames, and shell fallbacks
         if isSuppressedGarbage(trimmed) {
@@ -788,11 +801,22 @@ public enum IslandMetrics: Sendable {
         return trimmed
     }
 
+    /// True for a syslog timestamp followed by a lone process name:
+    /// `2026-10-16 09:12:48.169514-0500 bantay`. Such a line has no status.
+    private static func isBareSyslog(_ text: String) -> Bool {
+        text.range(
+            of:
+                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+$",
+            options: .regularExpression
+        ) != nil
+    }
+
     /// True if the string is raw unparsed JSON, a diff chunk, internal daemon noise,
     /// or a multiplexer hostname/shell fallback.
     public static func isSuppressedGarbage(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return true }
+        if isBareSyslog(trimmed) { return true }
         let lower = trimmed.lowercased()
 
         // Unparsed JSON blobs or brackets

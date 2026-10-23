@@ -8,7 +8,7 @@ import Foundation
 @MainActor
 final class QuotaMonitor: ObservableObject {
     static let shared = QuotaMonitor()
-    static let refreshInterval: TimeInterval = 60
+    nonisolated static let refreshInterval: TimeInterval = 60
 
     @Published private(set) var quotas: [ProviderQuota] = []
     @Published private(set) var minRemainingPercent: Int = 100

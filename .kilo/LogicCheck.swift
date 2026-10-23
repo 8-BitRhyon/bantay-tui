@@ -7662,6 +7662,18 @@ struct LogicCheckMain {
                 IslandMetrics.cleanHUDText("MacBook-Pro.local").isEmpty,
                 "L150 cleanHUDText returns empty for hostnames"
             )
+            check(
+                IslandMetrics.cleanHUDText(
+                    "2026-10-16 09:12:48.169514-0500 bantay: Running task")
+                    == "Running task",
+                "L150 cleanHUDText strips syslog timestamp and process prefix"
+            )
+            check(
+                IslandMetrics.cleanHUDText(
+                    "2026-10-16 09:12:48.169514-0500 bantay"
+                ).isEmpty,
+                "L150 cleanHUDText suppresses bare syslog lines"
+            )
 
             // 3. Antigravity tool call parsing
             let agToolLine =
@@ -8434,9 +8446,9 @@ struct LogicCheckMain {
         let rosterMetrics = IslandMetrics.RosterLayoutMetrics(
             approvalCardCount: 1, workingRowCount: 2, idleRowCount: 1, groupCount: 2)
         let rosterHeight = IslandMetrics.rosterHeight(rosterMetrics)
+        let expectedRosterHeight: CGFloat = 136 + 2 * 48 + 34 + 2 * 18
         check(
-            abs(
-                rosterHeight - (136 + 2 * 48 + 34 + 2 * 18)) < 0.001,
+            abs(rosterHeight - expectedRosterHeight) < 0.001,
             "P1 structured roster height math (got \(rosterHeight))")
         let rosterSize = IslandMetrics.expandedSize(topInset: 47, roster: rosterMetrics)
         check(
@@ -8446,7 +8458,8 @@ struct LogicCheckMain {
             IslandMetrics.expandedSize(topInset: 47, roster: rosterMetrics).height
                 > IslandMetrics.expandedSize(
                     topInset: 47,
-                    roster: IslandMetrics.RosterLayoutMetrics()).height,
+                    roster: IslandMetrics.RosterLayoutMetrics()
+                ).height,
             "P1 roster content grows the panel")
 
         var desktopFlags = NSEvent.ModifierFlags()
