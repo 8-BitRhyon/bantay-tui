@@ -12,7 +12,7 @@ enum KeyboardSynthesizer {
     /// ANSI virtual key codes. They are layout-independent for the keys
     /// Bantay sends; `type` uses Unicode events for arbitrary characters.
     enum Key {
-        static let returnKey: CGKeyCode = 36
+        static let `return`: CGKeyCode = 36
         static let escape: CGKeyCode = 53
         static let y: CGKeyCode = 16
         static let n: CGKeyCode = 45
@@ -82,14 +82,14 @@ enum KeyboardSynthesizer {
         }
         press(Key.v, flags: .maskCommand)
         Thread.sleep(forTimeInterval: 0.08)
-        press(Key.returnKey)
+        press(Key.return)
     }
 
     /// Answer a terminal approval prompt: the letter followed by Return.
     static func approveOrDeny(approved: Bool) {
         type(approved ? "y" : "n")
         Thread.sleep(forTimeInterval: 0.05)
-        press(Key.returnKey)
+        press(Key.return)
     }
 
     /// Send Control+C to the frontmost application.
