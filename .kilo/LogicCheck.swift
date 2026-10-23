@@ -426,15 +426,12 @@ struct LogicCheckMain {
         check(jsonQuotas.first?.provider == "Anthropic", "QuotaAxiTracker provider name")
         check(jsonQuotas.first?.remainingPercent == 85.0, "QuotaAxiTracker remaining percent")
 
-        let fallbacks = QuotaAxiTracker.fallbackQuotas(
-            activeProviders: ["kilo", "herdr"], costUSD: 1.0, budgetUSD: 10.0)
-        check(fallbacks.count == 2, "QuotaAxiTracker fallback count")
+        let emptyProbe = QuotaAxiTracker.probeLiveQuotas(
+            activeProviders: ["kilo", "herdr"], costUSD: 1.0, budgetUSD: 10.0,
+            home: NSTemporaryDirectory() + "bantay-noquota-\(UUID().uuidString)")
         check(
-            fallbacks.first?.remainingPercent == 90.0,
-            "QuotaAxiTracker fallback budget percent calculation")
-        check(
-            fallbacks.first?.isEstimated == true,
-            "QuotaAxiTracker fallback is labelled as estimated")
+            emptyProbe.isEmpty,
+            "QuotaAxiTracker emits no rows for providers without a quota source")
 
         let taskHeight = IslandMetrics.contentHeightForTasks(
             isExpanded: true, topInset: 0, taskCount: 8, shelfTabVisible: true)
@@ -7518,7 +7515,8 @@ struct LogicCheckMain {
                 "L148 TaskDispatcher dispatches cursor, codex, and cloudcode to GUI app targets"
             )
 
-            // L148 Live multi-provider quota probing for all 7 providers
+            // L148 Live quota probing emits rows only for reported quotas.
+            // Unknown or quota-less providers never appear, even when named.
             let liveQuotas = QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: [
                     "cursor", "claude", "codex", "cloudcode",
@@ -7526,47 +7524,12 @@ struct LogicCheckMain {
                 ],
                 costUSD: 2.50,
                 budgetUSD: 10.0,
-                burnRateTPM: 1200.0
+                burnRateTPM: 1200.0,
+                home: NSTemporaryDirectory() + "bantay-noquota-\(UUID().uuidString)"
             )
             check(
-                liveQuotas.count >= 7,
-                "L148 probeLiveQuotas returns all 7 provider entries (got \(liveQuotas.count))"
-            )
-            let cursorQuota = liveQuotas.first { $0.id == "cursor" }
-            let claudeQuota = liveQuotas.first { $0.id == "claude" }
-            let codexQuota = liveQuotas.first { $0.id == "codex" }
-            let cloudCodeQuota = liveQuotas.first { $0.id == "cloudcode" }
-            let agyQuota = liveQuotas.first { $0.id == "antigravity" }
-            let windsurfQuota = liveQuotas.first { $0.id == "windsurf" }
-            let kiloQuota = liveQuotas.first { $0.id == "kilo" }
-
-            check(
-                cursorQuota != nil && cursorQuota?.totalDisplay.contains("Fast") == true,
-                "L148 cursor quota tracks Fast requests pool"
-            )
-            check(
-                claudeQuota != nil && claudeQuota?.resetHint.contains("5h") == true,
-                "L148 claude quota tracks 5h rolling window"
-            )
-            check(
-                codexQuota != nil && codexQuota?.usedDisplay.contains("$") == true,
-                "L148 codex quota tracks credit and rate limit usage"
-            )
-            check(
-                cloudCodeQuota != nil && cloudCodeQuota?.totalDisplay.contains("RPD") == true,
-                "L148 cloudcode quota tracks RPD quota"
-            )
-            check(
-                agyQuota != nil && agyQuota?.resetHint == "Session Budget",
-                "L148 antigravity quota tracks local session budget"
-            )
-            check(
-                windsurfQuota != nil && windsurfQuota?.totalDisplay == "500 Prompts",
-                "L148 windsurf quota tracks cascade prompt limits"
-            )
-            check(
-                kiloQuota != nil && kiloQuota?.tier == "Pay-as-you-go",
-                "L148 kilo quota tracks prepaid pay-as-you-go tier"
+                liveQuotas.isEmpty,
+                "L148 probeLiveQuotas emits no rows without a quota source (got \(liveQuotas.count))"
             )
 
             // L148 Quota warning & critical thresholds
@@ -7581,17 +7544,17 @@ struct LogicCheckMain {
                 "L148 isCritical detects remaining quota <= 5%"
             )
 
-            // L148 Over-budget spend clamping
+            // L148 Over-budget spend keeps reported percentages in range.
             let overBudgetQuotas = QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: ["claude", "antigravity"],
                 costUSD: 50.0,
                 budgetUSD: 10.0,
-                burnRateTPM: 300.0
+                burnRateTPM: 300.0,
+                home: NSTemporaryDirectory() + "bantay-noquota-\(UUID().uuidString)"
             )
-            let claudeOver = overBudgetQuotas.first { $0.id == "claude" }
             check(
-                claudeOver != nil && claudeOver?.remainingPercent == 0.0,
-                "L148 overBudgetSpend clamps remaining percentage to 0.0"
+                overBudgetQuotas.isEmpty,
+                "L148 no quota source means no rows even when over budget"
             )
 
             // L148 Burn rate thresholds and forecasting
@@ -7687,15 +7650,10 @@ struct LogicCheckMain {
                 budgetUSD: 10.0,
                 home: l149Home
             )
-            let l149CodexQ = l149Quotas.first { $0.id == "codex" }
-            let l149CursorQ = l149Quotas.first { $0.id == "cursor" }
             check(
-                l149CodexQ != nil && l149CodexQ?.usedDisplay.contains("42k tok") == true,
-                "L149 probeLiveQuotas reflects Codex exact SQLite tokens"
-            )
-            check(
-                l149CursorQ != nil && l149CursorQ?.usedDisplay.contains("520 lines") == true,
-                "L149 probeLiveQuotas reflects Cursor exact lines and context"
+                l149Quotas.first { $0.id == "codex" } == nil
+                    && l149Quotas.first { $0.id == "cursor" } == nil,
+                "L149 local activity feeds Spend, never fabricated quota rows"
             )
             try? FileManager.default.removeItem(atPath: l149Home)
         }

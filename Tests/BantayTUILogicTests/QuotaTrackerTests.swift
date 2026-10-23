@@ -8,87 +8,21 @@
     @MainActor
     @Suite("Provider Quota and GUI Agent Detection", .serialized)
     struct QuotaTrackerTests {
-        @Test("probeLiveQuotas generates expected provider profiles for all providers")
-        func liveQuotaGeneration() {
-            let active = [
-                "codex", "cursor", "cloudcode", "claude",
-                "antigravity", "windsurf", "kilo",
-            ]
+        @Test("probeLiveQuotas emits rows only for reported quotas")
+        func liveQuotaHonesty() {
+            let emptyHome = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-noquota-\(UUID().uuidString)").path
             let quotas = QuotaAxiTracker.probeLiveQuotas(
-                activeProviders: active,
+                activeProviders: [
+                    "codex", "cursor", "cloudcode", "claude",
+                    "antigravity", "windsurf", "kilo",
+                ],
                 costUSD: 2.50,
                 budgetUSD: 10.00,
-                burnRateTPM: 120.0
+                burnRateTPM: 120.0,
+                home: emptyHome
             )
-
-            #expect(!quotas.isEmpty)
-            let ids = Set(quotas.map(\.id))
-            #expect(ids.contains("claude"))
-            #expect(ids.contains("codex"))
-            #expect(ids.contains("cursor"))
-            #expect(ids.contains("cloudcode"))
-            #expect(ids.contains("antigravity"))
-            #expect(ids.contains("windsurf"))
-            #expect(ids.contains("kilo"))
-
-            // Verify Claude profile
-            if let claude = quotas.first(where: { $0.id == "claude" }) {
-                #expect(claude.provider == "Claude Code")
-                #expect(claude.resetHint == "5h rolling window")
-                #expect(claude.tier == "Pro Plan")
-                #expect(claude.usedDisplay.contains("$2.50"))
-                #expect(claude.totalDisplay.contains("$10.00 cap"))
-                #expect(claude.hoursRemaining != nil)
-            }
-
-            // Verify Codex profile
-            if let codex = quotas.first(where: { $0.id == "codex" }) {
-                #expect(codex.provider == "OpenAI Codex")
-                #expect(codex.resetHint == "Midnight UTC")
-                #expect(codex.tier.contains("Tier 1"))
-                #expect(codex.totalDisplay == "$20.00 / mo")
-            }
-
-            // Verify Cursor profile
-            if let cursor = quotas.first(where: { $0.id == "cursor" }) {
-                #expect(cursor.provider == "Cursor")
-                #expect(cursor.resetHint == "Renews 1st of month")
-                #expect(cursor.tier.contains("500 Fast Reqs"))
-                #expect(cursor.totalDisplay == "500 Fast / mo")
-                #expect(cursor.usedDisplay.contains("500 reqs"))
-            }
-
-            // Verify Cloud Code profile
-            if let cloud = quotas.first(where: { $0.id == "cloudcode" }) {
-                #expect(cloud.provider == "Google Cloud Code")
-                #expect(cloud.resetHint == "Midnight PST")
-                #expect(cloud.tier.contains("1.5k RPD"))
-                #expect(cloud.totalDisplay == "1,500 RPD")
-            }
-
-            // Verify Antigravity profile
-            if let agy = quotas.first(where: { $0.id == "antigravity" }) {
-                #expect(agy.provider == "Antigravity")
-                #expect(agy.resetHint == "Session Budget")
-                #expect(agy.tier == "Local Session")
-                #expect(agy.totalDisplay.contains("$10.00"))
-            }
-
-            // Verify Windsurf profile
-            if let wind = quotas.first(where: { $0.id == "windsurf" }) {
-                #expect(wind.provider == "Windsurf")
-                #expect(wind.resetHint == "Monthly")
-                #expect(wind.tier == "Cascade Pro")
-                #expect(wind.totalDisplay == "500 Prompts")
-            }
-
-            // Verify Kilo profile
-            if let kilo = quotas.first(where: { $0.id == "kilo" }) {
-                #expect(kilo.provider == "Kilo")
-                #expect(kilo.resetHint == "Continuous Ledger")
-                #expect(kilo.tier == "Pay-as-you-go")
-                #expect(kilo.totalDisplay == "Prepaid")
-            }
+            #expect(quotas.isEmpty)
         }
 
         @Test("quotaThresholds detects warning and critical status correctly")
@@ -144,14 +78,17 @@
             )
         }
 
-        @Test("overBudgetSpend clamps remaining percentage safely without crash")
+        @Test("overBudgetSpend clamps reported percentages without crash")
         func overBudgetSpend() {
             let quotas = QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: ["claude", "antigravity"],
                 costUSD: 25.00,
                 budgetUSD: 10.00,
-                burnRateTPM: 100.0
+                burnRateTPM: 100.0,
+                home: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("bantay-noquota-\(UUID().uuidString)").path
             )
+            #expect(quotas.isEmpty)
             for q in quotas {
                 #expect(q.remainingPercent >= 0.0)
                 #expect(q.remainingPercent <= 100.0)
@@ -349,17 +286,15 @@
             #expect((snap?.costUSD ?? 0.0) > 0.0)
             #expect(snap?.costBySource["cursor"] != nil)
 
-            // Verify live quota probe integrates deep telemetry
+            // Local Cursor activity feeds Spend and Sessions, never the
+            // Quotas view: line counts are usage, not a provider quota.
             let quotas = QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: ["cursor"],
                 costUSD: 1.0,
                 budgetUSD: 10.0,
                 home: tempDir.path
             )
-            let cursorQuota = quotas.first { $0.id == "cursor" }
-            #expect(cursorQuota != nil)
-            #expect(cursorQuota?.usedDisplay.contains("1189 lines") == true)
-            #expect(cursorQuota?.tier.contains("Agent") == true)
+            #expect(quotas.first { $0.id == "cursor" } == nil)
         }
 
         @Test("ClaudeUsageAdapter parses statusLine rate limits and computes remaining quota")

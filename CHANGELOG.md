@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file. The format is b
 - **Approval Safety and Desktop HUD Sections** (`SettingsView.swift`): New Agents policy section and Desktop HUD behavior section. Categories renamed to Notch and Desktop. All preference keys stay unchanged.
 - **Cached Quota Monitor** (`QuotaMonitor.swift`): Quota probes run on a background task every 60 seconds. View rendering performs no subprocess or disk reads.
 - **opencode Ledger Adapter** (`OpenCodeUsageAdapter.swift`): Reads tokens and cost from the opencode SQLite ledger. opencode spend now appears in Spend, Sessions, and the budget gauge.
+- **Quota Honesty** (`QuotaAxiTracker.swift`): The Quotas view lists only provider-reported quotas. Budget-derived percentages and directory-based guesses are gone. Unused providers never appear.
 - **Per-Source Usage Attribution** (`UsageTracker.swift`): Transcript usage attributes tokens and cost to each agent family. Session records carry real token counts.
 - **Approval Prompt Enrichment** (`ApprovalPromptResolver.swift`, `AgentEventManager.swift`): Status-only blocked events read the live pane or transcript. The resolver preserves the exact command, path, or question, extracts numbered and multi-select choices, and marks real permission requests.
 - **Review-Only Waiting States** (`ApprovalCardView.swift`, `ApprovalNotificationController.swift`): Prompts without a concrete request or choices no longer offer blind Approve and Deny. They show Review, Open terminal, or Focus.

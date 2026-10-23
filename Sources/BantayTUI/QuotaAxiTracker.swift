@@ -143,28 +143,11 @@ public final class QuotaAxiTracker: Sendable {
         }
     }
 
-    /// Provides fallback / synthetic quotas for detected active providers when quota-axi CLI is not installed.
-    public static func fallbackQuotas(
-        activeProviders: [String], costUSD: Double, budgetUSD: Double
-    ) -> [ProviderQuota] {
-        let budget = max(budgetUSD, 0.5)
-        let remainingBudgetRatio = max(0.0, (budget - costUSD) / budget)
-        let percent = remainingBudgetRatio * 100.0
-
-        let defaultProviders =
-            activeProviders.isEmpty ? ["herdr", "kilo", "anthropic"] : activeProviders
-        return defaultProviders.map { name in
-            ProviderQuota(
-                isEstimated: true,
-                provider: name.capitalized,
-                remainingPercent: percent,
-                resetHint: "Midnight",
-                tier: "Pro"
-            )
-        }
-    }
-
-    /// Probes live quotas across popular providers (Claude, Codex, Cursor, Cloud Code, etc.).
+    /// Probes live quotas. Returns ONLY provider-reported rows: quota-axi
+    /// output, Claude rate limits, or cached OpenRouter/Ollama quotas.
+    /// Providers without a quota source never appear, no matter which
+    /// directories exist on disk or which agents are running. Directory
+    /// presence is not usage, and a budget ratio is not a quota.
     public static func probeLiveQuotas(
         activeProviders: [String],
         costUSD: Double,
@@ -202,11 +185,8 @@ public final class QuotaAxiTracker: Sendable {
             }
         }
 
-        // 2. Compute live quotas per recognized provider
-        let budget = max(budgetUSD, 0.5)
-        let baseRemainingRatio = max(0.0, (budget - costUSD) / budget)
-        let basePercent = baseRemainingRatio * 100.0
-
+        // 2. Provider-reported quotas only. Recognize which providers could
+        // have data, but only emit rows backed by a real quota source.
         var results: [ProviderQuota] = []
         var recognized: Set<String> = []
 
@@ -244,201 +224,39 @@ public final class QuotaAxiTracker: Sendable {
             recognized = ["claude", "codex", "cursor"]
         }
 
-        // Build rich quota items
+        // Build quota rows from provider-reported sources only. Anything
+        // without a live quota (quota-axi, Claude rate limits, cached
+        // OpenRouter/Ollama) is skipped: no budget-derived percentages, no
+        // activity-derived request counts, and no rows for tools that merely
+        // have a directory on disk.
         for p in recognized.sorted() {
-            let hoursLeft = forecastHoursRemaining(
-                tokensPerMin: burnRateTPM, remainingPercent: basePercent)
             switch p {
             case "claude":
                 if let live = ClaudeUsageAdapter.quota(home: home) {
                     var quota = live
                     quota.burnRateTPM = burnRateTPM
-                    quota.hoursRemaining = hoursLeft
+                    quota.hoursRemaining = forecastHoursRemaining(
+                        tokensPerMin: burnRateTPM,
+                        remainingPercent: live.remainingPercent)
                     results.append(quota)
-                } else {
-                    results.append(
-                        ProviderQuota(
-                            isEstimated: true,
-                            provider: "Claude Code",
-                            remainingPercent: basePercent,
-                            resetHint: "5h rolling window",
-                            tier: "Pro Plan",
-                            usedDisplay: String(format: "$%.2f", costUSD),
-                            totalDisplay: String(format: "$%.2f cap", budget),
-                            burnRateTPM: burnRateTPM,
-                            hoursRemaining: hoursLeft
-                        ))
                 }
-            case "codex":
-                let codexTelemetry = CodexUsageAdapter.deepTelemetry(home: home)
-                let codexTokens: Int = {
-                    if let today = codexTelemetry?.todayTokensUsed, today > 0 { return today }
-                    return codexTelemetry?.totalTokensUsed ?? 0
-                }()
-                let codexCost = codexTelemetry?.estimatedCostUSD ?? (costUSD * 0.8)
-                let codexModel = codexTelemetry?.latestModel ?? "gpt-4o"
-                let usedStr =
-                    codexTokens > 0
-                    ? String(format: "$%.2f (%dk tok)", codexCost, max(1, codexTokens / 1000))
-                    : String(format: "$%.2f", codexCost)
-                let tierStr = "Tier 1 (\(codexModel))"
-                results.append(
-                    ProviderQuota(
-                        isEstimated: true,
-                        provider: "OpenAI Codex",
-                        remainingPercent: max(0.0, min(100.0, basePercent * 0.95)),
-                        resetHint: "Midnight UTC",
-                        tier: tierStr,
-                        usedDisplay: usedStr,
-                        totalDisplay: "$20.00 / mo",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "cursor":
-                let cursorTelemetry = CursorUsageAdapter.deepTelemetry(home: home)
-                let cursorPct: Double =
-                    if let t = cursorTelemetry, let ctx = t.contextUsagePercent, ctx > 0 {
-                        max(5.0, min(100.0, 100.0 - ctx))
-                    } else {
-                        max(5.0, min(100.0, 100.0 - (costUSD * 12.0)))
-                    }
-                let reqsUsed = Int((100.0 - cursorPct) * 5.0)
-                let usedStr: String =
-                    if let t = cursorTelemetry,
-                        t.totalLinesAdded > 0 || (t.contextUsagePercent ?? 0) > 0
-                    {
-                        if let ctx = t.contextUsagePercent, ctx > 0 {
-                            "\(t.totalLinesAdded) lines • \(Int(ctx))% ctx"
-                        } else {
-                            "\(reqsUsed) / 500 reqs • \(t.totalLinesAdded) lines"
-                        }
-                    } else if let t = cursorTelemetry, t.composerSuggestedLines > 0 {
-                        "\(reqsUsed) / 500 reqs • \(t.composerSuggestedLines) sugg"
-                    } else {
-                        "\(reqsUsed) / 500 reqs"
-                    }
-                let tierStr =
-                    if let t = cursorTelemetry, let mode = t.unifiedMode {
-                        "Pro (\(mode.capitalized) Mode)"
-                    } else {
-                        "Pro (500 Fast Reqs)"
-                    }
-                results.append(
-                    ProviderQuota(
-                        isEstimated: true,
-                        provider: "Cursor",
-                        remainingPercent: cursorPct,
-                        resetHint: "Renews 1st of month",
-                        tier: tierStr,
-                        usedDisplay: usedStr,
-                        totalDisplay: "500 Fast / mo",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "cloudcode":
-                results.append(
-                    ProviderQuota(
-                        isEstimated: true,
-                        provider: "Google Cloud Code",
-                        remainingPercent: max(10.0, basePercent),
-                        resetHint: "Midnight PST",
-                        tier: "Developer (1.5k RPD)",
-                        usedDisplay: "\(Int((100.0 - basePercent) * 15.0)) / 1,500 reqs",
-                        totalDisplay: "1,500 RPD",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "antigravity":
-                results.append(
-                    ProviderQuota(
-                        isEstimated: true,
-                        provider: "Antigravity",
-                        remainingPercent: basePercent,
-                        resetHint: "Session Budget",
-                        tier: "Local Session",
-                        usedDisplay: String(format: "$%.2f", costUSD),
-                        totalDisplay: String(format: "$%.2f", budget),
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "windsurf":
-                results.append(
-                    ProviderQuota(
-                        isEstimated: true,
-                        provider: "Windsurf",
-                        remainingPercent: max(15.0, basePercent),
-                        resetHint: "Monthly",
-                        tier: "Cascade Pro",
-                        usedDisplay: "78 / 500 prompts",
-                        totalDisplay: "500 Prompts",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "kilo":
-                results.append(
-                    ProviderQuota(
-                        isEstimated: true,
-                        provider: "Kilo",
-                        remainingPercent: basePercent,
-                        resetHint: "Continuous Ledger",
-                        tier: "Pay-as-you-go",
-                        usedDisplay: String(format: "$%.2f", costUSD),
-                        totalDisplay: "Prepaid",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
             case "openrouter":
                 if let cached = OpenRouterUsageAdapter.cachedQuota {
                     var quota = cached
                     quota.burnRateTPM = burnRateTPM
-                    quota.hoursRemaining = hoursLeft
+                    quota.hoursRemaining = forecastHoursRemaining(
+                        tokensPerMin: burnRateTPM,
+                        remainingPercent: cached.remainingPercent)
                     results.append(quota)
-                } else {
-                    results.append(
-                        ProviderQuota(
-                            isEstimated: true,
-                            provider: "OpenRouter",
-                            remainingPercent: basePercent,
-                            resetHint: "Monthly credit limit",
-                            tier: "BYOK",
-                            usedDisplay: String(format: "$%.2f", costUSD),
-                            totalDisplay: "PayG",
-                            burnRateTPM: burnRateTPM,
-                            hoursRemaining: hoursLeft
-                        ))
                 }
             case "ollama":
                 if let cached = OllamaUsageAdapter.cachedQuota {
                     var quota = cached
                     quota.burnRateTPM = burnRateTPM
                     results.append(quota)
-                } else {
-                    results.append(
-                        ProviderQuota(
-                            isEstimated: true,
-                            provider: "Ollama",
-                            remainingPercent: 100.0,
-                            resetHint: "Unlimited (Local)",
-                            tier: "Local Models",
-                            usedDisplay: "Idle",
-                            totalDisplay: "Local VRAM",
-                            burnRateTPM: burnRateTPM,
-                            hoursRemaining: nil
-                        ))
                 }
             default:
-                results.append(
-                    ProviderQuota(
-                        isEstimated: true,
-                        provider: p.capitalized,
-                        remainingPercent: basePercent,
-                        resetHint: "24h",
-                        tier: "Standard",
-                        usedDisplay: String(format: "$%.2f", costUSD),
-                        totalDisplay: String(format: "$%.2f", budget),
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
+                continue
             }
         }
 
