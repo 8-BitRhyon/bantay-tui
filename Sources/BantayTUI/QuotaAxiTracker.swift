@@ -83,6 +83,7 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         hoursRemaining: Double? = nil,
         resetsAt: Date? = nil,
         isCooldown: Bool = false,
+        limitReached: Bool = false,
         hidesProgress: Bool = false
     ) {
         self.init(
@@ -96,6 +97,7 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
             hoursRemaining: hoursRemaining,
             resetsAt: resetsAt,
             isCooldown: isCooldown,
+            limitReached: limitReached,
             isEstimated: isEstimated,
             hidesProgress: hidesProgress)
     }
@@ -166,7 +168,8 @@ public final class QuotaAxiTracker: Sendable {
         costUSD: Double,
         budgetUSD: Double,
         burnRateTPM: Double = 0.0,
-        home: String = NSHomeDirectory()
+        home: String = NSHomeDirectory(),
+        goMonthlyAllowanceUSD: Double = 60
     ) -> [ProviderQuota] {
         // 1. Try quota-axi CLI if installed
         let candidateBins = [
@@ -267,36 +270,28 @@ public final class QuotaAxiTracker: Sendable {
                     results.append(
                         ProviderQuota(
                             provider: "opencode",
-                            remainingPercent: state.limitReached ? 0 : 100,
-                            resetHint: state.limitReached
-                                ? "Free tier limit" : "No quota wall today",
+                            remainingPercent: 100,
+                            resetHint: "Free tier · no quota",
                             tier: tier,
                             usedDisplay: String(
-                                format: "$%.2f today (%@ tok)",
-                                state.costTodayUSD,
-                                UsageTracker.compactTokens(state.tokensToday)),
+                                format: "$%.2f today · %d requests",
+                                state.costTodayUSD, state.requestCount),
                             totalDisplay: "Measured",
                             burnRateTPM: burnRateTPM,
-                            limitReached: state.limitReached
+                            hidesProgress: true
                         ))
                 }
                 let bundled = OpenCodeUsageAdapter.goBundledSpend(
                     now: Date(), home: home)
                 if bundled.spend5h + bundled.spend7d + bundled.spend30d > 0 {
-                    results.append(
-                        ProviderQuota(
-                            isEstimated: true,
-                            provider: "opencode Go",
-                            remainingPercent: 100,
-                            resetHint: "Bundled Go spend",
-                            tier: "Go subscription",
-                            usedDisplay: String(
-                                format: "5h $%.2f · 7d $%.2f · 30d $%.2f",
-                                bundled.spend5h, bundled.spend7d, bundled.spend30d),
-                            totalDisplay: "No cap set",
-                            burnRateTPM: burnRateTPM,
-                            hidesProgress: true
-                        ))
+                    if let row = Self.opencodeGoRow(
+                        bundled: bundled,
+                        home: home,
+                        burnRateTPM: burnRateTPM,
+                        monthlyAllowanceUSD: goMonthlyAllowanceUSD)
+                    {
+                        results.append(row)
+                    }
                 }
             case "openrouter":
                 if let cached = OpenRouterUsageAdapter.cachedQuota {
@@ -319,6 +314,57 @@ public final class QuotaAxiTracker: Sendable {
         }
 
         return results
+    }
+
+    /// One bundled opencode Go row, or nil when wall-clock spend cannot be
+    /// metered against the monthly allowance. Pure apart from the clock.
+    static func opencodeGoRow(
+        bundled: OpenCodeUsageAdapter.GoBundledSpend,
+        home: String,
+        burnRateTPM: Double,
+        monthlyAllowanceUSD: Double
+    ) -> ProviderQuota? {
+        let now = Date()
+        let walls = OpenCodeUsageAdapter.goWallState(now: now, home: home)
+        let wallsToday = walls?.wallsToday ?? 0
+        let limitedNow = walls?.limitedNow ?? false
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let tight = OpenCodeUsageAdapter.tightestAllowanceWindow(
+            usages: [
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "5-hour", lengthMs: 5 * 3_600 * 1_000,
+                    fraction: 0.2, spend: bundled.spend5h,
+                    oldestMs: bundled.oldest5hMs),
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "weekly", lengthMs: 7 * 86_400 * 1_000,
+                    fraction: 0.5, spend: bundled.spend7d,
+                    oldestMs: bundled.oldest7dMs),
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "monthly", lengthMs: 30 * 86_400 * 1_000,
+                    fraction: 1.0, spend: bundled.spend30d,
+                    oldestMs: bundled.oldest30dMs),
+            ],
+            monthlyAllowance: monthlyAllowanceUSD,
+            nowMs: nowMs)
+        let wallSuffix = wallsToday == 1 ? "" : "s"
+        let wallsText = "\(wallsToday) limit wall\(wallSuffix) today"
+        let resetHint = wallsToday > 0 ? wallsText : "Tightest \(tight.label) window"
+        let remaining = limitedNow ? 0.0 : 100.0 - tight.percentUsed
+        let used = String(
+            format: "5h $%.2f · 7d $%.2f · 30d $%.2f",
+            bundled.spend5h, bundled.spend7d, bundled.spend30d)
+        let total = String(format: "$%.0f / mo allowance", monthlyAllowanceUSD)
+        return ProviderQuota(
+            provider: "opencode Go",
+            remainingPercent: remaining,
+            resetHint: resetHint,
+            tier: "Go subscription",
+            usedDisplay: used,
+            totalDisplay: total,
+            burnRateTPM: burnRateTPM,
+            limitReached: limitedNow,
+            isEstimated: true
+        )
     }
 
     private static func cleanProviderName(_ raw: String) -> String {

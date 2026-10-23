@@ -46,40 +46,61 @@
                     + " time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
                 nil, nil, nil)
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-            let payload =
-                "{\"tokens\":{\"input\":100,\"output\":10,\"reasoning\":0,"
-                + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":0.01,"
-                + "\"content\":[{\"type\":\"text\",\"text\":\"QuotaExceeded: Free usage limit\"}]}"
             let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-            var stmt: OpaquePointer?
-            sqlite3_prepare_v2(
-                dbHandle,
-                "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
-                -1, &stmt, nil)
-            if let stmt {
-                sqlite3_bind_text(stmt, 1, "m1", -1, transient)
-                sqlite3_bind_text(stmt, 2, "s1", -1, transient)
-                sqlite3_bind_text(stmt, 3, "assistant", -1, transient)
-                sqlite3_bind_int64(stmt, 4, 1)
-                sqlite3_bind_int64(stmt, 5, nowMs)
-                sqlite3_bind_int64(stmt, 6, nowMs)
-                sqlite3_bind_text(stmt, 7, (payload as NSString).utf8String, -1, transient)
-                sqlite3_step(stmt)
-                sqlite3_finalize(stmt)
+            func insert(
+                id: String, model: String, provider: String, wall: Bool, cost: Double
+            ) {
+                let text = wall ? "QuotaExceeded: Free usage limit" : "done"
+                let payload =
+                    "{\"model\":{\"id\":\"\(model)\",\"providerID\":\"\(provider)\"},"
+                    + "\"tokens\":{\"input\":100,\"output\":10,\"reasoning\":0,"
+                    + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":\(cost),"
+                    + "\"content\":[{\"type\":\"text\",\"text\":\"\(text)\"}]}"
+                var stmt: OpaquePointer?
+                sqlite3_prepare_v2(
+                    dbHandle,
+                    "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
+                    -1, &stmt, nil)
+                if let stmt {
+                    sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, transient)
+                    sqlite3_bind_text(stmt, 2, "s1", -1, transient)
+                    sqlite3_bind_text(stmt, 3, "assistant", -1, transient)
+                    sqlite3_bind_int64(stmt, 4, 1)
+                    sqlite3_bind_int64(stmt, 5, nowMs)
+                    sqlite3_bind_int64(stmt, 6, nowMs)
+                    sqlite3_bind_text(
+                        stmt, 7, (payload as NSString).utf8String, -1, transient)
+                    sqlite3_step(stmt)
+                    sqlite3_finalize(stmt)
+                }
             }
+            insert(
+                id: "m1", model: "deepseek-v4.1-flash-free", provider: "opencode",
+                wall: false, cost: 0)
+            insert(
+                id: "m2", model: "muse-spark-1.3-contributor", provider: "opencode-go",
+                wall: true, cost: 0.01)
+            // Free bucket identity is the dominant model, never a stray row.
             let state = OpenCodeUsageAdapter.quotaState(
                 now: Date(), home: dir.path)
-            #expect(state?.limitReached == true)
-            #expect((state?.costTodayUSD ?? 0) > 0)
+            #expect(state?.model == "deepseek-v4.1-flash-free")
+            #expect(state?.requestCount == 1)
+            // Walls scope by provider: the Go wall must not blame free tier.
+            let walls = OpenCodeUsageAdapter.goWallState(now: Date(), home: dir.path)
+            #expect(walls?.wallsToday == 1)
+            #expect(walls?.limitedNow == true)
             let quotas = QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: ["opencode"],
                 costUSD: 0.01,
                 budgetUSD: 10.0,
                 home: dir.path
             )
-            let opencode = quotas.first { $0.id == "opencode" }
-            #expect(opencode?.limitReached == true)
-            #expect(opencode?.remainingPercent == 0)
+            let free = quotas.first { $0.id == "opencode" }
+            #expect(free?.limitReached == false)
+            #expect(free?.remainingPercent == 100)
+            let go = quotas.first { $0.id == "opencode go" }
+            #expect(go?.limitReached == true)
+            #expect(go?.remainingPercent == 0)
             try? FileManager.default.removeItem(at: dir)
         }
 
@@ -87,6 +108,38 @@
         func opencodeGoBundled() {
             let bundled = OpenCodeUsageAdapter.goBundledSpend(home: NSHomeDirectory())
             #expect(bundled.spend5h + bundled.spend7d + bundled.spend30d >= 0)
+        }
+
+        @Test("Go bundled allowance matches the console math")
+        func opencodeGoBundledAllowance() {
+            // Console ground truth: $2.51 bundled spend reads 19/8/4%.
+            let tight = OpenCodeUsageAdapter.tightestAllowanceWindow(
+                usages: [
+                    OpenCodeUsageAdapter.GoWindowUsage(
+                        label: "5-hour", lengthMs: 5 * 3_600 * 1_000,
+                        fraction: 0.2, spend: 2.51, oldestMs: nil),
+                    OpenCodeUsageAdapter.GoWindowUsage(
+                        label: "weekly", lengthMs: 7 * 86_400 * 1_000,
+                        fraction: 0.5, spend: 2.51, oldestMs: nil),
+                    OpenCodeUsageAdapter.GoWindowUsage(
+                        label: "monthly", lengthMs: 30 * 86_400 * 1_000,
+                        fraction: 1.0, spend: 2.51, oldestMs: nil),
+                ],
+                monthlyAllowance: 60,
+                nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            #expect(tight.label == "5-hour")
+            #expect(abs(tight.allowance - 12.0) < 0.001)
+            #expect(abs(tight.percentUsed - 20.9) < 0.5)
+            let quotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["opencode"],
+                costUSD: 2.51,
+                budgetUSD: 10.0,
+                home: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("bantay-noquota-\(UUID().uuidString)").path,
+                goMonthlyAllowanceUSD: 60
+            )
+            let go = quotas.first { $0.id == "opencode go" }
+            #expect(go == nil)
         }
 
         @Test("quotaThresholds detects warning and critical status correctly")

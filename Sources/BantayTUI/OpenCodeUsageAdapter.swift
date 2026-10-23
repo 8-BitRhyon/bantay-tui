@@ -70,7 +70,14 @@ enum OpenCodeUsageAdapter {
         let limitReached: Bool
         let model: String?
         let costTodayUSD: Double
-        let tokensToday: Int
+        let requestCount: Int
+    }
+
+    /// Go limit-wall state: walls hit by `opencode-go` traffic today and
+    /// whether one is recent enough to still block (30 minutes).
+    struct GoWallState: Equatable, Sendable {
+        let wallsToday: Int
+        let limitedNow: Bool
     }
 
     static func quotaState(
@@ -89,38 +96,60 @@ enum OpenCodeUsageAdapter {
             + " OR json_extract(data,'$.model.providerID') != 'opencode-go')"
         let usageSql =
             "SELECT COUNT(*),"
-            + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0),"
-            + " COALESCE(SUM(CAST(json_extract(data,'$.tokens.input') AS INTEGER)),0)"
-            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.output') AS INTEGER)),0)"
-            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.reasoning') AS INTEGER)),0)"
-            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.cache.read') AS INTEGER)),0)"
-            + " + COALESCE(SUM(CAST(json_extract(data,'$.tokens.cache.write') AS INTEGER)),0)"
+            + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0)"
             + " FROM session_message WHERE type='assistant'"
             + " AND time_created >= \(startOfDayMs) \(freeFilter)"
         guard
             let row = sqlite3QueryOpenCode(sql: usageSql, db: url)?.first,
-            row.count >= 3,
+            row.count >= 2,
             let count = Int(row[0]),
             count > 0,
-            let cost = Double(row[1]),
-            let tokens = Int(row[2])
+            let cost = Double(row[1])
         else { return nil }
-        let limitSql =
-            "SELECT COUNT(*) FROM session_message WHERE type='assistant'"
-            + " AND time_created >= \(startOfDayMs) AND data LIKE '%QuotaExceeded%'"
-        let limited =
-            (sqlite3QueryOpenCode(sql: limitSql, db: url)?.first?.first)
-            .flatMap(Int.init) ?? 0 > 0
+        // Identity is the dominant model by message count, never the latest
+        // row: one stray message must not rename the whole bucket.
         let modelSql =
             "SELECT json_extract(data,'$.model.id') FROM session_message"
             + " WHERE type='assistant' AND time_created >= \(startOfDayMs) \(freeFilter)"
-            + " ORDER BY time_created DESC LIMIT 1"
+            + " GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1"
         let model = sqlite3QueryOpenCode(sql: modelSql, db: url)?.first?.first
         return QuotaState(
-            limitReached: limited,
+            limitReached: false,
             model: model?.isEmpty == false ? model : nil,
             costTodayUSD: cost,
-            tokensToday: tokens)
+            requestCount: count)
+    }
+
+    /// Go wall state scoped to `opencode-go` traffic only. Free-tier walls
+    /// must never blame the Go row, and Go walls must never blame free tier.
+    static func goWallState(
+        now: Date = Date(),
+        home: String = NSHomeDirectory()
+    ) -> GoWallState? {
+        let url = databaseURL(home: home)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let calendar = Calendar.current
+        let startOfDayMs = Int64(
+            calendar.startOfDay(for: now).timeIntervalSince1970 * 1000)
+        let recentMs = nowMs - 30 * 60 * 1_000
+        let sql =
+            "SELECT COUNT(*), COALESCE(MAX(time_created),0)"
+            + " FROM session_message WHERE type='assistant'"
+            + " AND json_extract(data,'$.model.providerID') = 'opencode-go'"
+            + " AND time_created >= \(startOfDayMs) AND data LIKE '%QuotaExceeded%'"
+        guard
+            let row = sqlite3QueryOpenCode(sql: sql, db: url)?.first,
+            row.count >= 2,
+            let walls = Int(row[0]),
+            let lastWall = Int(row[1])
+        else { return nil }
+        guard walls > 0 else {
+            return GoWallState(wallsToday: 0, limitedNow: false)
+        }
+        return GoWallState(
+            wallsToday: walls,
+            limitedNow: Int64(lastWall) >= recentMs)
     }
 
     /// Bundled Go spend across windows, preferring opencode's own
@@ -131,6 +160,54 @@ enum OpenCodeUsageAdapter {
         let spend5h: Double
         let spend7d: Double
         let spend30d: Double
+        let oldest5hMs: Int64?
+        let oldest7dMs: Int64?
+        let oldest30dMs: Int64?
+    }
+
+    /// One Go allowance window: wall-clock length, fraction of the monthly
+    /// allowance, measured spend, and oldest spend timestamp for reset math.
+    struct GoWindowUsage: Equatable, Sendable {
+        let label: String
+        let lengthMs: Int64
+        let fraction: Double
+        let spend: Double
+        let oldestMs: Int64?
+    }
+
+    /// The tightest allowance window: highest spend relative to its
+    /// allowance. Returns spend, allowance, percent used, label, and reset
+    /// date (oldest in-window spend aging out, nil when the window is empty).
+    static func tightestAllowanceWindow(
+        usages: [GoWindowUsage], monthlyAllowance: Double, nowMs: Int64
+    ) -> (spend: Double, allowance: Double, percentUsed: Double, label: String, resetsAt: Date?) {
+        var bestSpend = 0.0
+        var bestAllowance = monthlyAllowance
+        var bestLabel = "monthly"
+        var bestRatio = 0.0
+        var bestResetsAt: Date? = nil
+        for usage in usages {
+            let allowance = max(monthlyAllowance * usage.fraction, 0.01)
+            let ratio = usage.spend / allowance
+            if ratio > bestRatio {
+                bestRatio = ratio
+                bestSpend = usage.spend
+                bestAllowance = allowance
+                bestLabel = usage.label
+                if let oldest = usage.oldestMs {
+                    bestResetsAt = Date(
+                        timeIntervalSince1970: Double(oldest + usage.lengthMs) / 1000.0)
+                } else {
+                    bestResetsAt = nil
+                }
+            }
+        }
+        _ = nowMs
+        return (
+            spend: bestSpend, allowance: bestAllowance,
+            percentUsed: min(max(bestRatio * 100, 0), 100),
+            label: bestLabel, resetsAt: bestResetsAt
+        )
     }
 
     static func goBundledSpend(
@@ -138,12 +215,16 @@ enum OpenCodeUsageAdapter {
         home: String = NSHomeDirectory(),
         opencodeBinary: String? = nil
     ) -> GoBundledSpend {
-        GoBundledSpend(
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        return GoBundledSpend(
             spend5h: goSpendSince(hours: 5, now: now, home: home),
             spend7d: statsGoCost(days: 7, opencodeBinary: opencodeBinary)
                 ?? goSpendSince(hours: 24 * 7, now: now, home: home),
             spend30d: statsGoCost(days: 30, opencodeBinary: opencodeBinary)
-                ?? goSpendSince(hours: 24 * 30, now: now, home: home))
+                ?? goSpendSince(hours: 24 * 30, now: now, home: home),
+            oldest5hMs: goOldestSince(hours: 5, nowMs: nowMs, home: home),
+            oldest7dMs: goOldestSince(hours: 24 * 7, nowMs: nowMs, home: home),
+            oldest30dMs: goOldestSince(hours: 24 * 30, nowMs: nowMs, home: home))
     }
 
     /// Total opencode-go cost from opencode's own accounting for the range.
@@ -211,6 +292,23 @@ enum OpenCodeUsageAdapter {
             let first = row.first
         else { return 0 }
         return Double(first) ?? 0
+    }
+
+    private static func goOldestSince(hours: Double, nowMs: Int64, home: String) -> Int64? {
+        let url = databaseURL(home: home)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let sinceMs = nowMs - Int64(hours * 3_600 * 1_000)
+        let sql =
+            "SELECT COALESCE(MIN(time_created),0)"
+            + " FROM session_message WHERE type='assistant'"
+            + " AND json_extract(data,'$.model.providerID') = 'opencode-go'"
+            + " AND time_created >= \(sinceMs)"
+        guard let row = sqlite3QueryOpenCode(sql: sql, db: url)?.first,
+            let first = row.first,
+            let oldest = Int64(first),
+            oldest > 0
+        else { return nil }
+        return oldest
     }
 
     private static func sqlite3QueryOpenCode(sql: String, db: URL) -> [[String]]? {

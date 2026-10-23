@@ -132,6 +132,7 @@ struct SettingsView: View {
     @State private var stripDimInactive = StripConfiguration.load().dimInactive
     @State private var stripChevrons = StripConfiguration.load().showNavigationChevrons
     @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
+    @State private var openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
 
     private static let sectionKeywords: [String: [String]] = [
@@ -482,6 +483,17 @@ struct SettingsView: View {
                     )
                     .onChange(of: dailyBudgetUSD) { newValue in
                         NotchHUDConfig.shared.dailyBudgetUSD = Double(newValue)
+                    }
+                    Stepper(
+                        "Go monthly allowance: $\(Int(openCodeGoAllowanceUSD))",
+                        value: $openCodeGoAllowanceUSD, in: 10...1000, step: 10
+                    )
+                    .help(
+                        "Bundled OpenCode Go monthly pool. Bantay meters every Go model against it. Match the figure on your console usage page."
+                    )
+                    .onChange(of: openCodeGoAllowanceUSD) { newValue in
+                        NotchHUDConfig.shared.openCodeGoAllowanceUSD = newValue
+                        Task { await QuotaMonitor.shared.refresh(force: true) }
                     }
                     Toggle(
                         "Notify at 80% and 100% budget thresholds",
@@ -1493,6 +1505,7 @@ struct SettingsView: View {
         stripDimInactive = stripCfg.dimInactive
         stripChevrons = stripCfg.showNavigationChevrons
         desktopHUDPinned = DesktopHUDController.shared.isPinned
+        openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
         hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
         DispatchQueue.main.async {
             isRefreshingConfig = false

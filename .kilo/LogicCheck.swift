@@ -8533,6 +8533,26 @@ struct LogicCheckMain {
             OpenCodeUsageAdapter.quotaState(home: NSTemporaryDirectory()) == nil,
             "P8 opencode quota state is nil without recent ledger activity")
 
+        let consoleTight = OpenCodeUsageAdapter.tightestAllowanceWindow(
+            usages: [
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "5-hour", lengthMs: 5 * 3_600 * 1_000,
+                    fraction: 0.2, spend: 2.51, oldestMs: nil),
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "weekly", lengthMs: 7 * 86_400 * 1_000,
+                    fraction: 0.5, spend: 2.51, oldestMs: nil),
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "monthly", lengthMs: 30 * 86_400 * 1_000,
+                    fraction: 1.0, spend: 2.51, oldestMs: nil),
+            ],
+            monthlyAllowance: 60,
+            nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        check(
+            consoleTight.label == "5-hour"
+                && abs(consoleTight.allowance - 12.0) < 0.001
+                && abs(consoleTight.percentUsed - 20.9) < 0.5,
+            "P8 bundled Go math matches the console (got \(consoleTight))")
+
         let proceedPrompt = ApprovalPromptResolver.resolve(
             rawTail: """
                 Do you want to proceed?

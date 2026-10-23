@@ -108,6 +108,15 @@ final class NotchHUDConfig {
     var enforceBudgetLimit: Bool = false {
         didSet { defaults.set(enforceBudgetLimit, forKey: "enforceBudgetLimit") }
     }
+    /// Bundled OpenCode Go monthly allowance in dollars. Go meters every
+    /// model against one shared pool; the console is the only source for the
+    /// official figure, so this stays user-editable. Defaults to 60.
+    var openCodeGoAllowanceUSD: Double = 60 {
+        didSet {
+            openCodeGoAllowanceUSD = min(max(openCodeGoAllowanceUSD, 10), 1000)
+            defaults.set(openCodeGoAllowanceUSD, forKey: "openCodeGoAllowanceUSD")
+        }
+    }
     /// High burn velocity threshold in tokens per minute (default 2500.0).
     var highBurnThresholdTPM: Double = 2500.0 {
         didSet {
@@ -559,6 +568,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "enforceBudgetLimit") as? Bool {
             enforceBudgetLimit = v
+        }
+        if let v = defaults.object(forKey: "openCodeGoAllowanceUSD") as? NSNumber {
+            openCodeGoAllowanceUSD = v.doubleValue
         }
         if let v = defaults.object(forKey: "highBurnThresholdTPM") as? NSNumber {
             highBurnThresholdTPM = v.doubleValue
