@@ -4,7 +4,24 @@ extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
     static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
     static let settingsWillOpen = Notification.Name("settingsWillOpen")
+    static let openSettingsRequested = Notification.Name("openSettingsRequested")
+    static let settingsRouteRequested = Notification.Name("settingsRouteRequested")
     static let mascotLeveledUp = Notification.Name("mascotLeveledUp")
+    static let stripToggleRequested = Notification.Name("stripToggleRequested")
+    static let stripFocusRequested = Notification.Name("stripFocusRequested")
+    static let stripCenterRequested = Notification.Name("stripCenterRequested")
+    static let stripWidthRequested = Notification.Name("stripWidthRequested")
+    static let stripApprovalRequested = Notification.Name("stripApprovalRequested")
+    static let stripOverviewRequested = Notification.Name("stripOverviewRequested")
+    static let stripReorderRequested = Notification.Name("stripReorderRequested")
+    static let stripAutochainRequested = Notification.Name("stripAutochainRequested")
+    static let stripPinRequested = Notification.Name("stripPinRequested")
+    static let stripStackRequested = Notification.Name("stripStackRequested")
+    static let stripUnstackRequested = Notification.Name("stripUnstackRequested")
+    static let stripTabbedRequested = Notification.Name("stripTabbedRequested")
+    static let stripHudRequested = Notification.Name("stripHudRequested")
+    static let notchCollapseRequested = Notification.Name("notchCollapseRequested")
+    static let notchExpandRequested = Notification.Name("notchExpandRequested")
 }
 
 @MainActor
@@ -90,6 +107,31 @@ final class NotchHUDConfig {
     /// Enforce budget limit by blocking task dispatch once the daily budget is exceeded.
     var enforceBudgetLimit: Bool = false {
         didSet { defaults.set(enforceBudgetLimit, forKey: "enforceBudgetLimit") }
+    }
+    /// Bundled OpenCode Go monthly allowance in dollars. Go meters every
+    /// model against one shared pool; the console is the only source for the
+    /// official figure, so this stays user-editable. Defaults to 60.
+    var openCodeGoAllowanceUSD: Double = 60 {
+        didSet {
+            openCodeGoAllowanceUSD = min(max(openCodeGoAllowanceUSD, 10), 1000)
+            defaults.set(openCodeGoAllowanceUSD, forKey: "openCodeGoAllowanceUSD")
+        }
+    }
+    /// Show the notch quota badge only when remaining quota drops below this
+    /// percent. 100 keeps the badge always visible while a live quota exists.
+    var quotaBadgeThresholdPercent: Double = 100 {
+        didSet {
+            quotaBadgeThresholdPercent = min(max(quotaBadgeThresholdPercent, 5), 100)
+            defaults.set(quotaBadgeThresholdPercent, forKey: "quotaBadgeThresholdPercent")
+        }
+    }
+    /// Desktop HUD auto-hide delay in seconds after the pointer leaves.
+    /// Ignored while pinned.
+    var desktopHUDAutoHideSeconds: Double = 1.8 {
+        didSet {
+            desktopHUDAutoHideSeconds = min(max(desktopHUDAutoHideSeconds, 0.5), 10)
+            defaults.set(desktopHUDAutoHideSeconds, forKey: "desktopHUDAutoHideSeconds")
+        }
     }
     /// High burn velocity threshold in tokens per minute (default 2500.0).
     var highBurnThresholdTPM: Double = 2500.0 {
@@ -542,6 +584,15 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "enforceBudgetLimit") as? Bool {
             enforceBudgetLimit = v
+        }
+        if let v = defaults.object(forKey: "openCodeGoAllowanceUSD") as? NSNumber {
+            openCodeGoAllowanceUSD = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "quotaBadgeThresholdPercent") as? NSNumber {
+            quotaBadgeThresholdPercent = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "desktopHUDAutoHideSeconds") as? NSNumber {
+            desktopHUDAutoHideSeconds = v.doubleValue
         }
         if let v = defaults.object(forKey: "highBurnThresholdTPM") as? NSNumber {
             highBurnThresholdTPM = v.doubleValue

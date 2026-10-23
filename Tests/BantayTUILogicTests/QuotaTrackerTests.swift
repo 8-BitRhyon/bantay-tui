@@ -8,87 +8,138 @@
     @MainActor
     @Suite("Provider Quota and GUI Agent Detection", .serialized)
     struct QuotaTrackerTests {
-        @Test("probeLiveQuotas generates expected provider profiles for all providers")
-        func liveQuotaGeneration() {
-            let active = [
-                "codex", "cursor", "cloudcode", "claude",
-                "antigravity", "windsurf", "kilo",
-            ]
+        @Test("probeLiveQuotas emits rows only for reported quotas")
+        func liveQuotaHonesty() {
+            let emptyHome = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-noquota-\(UUID().uuidString)").path
             let quotas = QuotaAxiTracker.probeLiveQuotas(
-                activeProviders: active,
+                activeProviders: [
+                    "codex", "cursor", "cloudcode", "claude",
+                    "antigravity", "windsurf", "kilo",
+                ],
                 costUSD: 2.50,
                 budgetUSD: 10.00,
-                burnRateTPM: 120.0
+                burnRateTPM: 120.0,
+                home: emptyHome
             )
+            #expect(quotas.isEmpty)
+        }
 
-            #expect(!quotas.isEmpty)
-            let ids = Set(quotas.map(\.id))
-            #expect(ids.contains("claude"))
-            #expect(ids.contains("codex"))
-            #expect(ids.contains("cursor"))
-            #expect(ids.contains("cloudcode"))
-            #expect(ids.contains("antigravity"))
-            #expect(ids.contains("windsurf"))
-            #expect(ids.contains("kilo"))
-
-            // Verify Claude profile
-            if let claude = quotas.first(where: { $0.id == "claude" }) {
-                #expect(claude.provider == "Claude Code")
-                #expect(claude.resetHint == "5h rolling window")
-                #expect(claude.tier == "Pro Plan")
-                #expect(claude.usedDisplay.contains("$2.50"))
-                #expect(claude.totalDisplay.contains("$10.00 cap"))
-                #expect(claude.hoursRemaining != nil)
+        @Test("opencode quota state reflects the ledger limit wall")
+        func opencodeQuotaState() {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-opencode-quota-\(UUID().uuidString)")
+            let share = dir.appendingPathComponent(".local/share/opencode", isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: share, withIntermediateDirectories: true)
+            let db = share.appendingPathComponent("opencode.db")
+            var handle: OpaquePointer?
+            guard sqlite3_open(db.path, &handle) == SQLITE_OK, let dbHandle = handle else {
+                Issue.record("mock opencode DB failed to open")
+                return
             }
-
-            // Verify Codex profile
-            if let codex = quotas.first(where: { $0.id == "codex" }) {
-                #expect(codex.provider == "OpenAI Codex")
-                #expect(codex.resetHint == "Midnight UTC")
-                #expect(codex.tier.contains("Tier 1"))
-                #expect(codex.totalDisplay == "$20.00 / mo")
+            defer { sqlite3_close(dbHandle) }
+            sqlite3_exec(
+                dbHandle,
+                "CREATE TABLE session_message(id TEXT PRIMARY KEY, session_id TEXT NOT NULL,"
+                    + " type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL,"
+                    + " time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
+                nil, nil, nil)
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            func insert(
+                id: String, model: String, provider: String, wall: Bool, cost: Double
+            ) {
+                let text = wall ? "QuotaExceeded: Free usage limit" : "done"
+                let payload =
+                    "{\"model\":{\"id\":\"\(model)\",\"providerID\":\"\(provider)\"},"
+                    + "\"tokens\":{\"input\":100,\"output\":10,\"reasoning\":0,"
+                    + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":\(cost),"
+                    + "\"content\":[{\"type\":\"text\",\"text\":\"\(text)\"}]}"
+                var stmt: OpaquePointer?
+                sqlite3_prepare_v2(
+                    dbHandle,
+                    "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
+                    -1, &stmt, nil)
+                if let stmt {
+                    sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, transient)
+                    sqlite3_bind_text(stmt, 2, "s1", -1, transient)
+                    sqlite3_bind_text(stmt, 3, "assistant", -1, transient)
+                    sqlite3_bind_int64(stmt, 4, 1)
+                    sqlite3_bind_int64(stmt, 5, nowMs)
+                    sqlite3_bind_int64(stmt, 6, nowMs)
+                    sqlite3_bind_text(
+                        stmt, 7, (payload as NSString).utf8String, -1, transient)
+                    sqlite3_step(stmt)
+                    sqlite3_finalize(stmt)
+                }
             }
+            insert(
+                id: "m1", model: "deepseek-v4.1-flash-free", provider: "opencode",
+                wall: false, cost: 0)
+            insert(
+                id: "m2", model: "muse-spark-1.3-contributor", provider: "opencode-go",
+                wall: true, cost: 0.01)
+            // Free bucket identity is the dominant model, never a stray row.
+            let state = OpenCodeUsageAdapter.quotaState(
+                now: Date(), home: dir.path)
+            #expect(state?.model == "deepseek-v4.1-flash-free")
+            #expect(state?.requestCount == 1)
+            // Walls scope by provider: the Go wall must not blame free tier.
+            let walls = OpenCodeUsageAdapter.goWallState(now: Date(), home: dir.path)
+            #expect(walls?.wallsToday == 1)
+            #expect(walls?.limitedNow == true)
+            let quotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["opencode"],
+                costUSD: 0.01,
+                budgetUSD: 10.0,
+                home: dir.path
+            )
+            let free = quotas.first { $0.id == "opencode" }
+            #expect(free?.limitReached == false)
+            #expect(free?.remainingPercent == 100)
+            let go = quotas.first { $0.id == "opencode go" }
+            #expect(go?.limitReached == true)
+            #expect(go?.remainingPercent == 0)
+            try? FileManager.default.removeItem(at: dir)
+        }
 
-            // Verify Cursor profile
-            if let cursor = quotas.first(where: { $0.id == "cursor" }) {
-                #expect(cursor.provider == "Cursor")
-                #expect(cursor.resetHint == "Renews 1st of month")
-                #expect(cursor.tier.contains("500 Fast Reqs"))
-                #expect(cursor.totalDisplay == "500 Fast / mo")
-                #expect(cursor.usedDisplay.contains("500 reqs"))
-            }
+        @Test("opencode Go bundled spend prefers opencode stats")
+        func opencodeGoBundled() {
+            let bundled = OpenCodeUsageAdapter.goBundledSpend(home: NSHomeDirectory())
+            #expect(bundled.spend5h + bundled.spend7d + bundled.spend30d >= 0)
+        }
 
-            // Verify Cloud Code profile
-            if let cloud = quotas.first(where: { $0.id == "cloudcode" }) {
-                #expect(cloud.provider == "Google Cloud Code")
-                #expect(cloud.resetHint == "Midnight PST")
-                #expect(cloud.tier.contains("1.5k RPD"))
-                #expect(cloud.totalDisplay == "1,500 RPD")
-            }
-
-            // Verify Antigravity profile
-            if let agy = quotas.first(where: { $0.id == "antigravity" }) {
-                #expect(agy.provider == "Antigravity")
-                #expect(agy.resetHint == "Session Budget")
-                #expect(agy.tier == "Local Session")
-                #expect(agy.totalDisplay.contains("$10.00"))
-            }
-
-            // Verify Windsurf profile
-            if let wind = quotas.first(where: { $0.id == "windsurf" }) {
-                #expect(wind.provider == "Windsurf")
-                #expect(wind.resetHint == "Monthly")
-                #expect(wind.tier == "Cascade Pro")
-                #expect(wind.totalDisplay == "500 Prompts")
-            }
-
-            // Verify Kilo profile
-            if let kilo = quotas.first(where: { $0.id == "kilo" }) {
-                #expect(kilo.provider == "Kilo")
-                #expect(kilo.resetHint == "Continuous Ledger")
-                #expect(kilo.tier == "Pay-as-you-go")
-                #expect(kilo.totalDisplay == "Prepaid")
-            }
+        @Test("Go bundled allowance matches the console math")
+        func opencodeGoBundledAllowance() {
+            // Console ground truth: $2.51 bundled spend reads 19/8/4%.
+            let tight = OpenCodeUsageAdapter.tightestAllowanceWindow(
+                usages: [
+                    OpenCodeUsageAdapter.GoWindowUsage(
+                        label: "5-hour", lengthMs: 5 * 3_600 * 1_000,
+                        fraction: 0.2, spend: 2.51, oldestMs: nil),
+                    OpenCodeUsageAdapter.GoWindowUsage(
+                        label: "weekly", lengthMs: 7 * 86_400 * 1_000,
+                        fraction: 0.5, spend: 2.51, oldestMs: nil),
+                    OpenCodeUsageAdapter.GoWindowUsage(
+                        label: "monthly", lengthMs: 30 * 86_400 * 1_000,
+                        fraction: 1.0, spend: 2.51, oldestMs: nil),
+                ],
+                monthlyAllowance: 60,
+                nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            #expect(tight.label == "5-hour")
+            #expect(abs(tight.allowance - 12.0) < 0.001)
+            #expect(abs(tight.percentUsed - 20.9) < 0.5)
+            let quotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["opencode"],
+                costUSD: 2.51,
+                budgetUSD: 10.0,
+                home: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("bantay-noquota-\(UUID().uuidString)").path,
+                goMonthlyAllowanceUSD: 60
+            )
+            let go = quotas.first { $0.id == "opencode go" }
+            #expect(go == nil)
         }
 
         @Test("quotaThresholds detects warning and critical status correctly")
@@ -144,14 +195,17 @@
             )
         }
 
-        @Test("overBudgetSpend clamps remaining percentage safely without crash")
+        @Test("overBudgetSpend clamps reported percentages without crash")
         func overBudgetSpend() {
             let quotas = QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: ["claude", "antigravity"],
                 costUSD: 25.00,
                 budgetUSD: 10.00,
-                burnRateTPM: 100.0
+                burnRateTPM: 100.0,
+                home: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("bantay-noquota-\(UUID().uuidString)").path
             )
+            #expect(quotas.isEmpty)
             for q in quotas {
                 #expect(q.remainingPercent >= 0.0)
                 #expect(q.remainingPercent <= 100.0)
@@ -236,6 +290,10 @@
             #expect(TaskDispatcher.canonicalAgentAlias("windsurf-ide") == "windsurf")
             #expect(TaskDispatcher.canonicalAgentAlias("github-copilot") == "copilot")
             #expect(TaskDispatcher.canonicalAgentAlias("antigravity-ide") == "antigravity")
+
+            let prevSynthesis = StandaloneAgentDispatcher.enableInputSynthesis
+            StandaloneAgentDispatcher.enableInputSynthesis = false
+            defer { StandaloneAgentDispatcher.enableInputSynthesis = prevSynthesis }
 
             let cursorDispatch = TaskDispatcher.shared.dispatch(
                 task: BantayTask(title: "Cursor review", assignedAgent: "cursor")
@@ -345,17 +403,15 @@
             #expect((snap?.costUSD ?? 0.0) > 0.0)
             #expect(snap?.costBySource["cursor"] != nil)
 
-            // Verify live quota probe integrates deep telemetry
+            // Local Cursor activity feeds Spend and Sessions, never the
+            // Quotas view: line counts are usage, not a provider quota.
             let quotas = QuotaAxiTracker.probeLiveQuotas(
                 activeProviders: ["cursor"],
                 costUSD: 1.0,
                 budgetUSD: 10.0,
                 home: tempDir.path
             )
-            let cursorQuota = quotas.first { $0.id == "cursor" }
-            #expect(cursorQuota != nil)
-            #expect(cursorQuota?.usedDisplay.contains("1189 lines") == true)
-            #expect(cursorQuota?.tier.contains("Agent") == true)
+            #expect(quotas.first { $0.id == "cursor" } == nil)
         }
 
         @Test("ClaudeUsageAdapter parses statusLine rate limits and computes remaining quota")

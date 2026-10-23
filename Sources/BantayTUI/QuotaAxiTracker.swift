@@ -27,8 +27,18 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
     public var hoursRemaining: Double?
     public var resetsAt: Date?
     public var isCooldown: Bool
+    /// True when the provider reported a hard limit wall (e.g. opencode
+    /// free-tier QuotaExceeded). Renders as a red limit state, not a bar.
+    public var limitReached: Bool
+    /// True for rows with no meaningful percentage: computed estimates and
+    /// spend-only rows without a quota cap. The UI labels them and hides
+    /// the progress bar.
+    public var isEstimated: Bool
+    /// True when the row reports spend without a quota cap, so the progress
+    /// bar would be meaningless. The row renders text only.
+    public var hidesProgress: Bool
     public var isWarning: Bool { remainingPercent <= 20.0 }
-    public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown }
+    public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown || limitReached }
 
     public init(
         provider: String,
@@ -40,7 +50,10 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         burnRateTPM: Double = 0.0,
         hoursRemaining: Double? = nil,
         resetsAt: Date? = nil,
-        isCooldown: Bool = false
+        isCooldown: Bool = false,
+        limitReached: Bool = false,
+        isEstimated: Bool = false,
+        hidesProgress: Bool = false
     ) {
         self.provider = provider
         self.remainingPercent = min(max(remainingPercent, 0.0), 100.0)
@@ -52,6 +65,41 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         self.hoursRemaining = hoursRemaining
         self.resetsAt = resetsAt
         self.isCooldown = isCooldown
+        self.limitReached = limitReached
+        self.isEstimated = isEstimated
+        self.hidesProgress = hidesProgress
+    }
+
+    /// Convenience initializer for generated/estimated quota rows.
+    public init(
+        isEstimated: Bool,
+        provider: String,
+        remainingPercent: Double,
+        resetHint: String = "24h",
+        tier: String = "Pro",
+        usedDisplay: String = "",
+        totalDisplay: String = "",
+        burnRateTPM: Double = 0.0,
+        hoursRemaining: Double? = nil,
+        resetsAt: Date? = nil,
+        isCooldown: Bool = false,
+        limitReached: Bool = false,
+        hidesProgress: Bool = false
+    ) {
+        self.init(
+            provider: provider,
+            remainingPercent: remainingPercent,
+            resetHint: resetHint,
+            tier: tier,
+            usedDisplay: usedDisplay,
+            totalDisplay: totalDisplay,
+            burnRateTPM: burnRateTPM,
+            hoursRemaining: hoursRemaining,
+            resetsAt: resetsAt,
+            isCooldown: isCooldown,
+            limitReached: limitReached,
+            isEstimated: isEstimated,
+            hidesProgress: hidesProgress)
     }
 
     /// Formats dynamic live countdown if resetsAt is present, otherwise falls back to static resetHint.
@@ -110,33 +158,18 @@ public final class QuotaAxiTracker: Sendable {
         }
     }
 
-    /// Provides fallback / synthetic quotas for detected active providers when quota-axi CLI is not installed.
-    public static func fallbackQuotas(
-        activeProviders: [String], costUSD: Double, budgetUSD: Double
-    ) -> [ProviderQuota] {
-        let budget = max(budgetUSD, 0.5)
-        let remainingBudgetRatio = max(0.0, (budget - costUSD) / budget)
-        let percent = remainingBudgetRatio * 100.0
-
-        let defaultProviders =
-            activeProviders.isEmpty ? ["herdr", "kilo", "anthropic"] : activeProviders
-        return defaultProviders.map { name in
-            ProviderQuota(
-                provider: name.capitalized,
-                remainingPercent: percent,
-                resetHint: "Midnight",
-                tier: "Pro"
-            )
-        }
-    }
-
-    /// Probes live quotas across popular providers (Claude, Codex, Cursor, Cloud Code, etc.).
+    /// Probes live quotas. Returns ONLY provider-reported rows: quota-axi
+    /// output, Claude rate limits, or cached OpenRouter/Ollama quotas.
+    /// Providers without a quota source never appear, no matter which
+    /// directories exist on disk or which agents are running. Directory
+    /// presence is not usage, and a budget ratio is not a quota.
     public static func probeLiveQuotas(
         activeProviders: [String],
         costUSD: Double,
         budgetUSD: Double,
         burnRateTPM: Double = 0.0,
-        home: String = NSHomeDirectory()
+        home: String = NSHomeDirectory(),
+        goMonthlyAllowanceUSD: Double = 60
     ) -> [ProviderQuota] {
         // 1. Try quota-axi CLI if installed
         let candidateBins = [
@@ -168,11 +201,8 @@ public final class QuotaAxiTracker: Sendable {
             }
         }
 
-        // 2. Compute live quotas per recognized provider
-        let budget = max(budgetUSD, 0.5)
-        let baseRemainingRatio = max(0.0, (budget - costUSD) / budget)
-        let basePercent = baseRemainingRatio * 100.0
-
+        // 2. Provider-reported quotas only. Recognize which providers could
+        // have data, but only emit rows backed by a real quota source.
         var results: [ProviderQuota] = []
         var recognized: Set<String> = []
 
@@ -205,200 +235,136 @@ public final class QuotaAxiTracker: Sendable {
         if fs.fileExists(atPath: home + "/.local/state/kilo") { recognized.insert("kilo") }
         if OpenRouterUsageAdapter.detect(home: home) { recognized.insert("openrouter") }
         if OllamaUsageAdapter.detect(home: home) { recognized.insert("ollama") }
+        if OpenCodeUsageAdapter.detect(home: home) { recognized.insert("opencode") }
 
         if recognized.isEmpty {
             recognized = ["claude", "codex", "cursor"]
         }
 
-        // Build rich quota items
+        // Build quota rows from provider-reported sources only. Anything
+        // without a live quota (quota-axi, Claude rate limits, cached
+        // OpenRouter/Ollama) is skipped: no budget-derived percentages, no
+        // activity-derived request counts, and no rows for tools that merely
+        // have a directory on disk.
+        //
+        // opencode is the measured exception: it has no quota API, but the
+        // ledger records free-tier limit walls (QuotaExceeded) plus exact
+        // daily spend. Its row reports that measured state, never a
+        // fabricated percentage.
         for p in recognized.sorted() {
-            let hoursLeft = forecastHoursRemaining(
-                tokensPerMin: burnRateTPM, remainingPercent: basePercent)
             switch p {
             case "claude":
                 if let live = ClaudeUsageAdapter.quota(home: home) {
                     var quota = live
                     quota.burnRateTPM = burnRateTPM
-                    quota.hoursRemaining = hoursLeft
+                    quota.hoursRemaining = forecastHoursRemaining(
+                        tokensPerMin: burnRateTPM,
+                        remainingPercent: live.remainingPercent)
                     results.append(quota)
-                } else {
+                }
+            case "opencode":
+                if let state = OpenCodeUsageAdapter.quotaState(now: Date(), home: home) {
+                    let tier =
+                        (state.model?.lowercased().contains("free") == true)
+                        ? "Free tier" : (state.model ?? "Managed models")
                     results.append(
                         ProviderQuota(
-                            provider: "Claude Code",
-                            remainingPercent: basePercent,
-                            resetHint: "5h rolling window",
-                            tier: "Pro Plan",
-                            usedDisplay: String(format: "$%.2f", costUSD),
-                            totalDisplay: String(format: "$%.2f cap", budget),
+                            provider: "opencode",
+                            remainingPercent: 100,
+                            resetHint: "Free tier · no quota",
+                            tier: tier,
+                            usedDisplay: String(
+                                format: "$%.2f today · %d requests",
+                                state.costTodayUSD, state.requestCount),
+                            totalDisplay: "Measured",
                             burnRateTPM: burnRateTPM,
-                            hoursRemaining: hoursLeft
+                            hidesProgress: true
                         ))
                 }
-            case "codex":
-                let codexTelemetry = CodexUsageAdapter.deepTelemetry(home: home)
-                let codexTokens: Int = {
-                    if let today = codexTelemetry?.todayTokensUsed, today > 0 { return today }
-                    return codexTelemetry?.totalTokensUsed ?? 0
-                }()
-                let codexCost = codexTelemetry?.estimatedCostUSD ?? (costUSD * 0.8)
-                let codexModel = codexTelemetry?.latestModel ?? "gpt-4o"
-                let usedStr =
-                    codexTokens > 0
-                    ? String(format: "$%.2f (%dk tok)", codexCost, max(1, codexTokens / 1000))
-                    : String(format: "$%.2f", codexCost)
-                let tierStr = "Tier 1 (\(codexModel))"
-                results.append(
-                    ProviderQuota(
-                        provider: "OpenAI Codex",
-                        remainingPercent: max(0.0, min(100.0, basePercent * 0.95)),
-                        resetHint: "Midnight UTC",
-                        tier: tierStr,
-                        usedDisplay: usedStr,
-                        totalDisplay: "$20.00 / mo",
+                let bundled = OpenCodeUsageAdapter.goBundledSpend(
+                    now: Date(), home: home)
+                if bundled.spend5h + bundled.spend7d + bundled.spend30d > 0 {
+                    if let row = Self.opencodeGoRow(
+                        bundled: bundled,
+                        home: home,
                         burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "cursor":
-                let cursorTelemetry = CursorUsageAdapter.deepTelemetry(home: home)
-                let cursorPct: Double =
-                    if let t = cursorTelemetry, let ctx = t.contextUsagePercent, ctx > 0 {
-                        max(5.0, min(100.0, 100.0 - ctx))
-                    } else {
-                        max(5.0, min(100.0, 100.0 - (costUSD * 12.0)))
-                    }
-                let reqsUsed = Int((100.0 - cursorPct) * 5.0)
-                let usedStr: String =
-                    if let t = cursorTelemetry,
-                        t.totalLinesAdded > 0 || (t.contextUsagePercent ?? 0) > 0
+                        monthlyAllowanceUSD: goMonthlyAllowanceUSD)
                     {
-                        if let ctx = t.contextUsagePercent, ctx > 0 {
-                            "\(t.totalLinesAdded) lines • \(Int(ctx))% ctx"
-                        } else {
-                            "\(reqsUsed) / 500 reqs • \(t.totalLinesAdded) lines"
-                        }
-                    } else if let t = cursorTelemetry, t.composerSuggestedLines > 0 {
-                        "\(reqsUsed) / 500 reqs • \(t.composerSuggestedLines) sugg"
-                    } else {
-                        "\(reqsUsed) / 500 reqs"
+                        results.append(row)
                     }
-                let tierStr =
-                    if let t = cursorTelemetry, let mode = t.unifiedMode {
-                        "Pro (\(mode.capitalized) Mode)"
-                    } else {
-                        "Pro (500 Fast Reqs)"
-                    }
-                results.append(
-                    ProviderQuota(
-                        provider: "Cursor",
-                        remainingPercent: cursorPct,
-                        resetHint: "Renews 1st of month",
-                        tier: tierStr,
-                        usedDisplay: usedStr,
-                        totalDisplay: "500 Fast / mo",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "cloudcode":
-                results.append(
-                    ProviderQuota(
-                        provider: "Google Cloud Code",
-                        remainingPercent: max(10.0, basePercent),
-                        resetHint: "Midnight PST",
-                        tier: "Developer (1.5k RPD)",
-                        usedDisplay: "\(Int((100.0 - basePercent) * 15.0)) / 1,500 reqs",
-                        totalDisplay: "1,500 RPD",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "antigravity":
-                results.append(
-                    ProviderQuota(
-                        provider: "Antigravity",
-                        remainingPercent: basePercent,
-                        resetHint: "Session Budget",
-                        tier: "Local Session",
-                        usedDisplay: String(format: "$%.2f", costUSD),
-                        totalDisplay: String(format: "$%.2f", budget),
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "windsurf":
-                results.append(
-                    ProviderQuota(
-                        provider: "Windsurf",
-                        remainingPercent: max(15.0, basePercent),
-                        resetHint: "Monthly",
-                        tier: "Cascade Pro",
-                        usedDisplay: "78 / 500 prompts",
-                        totalDisplay: "500 Prompts",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
-            case "kilo":
-                results.append(
-                    ProviderQuota(
-                        provider: "Kilo",
-                        remainingPercent: basePercent,
-                        resetHint: "Continuous Ledger",
-                        tier: "Pay-as-you-go",
-                        usedDisplay: String(format: "$%.2f", costUSD),
-                        totalDisplay: "Prepaid",
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
+                }
             case "openrouter":
                 if let cached = OpenRouterUsageAdapter.cachedQuota {
                     var quota = cached
                     quota.burnRateTPM = burnRateTPM
-                    quota.hoursRemaining = hoursLeft
+                    quota.hoursRemaining = forecastHoursRemaining(
+                        tokensPerMin: burnRateTPM,
+                        remainingPercent: cached.remainingPercent)
                     results.append(quota)
-                } else {
-                    results.append(
-                        ProviderQuota(
-                            provider: "OpenRouter",
-                            remainingPercent: basePercent,
-                            resetHint: "Monthly credit limit",
-                            tier: "BYOK",
-                            usedDisplay: String(format: "$%.2f", costUSD),
-                            totalDisplay: "PayG",
-                            burnRateTPM: burnRateTPM,
-                            hoursRemaining: hoursLeft
-                        ))
                 }
             case "ollama":
                 if let cached = OllamaUsageAdapter.cachedQuota {
                     var quota = cached
                     quota.burnRateTPM = burnRateTPM
                     results.append(quota)
-                } else {
-                    results.append(
-                        ProviderQuota(
-                            provider: "Ollama",
-                            remainingPercent: 100.0,
-                            resetHint: "Unlimited (Local)",
-                            tier: "Local Models",
-                            usedDisplay: "Idle",
-                            totalDisplay: "Local VRAM",
-                            burnRateTPM: burnRateTPM,
-                            hoursRemaining: nil
-                        ))
                 }
             default:
-                results.append(
-                    ProviderQuota(
-                        provider: p.capitalized,
-                        remainingPercent: basePercent,
-                        resetHint: "24h",
-                        tier: "Standard",
-                        usedDisplay: String(format: "$%.2f", costUSD),
-                        totalDisplay: String(format: "$%.2f", budget),
-                        burnRateTPM: burnRateTPM,
-                        hoursRemaining: hoursLeft
-                    ))
+                continue
             }
         }
 
         return results
+    }
+
+    /// One bundled opencode Go row, or nil when wall-clock spend cannot be
+    /// metered against the monthly allowance. Pure apart from the clock.
+    static func opencodeGoRow(
+        bundled: OpenCodeUsageAdapter.GoBundledSpend,
+        home: String,
+        burnRateTPM: Double,
+        monthlyAllowanceUSD: Double
+    ) -> ProviderQuota? {
+        let now = Date()
+        let walls = OpenCodeUsageAdapter.goWallState(now: now, home: home)
+        let wallsToday = walls?.wallsToday ?? 0
+        let limitedNow = walls?.limitedNow ?? false
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let tight = OpenCodeUsageAdapter.tightestAllowanceWindow(
+            usages: [
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "5-hour", lengthMs: 5 * 3_600 * 1_000,
+                    fraction: 0.2, spend: bundled.spend5h,
+                    oldestMs: bundled.oldest5hMs),
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "weekly", lengthMs: 7 * 86_400 * 1_000,
+                    fraction: 0.5, spend: bundled.spend7d,
+                    oldestMs: bundled.oldest7dMs),
+                OpenCodeUsageAdapter.GoWindowUsage(
+                    label: "monthly", lengthMs: 30 * 86_400 * 1_000,
+                    fraction: 1.0, spend: bundled.spend30d,
+                    oldestMs: bundled.oldest30dMs),
+            ],
+            monthlyAllowance: monthlyAllowanceUSD,
+            nowMs: nowMs)
+        let wallSuffix = wallsToday == 1 ? "" : "s"
+        let wallsText = "\(wallsToday) limit wall\(wallSuffix) today"
+        let resetHint = wallsToday > 0 ? wallsText : "Tightest \(tight.label) window"
+        let remaining = limitedNow ? 0.0 : 100.0 - tight.percentUsed
+        let used = String(
+            format: "5h $%.2f · 7d $%.2f · 30d $%.2f",
+            bundled.spend5h, bundled.spend7d, bundled.spend30d)
+        let total = String(format: "$%.0f / mo allowance", monthlyAllowanceUSD)
+        return ProviderQuota(
+            provider: "opencode Go",
+            remainingPercent: remaining,
+            resetHint: resetHint,
+            tier: "Go subscription",
+            usedDisplay: used,
+            totalDisplay: total,
+            burnRateTPM: burnRateTPM,
+            limitReached: limitedNow,
+            isEstimated: true
+        )
     }
 
     private static func cleanProviderName(_ raw: String) -> String {

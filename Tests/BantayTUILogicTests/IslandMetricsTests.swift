@@ -89,8 +89,74 @@
             #expect(!IslandMetrics.shouldCollapseOnHoverExit(isExpanded: true, isComposing: true))
             #expect(IslandMetrics.requiresApproval("accessRequest"))
             #expect(IslandMetrics.requiresApproval("access_request"))
+            #expect(IslandMetrics.requiresApproval("waiting"))
             #expect(!IslandMetrics.requiresApproval("progress"))
             #expect(!IslandMetrics.requiresApproval("idle"))
+        }
+
+        @Test("popup hover does not steal the approval card")
+        func popupHover() {
+            #expect(
+                IslandMetrics.shouldExpandOnHover(
+                    hovering: true, isExpanded: false, hasPopup: false))
+            #expect(
+                !IslandMetrics.shouldExpandOnHover(
+                    hovering: true, isExpanded: false, hasPopup: true))
+            #expect(
+                !IslandMetrics.shouldExpandOnHover(
+                    hovering: false, isExpanded: false, hasPopup: false))
+            #expect(
+                !IslandMetrics.shouldExpandOnHover(
+                    hovering: true, isExpanded: true, hasPopup: false))
+        }
+
+        @Test("actionable pane id resolves standalone agents")
+        func actionablePaneId() {
+            #expect(
+                IslandMetrics.actionablePaneId(paneId: "w3:p1", source: "claude") == "w3:p1")
+            #expect(
+                IslandMetrics.actionablePaneId(paneId: nil, source: "claude")
+                    == "standalone:claude")
+            #expect(
+                IslandMetrics.actionablePaneId(paneId: "", source: "opencode")
+                    == "standalone:opencode")
+            #expect(IslandMetrics.actionablePaneId(paneId: nil, source: nil) == nil)
+        }
+
+        @Test("global rect converts to screen coordinates")
+        func screenRectConversion() {
+            let screenRect = IslandMetrics.screenRect(
+                fromGlobalRect: CGRect(x: 24, y: 0, width: 456, height: 82),
+                windowFrame: CGRect(x: 600, y: 530, width: 504, height: 560))
+            #expect(screenRect.minX == 624)
+            #expect(screenRect.maxY == 1090)
+            #expect(screenRect.minY == 1008)
+            #expect(screenRect.width == 456)
+            #expect(screenRect.height == 82)
+        }
+
+        @Test("notifications clear the notch")
+        func notificationPlacement() {
+            #expect(
+                IslandMetrics.notificationTopOffset(topInset: 38)
+                    == 38 + IslandMetrics.notificationTopGap)
+            #expect(
+                IslandMetrics.notificationCardHeight(for: .accessRequest)
+                    == IslandMetrics.approvalNotificationHeight)
+            #expect(
+                IslandMetrics.notificationCardHeight(for: .waiting)
+                    == IslandMetrics.approvalNotificationHeight)
+            #expect(
+                IslandMetrics.notificationCardHeight(for: .completed)
+                    == IslandMetrics.notificationHeight)
+            let size = IslandMetrics.closedSize(
+                topInset: 38, notchWidth: 200, hasNotification: true,
+                cardHeight: IslandMetrics.approvalNotificationHeight)
+            #expect(
+                size.height
+                    == 38 + IslandMetrics.notificationTopGap
+                    + IslandMetrics.approvalNotificationHeight)
+            #expect(size.width == IslandMetrics.notificationWidth)
         }
 
         @Test("morph style")
@@ -117,6 +183,37 @@
         }
     }
 
+    @Suite("Approval detail text")
+    struct ApprovalDetailTests {
+        @Test("keeps commands and paths intact")
+        func keepsActualRequest() {
+            let raw = "\u{001B}[31mBash\u{001B}[0m\nrm -rf /Users/test/Projects/demo/build"
+            let cleaned = IslandMetrics.cleanApprovalDetail(raw)
+            #expect(cleaned.contains("/Users/test/Projects/demo/build"))
+            #expect(!cleaned.contains("\u{001B}"))
+            #expect(cleaned.contains("Bash"))
+        }
+
+        @Test("detects generic approval text")
+        func genericText() {
+            #expect(IslandMetrics.isGenericApprovalText(nil))
+            #expect(IslandMetrics.isGenericApprovalText(""))
+            #expect(IslandMetrics.isGenericApprovalText("Agent requires input"))
+            #expect(IslandMetrics.isGenericApprovalText("Claude needs approval"))
+            #expect(!IslandMetrics.isGenericApprovalText("rm -rf build"))
+            #expect(!IslandMetrics.isGenericApprovalText("Allow writing /tmp/file?"))
+        }
+
+        @Test("pane excerpt drops chrome and keeps the prompt")
+        func paneExcerpt() {
+            let excerpt = IslandMetrics.approvalExcerpt(
+                from: "line1\n──────\nDo you want to proceed?\nEsc to interrupt",
+                maxLines: 4)
+            #expect(excerpt.contains("Do you want to proceed?"))
+            #expect(!excerpt.contains("Esc to interrupt"))
+        }
+    }
+
     @Suite("HUD Text Sanitization")
     struct HUDTextSanitizationTests {
         @Test("strips ANSI color escapes and control characters")
@@ -140,6 +237,16 @@
         func stripsLogEnvelopes() {
             let logLine = "2026-10-01T12:00:00Z [INFO] level=info Building project"
             #expect(IslandMetrics.cleanHUDText(logLine) == "Building project")
+        }
+
+        @Test("strips syslog and Apple log timestamps")
+        func stripsSyslogTimestamps() {
+            let syslog = "2026-10-16 09:12:48.169514-0500 bantay: Running task"
+            #expect(IslandMetrics.cleanHUDText(syslog) == "Running task")
+
+            let bareSyslog = "2026-10-16 09:12:48.169514-0500 bantay"
+            #expect(IslandMetrics.isSuppressedGarbage(bareSyslog))
+            #expect(IslandMetrics.cleanHUDText(bareSyslog) == "")
         }
 
         @Test("suppresses raw JSON blobs")

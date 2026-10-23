@@ -1,134 +1,136 @@
-# Bantay-TUI — Architecture
+# Bantay-TUI: Architecture
 
-Native SwiftUI macOS app that turns the MacBook notch into an **agentic control plane**: live agent state, inline approval execution, and quick actions — across herdr, tmux, zellij, or standalone agent CLIs.
+Bantay-TUI is a native macOS application for managing AI coding agents. It anchors a control plane to the MacBook notch. The application provides agent telemetry, inline approvals, window tiling, and process automation. It supports Herdr, tmux, Zellij, terminal shells, and desktop GUI IDEs.
 
-## Why
+## System Overview
 
-The terminal is where agents live but not where you always are. Bantay bridges the gap: the notch shows which agent is `blocked`, which needs `approval`, which just finished (`done`) — and lets you act (approve, choose, prompt, focus) without opening a terminal.
+```
+                      +-----------------------------+
+                      |       MacBook Notch         |
+                      | (Notch Island / Status Pill)|
+                      +--------------+--------------+
+                                     |
+             +-----------------------+-----------------------+
+             |                                               |
++------------v------------+                     +------------v------------+
+|    Expanded HUD View    |                     |  Infinite Strip Engine  |
+| - State-grouped Roster  |                     | - Canvas Window Tiling  |
+| - Inline Approvals      |                     | - Spring Physics        |
+| - Live Peek Drawer      |                     | - Overview Zoom Mode    |
+| - File Shelf & Notes    |                     | - Agent Auto-Chaining   |
+| - Reminders & Tasks     |                     | - Status Edge Halos     |
++------------+------------+                     +------------+------------+
+             |                                               |
++------------v-----------------------------------------------v------------+
+|                         AgentEventManager                               |
+| - State Aggregation        - Approval Heartbeat                         |
+| - Quota Tracking           - Multi-Agent Timeline                       |
++------------+-----------------------+-----------------------+------------+
+             |                       |                       |
++------------v------------+ +--------v------------+ +--------v------------+
+|    Herdr Push Stream    | |   Standalone Scan   | |  Control Gateway    |
+| - Socket Subscription   | | - Process Sampler   | | - UDS Socket Server |
+| - Instant Transitions   | | - Transcript Tailing| | - CLI Subcommands   |
+| - Safety Net Polling    | | - SQLite Inspection | | - External Plugins  |
++-------------------------+ +---------------------+ +---------------------+
+```
 
-## Components
+## Architectural Components
 
-| Component | Role |
+### 1. Control Plane & User Interface
+- `DynamicIslandApp.swift`: Main application entry point running as an accessory application (`LSUIElement`). Manages the top-level `NSPanel`, menu bar tray item, global hotkey registration (`⌥Space`), and screen configuration observers.
+- `NotchStatusView.swift`: Root view for the expanded notch control plane. Hosts the counts header bar, roster scroll view, and core tabs (Inbox, Tasks, History) with utility pills (Shelf, Notes, Media).
+- `ApprovalCardView.swift`: Unified approval card for blocked agents. Shows the exact request, risk badge, queue position, and actions. Waiting states show Review and Open instead of blind Approve and Deny.
+- `ApprovalPromptResolver.swift`: Pure parser for live pane prompts. Extracts the exact command, path, question, numbered choices, multi-select choices, and risk tier from terminal text.
+- `AgentPresentation.swift`: Pure presentation logic. Humanizes raw tool text, classifies risk, and groups subagents under their project workspace.
+- `NotchRosterView.swift` and `AgentRowView.swift`: Render the inbox. Approval cards lead, working groups fold subagents, and finished agents use compact rows. Clicking a row focuses its window.
+- `DesktopHUDController.swift` and `DesktopHUDView.swift`: Bottom-center window-only HUD. Shows column cards, Chain, Overview, navigation, and a Layout menu. Auto-hides unless pinned and never appears in full screen.
+- `QuotaMonitor.swift`: Cached background quota polling. Keeps subprocess and disk reads out of view rendering.
+- `SettingsRoute.swift`: Deep-link destinations for the single shared Settings modal.
+- `PeekPanel.swift`: Lightweight floating drawer anchored beside the notch. Displays live streaming terminal output, git diff statistics, and quick action controls (`^C Abort`, `Approve`, `Deny`).
+- `RichSessionViewer.swift`: Generates offline, interactive turn-card session views and launches them in default browsers (Chrome, Dia, Safari).
+- `SettingsView.swift`: Configuration view covering idle styles, dock sides, quota budgets, push notifications, and keybindings.
+
+### 2. Infinite Strip Window Manager
+- `StripLayoutEngine.swift`: Pure layout calculation engine. Computes column coordinates, viewport scroll targets, width presets, overview zoom scaling, and agent auto-chaining pipelines. Auto-chain classifies IDE, browser, terminal, and other windows. It prefers project-slug matches per stage and normalizes widths to 1.0.
+- `StripWindowManager.swift`: Manages native window frames with macOS Accessibility APIs (`AXUIElement`). Scans live windows for auto-chain. Tracks the focused `CGWindowID` for focus and navigation. Skips window tiling when a full-screen app is active.
+- `StripStatusProvider.swift`: Sendable snapshot bridge between the AppKit strip manager and the control gateway. Keeps the pure logic harness free of UI-only imports.
+- `FullScreenMonitor.swift`: Polls the frontmost app and publishes `isFullScreen`. Uses the Accessibility `AXFullScreen` attribute first. Falls back to window bounds for apps that do not expose the attribute.
+- `StripGestureInterceptor.swift`: Intercepts global strip hotkeys and two-finger trackpad gestures. Column and window navigation use `⌃⌥` chords. Scroll gestures stay disabled in full screen.
+- `StripOverlayRenderer.swift`: Renders floating status halos around windows. Amber is reserved for approvals. Cyan marks working and focused windows. Only approvals pulse. Halo and chevron panels hide independently. All overlay panels hide in full screen.
+- `StripViewportAnimator.swift`: Numerical solver for damped harmonic springs with asymptotic resistance outside canvas bounds.
+
+#### Full-Screen Suppression
+
+`FullScreenMonitor` reports the full-screen state of the frontmost app. When the state is true, the strip manager takes these actions:
+
+1. Hide status halos, navigation chevrons, and the Desktop HUD.
+2. Stop the viewport animator.
+3. Skip `syncWindows` and frame application.
+4. Resume layout when the state becomes false.
+
+A per-window `AXFullScreen` check also guards `applyComputedFrames`. This check prevents a stale timer tick from resizing a full-screen window. The island uses the same monitor. Its `showInFullScreen` setting stays independent from the strip.
+
+### 3. Agent Telemetry & Event Ingestion
+- `AgentEventManager.swift`: Core coordination actor. Merges push events and periodic scans into a unified agent roster, calculates active run-rates, and tracks pending approvals.
+- `HerdrEventStream.swift`: Persistent UNIX domain socket connection subscribing to `events.subscribe`. Receives real-time notifications for pane updates and agent detections.
+- `AgentDetector.swift`: Discovers standalone agents outside multiplexers by inspecting process names, command arguments, and session transcript files.
+- `UniversalQuotaAdapters.swift`: Quota adapters for Codex, Cursor, Claude Code rate limits, and OpenRouter BYOK allocations.
+- `UsageTracker.swift`: Calculates token consumption, daily expenditures, prompt cache savings (applying 90% discount on cache reads), and projected run-rates.
+- `EventIngestServer.swift`: Localhost HTTP socket listener accepting event payloads from remote environments over SSH tunnels.
+
+### 4. Input & Keystroke Automation
+- `StandaloneAgentDispatcher.swift`: Synthesizes keystrokes into target applications. For desktop GUI IDEs, it focuses the chat input with `⌘L`, pastes text with `⌘V`, and presses Return. For terminal agents, it writes directly into the shell.
+- `TerminalFocusser.swift`: Resolves the target process and activates its hosting application with `NSWorkspace`. Prioritizes running terminals and IDEs via an ordered registry.
+- `PlexerAdapter.swift`: Common interface for multiplexers. Automatically resolves active adapters to `TmuxAdapter`, `ZellijAdapter`, or `HerdrSocketAdapter`.
+
+### 5. Control Gateway & External Tools
+- `ControlGateway.swift`: UNIX domain socket server listening at `~/Library/Application Support/Bantay-TUI/control.sock`. Processes incoming NDJSON commands from the `bantay` CLI tool.
+- `BantayMCPServer.swift`: Implements Model Context Protocol server endpoints, allowing LLMs and external tools to query Bantay status and control agents programmatically.
+
+## Event Processing Pipeline
+
+Incoming telemetry flows through three sources into `AgentEventManager`:
+
+1. **Herdr Push Stream**: Persistent socket connection. Delivers real-time events for pane updates and agent detection (`pane.updated`, `pane.agent_detected`, `pane.closed`).
+2. **Standalone Process Scanner**: Background task (`Task.detached`) running every 30 seconds. Scans running processes via `/bin/ps` and reads active transcripts on disk.
+3. **Event Ingest Socket**: Local socket listener. Receives structured events forwarded from shell hooks, Claude Code plugins, or SSH tunnels.
+
+The manager consolidates these events, removes duplicate processes by workspace path and PID, and applies the approval heartbeat.
+
+## Approval Execution Model
+
+Approval prompts support three variance types:
+
+- **Yes or No Prompts**: Sends positive or negative confirmation (`y` or `n` followed by Return).
+- **Numbered Choices**: Sends the selected index (`1` through `9` followed by Return).
+- **Multi-Select Prompts**: Sends selected indices as one space-separated line (`1 3` followed by Return).
+
+Every approval surface routes through `AgentEventManager`: the notch popup, inbox approval cards, Peek drawer, Notification Center actions, and menu-bar actions. The manager writes OpenCode decisions and sends multiplexer actions. It sends standalone keystrokes through `StandaloneAgentDispatcher`.
+
+Status-only `blocked` events often carry no request text. `AgentEventManager` captures the live pane or transcript and `ApprovalPromptResolver` extracts the exact command, path, question, and choices. Until that detail arrives, the surface shows Review only. A prompt without concrete detail or choices never offers blind Approve and Deny. The same fingerprint stays suppressed after an answer until the agent reports a non-approval status, so repeated `blocked` heartbeats cannot ask the same question again.
+
+Standalone agents have no multiplexer pane id. `IslandMetrics.actionablePaneId` derives a synthetic `standalone:<source>` id. This id keeps the popup, Notification Center, and menu bar in agreement and resolves the agent cwd for dispatch.
+
+The closed notch shows an approval popup with Approve and Deny controls, numbered choice controls, or multi-select controls. Hover expansion is suppressed while this popup is visible. The popup keeps its buttons under the pointer.
+
+The popup starts below the physical notch. It shows the exact command, file path, tool, or question instead of a generic label. When a multiplexer event has no title, the popup reads a live pane excerpt. Approval detail text skips the HUD cleaner because that cleaner shortens absolute paths.
+
+Approval input synthesis uses Core Graphics keyboard events. This reuses the Accessibility grant that Bantay already holds and avoids AppleScript or System Events, which trigger a separate macOS Automation prompt.
+
+macOS TCC ties Accessibility grants to a code requirement. Ad-hoc signatures use the per-build cdhash, so every rebuild looks like a new app. Local installs therefore use a stable self-signed `Bantay Local Dev` certificate, created by `scripts/ensure-dev-signing-identity.sh` on first setup. The resulting requirement is anchored to the certificate, so the Accessibility grant survives later rebuilds. Distribution builds still use Developer ID signing and notarization.
+
+The Accessibility prompt is shown at most once per app process. A stale grant cannot create a prompt loop when the strip starts or toggles.
+
+After an approval action, the manager clears any pending state for that pane and removes the visible prompt. Duplicate `blocked` or `waiting` events for the same pane stay suppressed for 12 seconds, or until the agent reports a different status. This prevents a repeated popup for a request the user just answered.
+
+The approval heartbeat checks pending prompts against live processes on every cycle. If an agent advances or terminates independently, stale prompts clear automatically.
+
+## Reliability Subsystems
+
+| Subsystem | Implementation Strategy |
 |---|---|
-| `DynamicIslandApp.swift` | Main SwiftUI entry; `.accessory` app. Owns the island `NSPanel` (`fullScreenAuxiliary`/`canJoinAllSpaces`/`stationary`/`ignoresCycle`, top-level window level), the tray menu (roster, snooze presets, settings), the global `⌥Space` hotkey, the menu-bar badge timer, and display/full-screen/space observers with settle-delay re-anchoring. The panel is also an `NSDraggingDestination` — dropping files onto the notch expands it and lands them on the shelf |
-| `AgentEventManager.swift` | MainActor pipeline: merges herdr push events + standalone scan into a roster, tails the events file, runs the approval heartbeat, aggregates usage, publishes `agents`, `currentEvent`, `usage` |
-| `HerdrEventStream.swift` | Persistent `events.subscribe` socket subscription (`pane.updated` / `pane.agent_detected` / `pane.closed` / `workspace.updated` / `tab.focused`) with reconnect + backoff. Drives the roster in real time; the poll loop is a slow safety net |
-| `AgentEventKind.swift` | Enum mapping agent states to event kinds (`idle` included for the roster); severity ordering |
-| `IslandMetrics.swift` | Pure geometry & policy: idle strip widths (names/dots/summary), expanded control-plane metrics (`AgentCounts`, group ranks, section-header height), `ApprovalControls`, `ApprovalHeartbeat`, `FullScreenPolicy`, `MenuBarClearance`, `DisplayAnchor`, multi-monitor `ScreenInfo`/`islandScreen`, floating-pill frames, `elapsedLabel`, shortcut-key mapping |
-| `NotchStatusView.swift` | The island UI: idle agent strip, expanded control plane (header counts, single-list roster with inline approval controls, Recent section, shelf tab), edge-glow, keyboard shortcuts, clipboard polling |
-| `AgentAlertNotifier.swift` | ntfy.sh push for approvals/blocked, failures, and completions; pure payload builder + detached POST |
-| `TmuxStatusInstaller.swift` | Wires `#(bantay-status)` into tmux `status-right` (install/remove/status), preserving any prior value |
-| `NotchHUDConfig.swift` | `UserDefaults` settings for every facet (see README table); clamps + persistence |
-| `HerdrSocketAdapter.swift` | Runs the herdr CLI / socket: `agent list`, `pane focus`, `agent send-keys` (approve/deny/choices), `pane read`; conforms to `PlexerAdapter` |
-| `PlexerAdapter.swift` | Multiplexer seam: `PlexerKind` + pure `PlexerDetection` (HERDR_ENV/socket, TMUX env/socket, ZELLIJ env) + the `PlexerAdapter` protocol (listPanes, captureTail, focusPane, sendLine, sendKeys, approve, deny, stop, attachPane) — tmux/zellij adapters plug in behind it |
-| `AgentDetector.swift` | Standalone agent detection: process-name classification (claude/codex/gemini/cursor/opencode), herdr-managed env filtering, transcript discovery + newest-JSONL tailing for latest activity |
-| `UsageTracker.swift` | Token/cost gauge: parses `usage`/`costUSD` from Claude Code and Codex transcripts, aggregates, budget fraction, compact formatting, prompt cache 90% discount savings |
-| `UniversalUsageAdapters.swift` | Multi-vendor quota & BYOK adapters (`ClaudeUsageAdapter`, `CodexUsageAdapter`, `CursorUsageAdapter`, `OpenRouterUsageAdapter`, `OllamaUsageAdapter`): rate-limit hooks, SQLite parsing, live reset countdowns |
-| `TaskDispatcher.swift` | Multi-agent task routing & failover across provider candidates (`claude` → `codex` → `antigravity` → `ollama`) with 429 quarantine backoff |
-| `EventIngestServer.swift` | Localhost HTTP listener (NWListener) for remote events over SSH tunnels; strict POST parsing; appends validated payloads to the watched events file |
-| `ShelfModel.swift` | Pure clipboard-history + shelf-file logic (dedup, ordering, limits) |
-| `TerminalFocusser.swift` | Terminal-agnostic focus: ordered bundle-ID registry (Ghostty/Warp/WezTerm/Alacritty/iTerm2/Terminal/VSCode/IntelliJ) + app activation |
-| `LaunchAgent.swift` | Launch-agent plist management |
-| `DesignSystem/` | In-source `swiftui-flx` token system (`FLXSpacing`, `FLXRadius`, `FLXTypography`, `FLXColors`), theme management (`FLXTheme`, `FLXTheme+Bantay`), and composable primitives (`FLXButton`, `FLXCard`, `FLXTextField`) |
-| `SettingsView.swift` | Settings form (all facets), welcome/onboarding sheet |
-
-## Event pipeline
-
-Sources feed the same manager:
-
-1. **herdr push stream** (default when herdr is present): a persistent
-   `events.subscribe` subscription delivers `pane.updated` / `pane.created` /
-   `pane.closed` / `pane.agent_detected` / `workspace.updated` / `tab.focused`
-   events over the socket. The stream drives the roster in real time
-   (sub-millisecond status transitions); a slow `agent list` poll
-   (`idlePollInterval`, default 10 s) remains as a safety net for roster
-   consistency, the standalone `ps` scan, and transcript usage. Status
-   mapping: `blocked → access_request`, `working → progress`, `running →
-   started`, `idle → idle`, `done → completed`, `failed → failed`,
-   `cancelled → cancelled`. Per source, the highest-severity agent wins;
-   events emit only on state transitions; persistent blocked/working pills
-   silently re-show while the state holds. Per-pane `herdr agent wait`
-   subprocesses are no longer spawned (redundant with the push stream).
-2. **Standalone scan** (default on, runs in a detached task): process
-   classification + newest-transcript tailing. herdr-managed processes are
-   skipped by env marker; agents herdr already reports are deduped by
-   canonical name.
-3. **Event file + remote ingest** (optional): `scripts/event-adapter.mjs`
-   (herdr plugin `bantay-tui.integration`) appends JSONL to
-   `~/Library/Application Support/Bantay-TUI/agent-events.jsonl`, which the
-   manager tails for richer `state_labels`/`variance`/`choices`. The localhost
-   ingest server (off by default) POSTs validated lines into the same file,
-   so remote agents over `ssh -R` flow through the identical pipeline.
-
-Claude Code hooks installed via `~/.claude/settings.json` cover
-`PermissionPrompt`/`PermissionRequest` (approval), `Stop`/`StopFailure`
-(completion + typed failure reasons), and `Notification` (matchers
-`agent_needs_input` / `agent_completed` / `permission_prompt` /
-`idle_prompt`), all streaming to the local ingest endpoint.
-
-The manager publishes a merged roster (`agents`) and the latest event
-(`currentEvent`); `mergeApprovals` attaches decoded approval prompts
-(variance/choices) and working-burst start times to blocked rows.
-
-## Approval execution
-
-Approval prompts carry `variance` (`yes_no`/`choices`/`multi`) and `choices`.
-`IslandMetrics.ApprovalControls` is the pure model; the UI renders:
-
-- yes/no → Approve/Deny (`y`/`n` + Enter via `herdr agent send-keys`)
-- choices → numbered buttons (`<n>` + Enter)
-- multi → toggle set + Submit (`1,3` + Enter)
-
-Blocked agents appear **inline in the roster** (no separate queue section) —
-each row carries its approve/deny/choice/submit controls plus Focus / Stop /
-Peek.
-
-The **approval heartbeat** (`IslandMetrics.ApprovalHeartbeat` +
-`heartbeatVerify`) re-verifies every pinned prompt against live agent status
-each poll: prompts stay only while the pane still reports blocked/unknown;
-working/done/idle/failed self-clear — killing phantom prompts from dropped
-hooks. Unknowns never phantom-clear.
-
-## Notifications & remote
-
-- **ntfy.sh** (`AgentAlertNotifier`): approvals/blocked (`Priority: high`,
-  `rotating_light`), failures (`warning`), and completions push to a
-  configured topic; server is configurable for self-hosted instances.
-- **tmux status bar** (`scripts/bantay-status.sh` + `TmuxStatusInstaller`):
-  a one-line agent summary via `#(bantay-status)` in `status-right`.
-- **macOS Notification Center** (`notifyWhenHidden`): opt-in alert when an
-  approval arrives while the island is hidden/snoozed.
-
-## Reliability systems
-
-| System | Mechanism |
-|---|---|
-| Full-screen & spaces | `didEnter/didExitFullScreen` + `activeSpaceDidChange` observers, debounced through a cancellable settle task (0.35 s) that re-shows/re-anchors per `showInFullScreen` |
-| Menu-bar collisions | `MenuBarClearance` clamps the idle strip to `auxiliaryTopLeft/RightArea` widths (fallback screen-minus-notch) when `avoidMenuBarIcons` |
-| Display hot-swap | `didChangeScreenParameters` + `screensDidWake` → `handleDisplayChange` → `reanchorIfGhosted()` (visible window off every screen gets moved back) + reposition |
-| Terminal focus | `TerminalRegistry` resolves the running preferred terminal; `TerminalFocusser` activates it (opens Terminal as last resort) |
-| Main-actor safety | `ps` scan, transcript enumeration, and usage aggregation run in `Task.detached`; process pipes drain before `waitUntilExit` |
-
-## Click-to-focus & actions
-
-- Row click → compose a prompt; hover actions: Focus (`herdr pane focus` /
-  `TerminalFocusser`), Stop (`ctrl+c` via send-keys), Peek (live log + diff
-  overlay).
-- Blocked rows render inline approve/deny/choice/submit controls.
-- Peek overlay (`PeekPanelController`) shows the pane's recent output tail and
-  a `git diff --stat` preview in a 480×420 panel.
-
-## Build & distribution
-
-- macOS 13+, Swift 6, native Swift/AppKit (no Electron).
-- `scripts/setup.sh`: launch-agent install (auto-start, keep-alive), copies
-  `scripts/bantay-status.sh` beside the app, `--uninstall`, and `--package`
-  (release `.app` zip).
-- Homebrew cask formula in `Cask/` for a future tagged release; notarization
-  still pending.
-
-## See also
-
-- [README.md](README.md) — features, install, configuration, CI
-- [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) — roadmap status
-- `docs/ci-pipeline.mmd` — CI flow diagram
+| Full-Screen & Spaces | Observes workspace changes and full-screen state. Delays re-anchoring by 350ms for correct placement. Hides strip overlays and tiling in full screen. |
+| Menu Bar Clearance | Measures auxiliary menu bar areas reported by macOS. Clamps idle status chips to available clear space. |
+| Clamshell & Display Wake | Listens for display configuration changes. Re-anchors windows if coordinates fall outside visible screen bounds. |
+| Process Safety | Runs heavy I/O, SQLite inspection, and transcript parsing in detached background tasks off the main thread. |

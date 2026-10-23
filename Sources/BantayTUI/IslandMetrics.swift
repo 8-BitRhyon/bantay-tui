@@ -45,8 +45,14 @@ public enum IslandMetrics: Sendable {
     public static let expandedCornerRadius: CGFloat = 24
     public static let pillHeight: CGFloat = 36
     public static let notificationHeight: CGFloat = 82
+    /// Approval cards carry the command, file path, or prompt text, so they
+    /// need room for several wrapped lines plus the action row.
+    public static let approvalNotificationHeight: CGFloat = 160
     public static let notificationWidth: CGFloat = 432
     public static let notificationCornerRadius: CGFloat = 20
+    /// Clearance between the physical notch and a closed notification card.
+    /// Without it the card's top row renders inside the notch cutout.
+    public static let notificationTopGap: CGFloat = 8
     public static let headerHeight: CGFloat = 40
     public static let rowHeight: CGFloat = 26
     public static let taskRowHeight: CGFloat = 34
@@ -168,8 +174,22 @@ public enum IslandMetrics: Sendable {
     /// Height of one approval-queue card. Reserves room for the optional live
     /// "peek" tail (captureTail) that drops in below the controls on hover.
     public static let queueCardHeight: CGFloat = 56
-    /// Shelf tab bar height (Agents/Shelf switcher).
-    public static let shelfTabBarHeight: CGFloat = 22
+    /// Height of one expanded inbox approval card: request summary plus a
+    /// full-height action row. Used by the v2 roster layout math.
+    public static let approvalCardHeight: CGFloat = 152
+    /// Extra height for each visible choice row inside an approval card.
+    public static let approvalChoiceRowHeight: CGFloat = 34
+    /// Height of one active/working agent row: project line plus humanized
+    /// activity line. Used by the v2 roster layout math.
+    public static let workingRowHeight: CGFloat = 48
+    /// Height of one idle/standby agent row. Used by the v2 roster layout math.
+    public static let idleRowHeight: CGFloat = 34
+    /// Height of the inline reply composer reserved while composing.
+    public static let replyComposerHeight: CGFloat = 76
+    /// Height of the dismissible while-away recap card.
+    public static let awayDigestHeight: CGFloat = 64
+    /// Shelf tab bar height (Inbox/Tasks/History + utility pills).
+    public static let shelfTabBarHeight: CGFloat = 26
     /// Divider between the header/tabs and the list.
     public static let dividerHeight: CGFloat = 1
     /// "+N more waiting" overflow row height.
@@ -273,6 +293,80 @@ public enum IslandMetrics: Sendable {
 
         let h = topInset + contentH
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+    }
+
+    /// Structured v2 roster layout. Replaces flat `agentCount * rowHeight`
+    /// math so approval cards, working rows, and idle rows can each have
+    /// their own height without clipping the panel.
+    public struct RosterLayoutMetrics: Equatable, Sendable {
+        public let approvalCardCount: Int
+        public let approvalChoiceRowCount: Int
+        public let workingRowCount: Int
+        public let idleRowCount: Int
+        public let groupCount: Int
+        public let isComposing: Bool
+        public let hasAwayDigest: Bool
+
+        public init(
+            approvalCardCount: Int = 0,
+            approvalChoiceRowCount: Int = 0,
+            workingRowCount: Int = 0,
+            idleRowCount: Int = 0,
+            groupCount: Int = 0,
+            isComposing: Bool = false,
+            hasAwayDigest: Bool = false
+        ) {
+            self.approvalCardCount = approvalCardCount
+            self.approvalChoiceRowCount = approvalChoiceRowCount
+            self.workingRowCount = workingRowCount
+            self.idleRowCount = idleRowCount
+            self.groupCount = groupCount
+            self.isComposing = isComposing
+            self.hasAwayDigest = hasAwayDigest
+        }
+    }
+
+    /// Natural roster height for structured v2 rows.
+    public static func rosterHeight(_ roster: RosterLayoutMetrics) -> CGFloat {
+        CGFloat(max(roster.approvalCardCount, 0)) * approvalCardHeight
+            + CGFloat(max(roster.approvalChoiceRowCount, 0)) * approvalChoiceRowHeight
+            + CGFloat(max(roster.workingRowCount, 0)) * workingRowHeight
+            + CGFloat(max(roster.idleRowCount, 0)) * idleRowHeight
+            + CGFloat(max(roster.groupCount, 0)) * sectionHeaderHeight
+            + (roster.isComposing ? replyComposerHeight : 0)
+            + (roster.hasAwayDigest ? awayDigestHeight : 0)
+    }
+
+    /// Expanded panel height from structured v2 roster rows. The legacy
+    /// flat-count overload below stays untouched for current callers.
+    public static func expandedSize(
+        topInset: CGFloat, roster: RosterLayoutMetrics,
+        shelfTabVisible: Bool = false, overflowCount: Int = 0,
+        headerHeight: CGFloat = headerHeight, footerVisible: Bool = true
+    ) -> CGSize {
+        let chrome =
+            (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
+            + CGFloat(max(overflowCount, 0)) * overflowRowHeight
+        let contentH =
+            headerHeight + chrome + rosterHeight(roster)
+            + (footerVisible ? footerHeight : 0) + contentSpacing
+        let h = topInset + contentH
+        return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+    }
+
+    /// Desktop strip hotkeys use Control + Option only. Space toggles the
+    /// Desktop HUD; the existing strip letter shortcuts stay untouched.
+    public enum DesktopHotkeyAction: Sendable, Equatable {
+        case toggleDesktopHUD
+    }
+
+    public static func desktopHotkeyAction(
+        keyCode: UInt16, modifiers: NSEvent.ModifierFlags
+    ) -> DesktopHotkeyAction? {
+        let flags = modifiers.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.control), flags.contains(.option) else { return nil }
+        guard !flags.contains(.shift), !flags.contains(.command) else { return nil }
+        return keyCode == 49 ? .toggleDesktopHUD : nil
     }
 
     // MARK: - Multi-monitor placement
@@ -415,6 +509,39 @@ public enum IslandMetrics: Sendable {
             !inFullScreen || showInFullScreen
         }
 
+        /// The strip is a window-management mode, not an always-on HUD.
+        /// Suspend its overlays and tiling whenever the active app is full
+        /// screen, even if the island itself stays visible.
+        static func shouldShowStrip(
+            isEnabled: Bool, inFullScreen: Bool
+        ) -> Bool {
+            isEnabled && !inFullScreen
+        }
+
+        /// Converts an AppKit screen frame (origin bottom-left) into the
+        /// global window-server frame (origin top-left of the primary display).
+        static func cgScreenRect(
+            appKitFrame: CGRect, primaryMaxY: CGFloat
+        ) -> CGRect {
+            CGRect(
+                x: appKitFrame.origin.x,
+                y: primaryMaxY - appKitFrame.maxY,
+                width: appKitFrame.width,
+                height: appKitFrame.height
+            )
+        }
+
+        /// True when a window covers an entire display, within a small
+        /// tolerance for rounded corners and backing-scale rounding.
+        static func coversScreen(
+            windowFrame: CGRect, screenFrame: CGRect, tolerance: CGFloat = 2.0
+        ) -> Bool {
+            abs(windowFrame.minX - screenFrame.minX) <= tolerance
+                && abs(windowFrame.minY - screenFrame.minY) <= tolerance
+                && abs(windowFrame.width - screenFrame.width) <= tolerance
+                && abs(windowFrame.height - screenFrame.height) <= tolerance
+        }
+
         /// Delay (seconds) before re-anchoring after a full-screen or space
         /// transition — lets the WindowServer settle the new frame.
         static let transitionSettleDelay: TimeInterval = 0.35
@@ -553,6 +680,9 @@ public enum IslandMetrics: Sendable {
     /// markdown links, and paths to format clean single-line HUD strings.
     /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.
     public static func cleanHUDText(_ text: String, maxCharacters: Int = 60) -> String {
+        if isBareSyslog(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return ""
+        }
         // 1. Strip ANSI escape sequences, control characters, and braille spinner patterns
         var s = LogFormatter.stripControlCharacters(text)
             .replacingOccurrences(of: "\\n", with: " ")
@@ -603,9 +733,25 @@ public enum IslandMetrics: Sendable {
             with: "",
             options: .regularExpression)
 
-        // 4. Strip bare ISO timestamps (\d{4}-\d{2}-\d{2}T...) and relative time (+40ms)
+        // 4. Strip bare ISO and syslog timestamps (\d{4}-\d{2}-\d{2}[ T]...) and relative time (+40ms)
+        // Syslog lines often carry a process prefix after the timestamp
+        // ("2026-10-16 09:12:48.169514-0500 bantay: Running task"). Drop the
+        // timestamp and the process name together so the status text remains.
         s = s.replacingOccurrences(
-            of: "\\b\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z?\\b\\s*",
+            of:
+                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+:\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "\\b\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "\\b\\d{4}-\\d{2}-\\d{2}\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "^[a-zA-Z0-9_.-]+\\[\\d+(?::\\d+)?\\]:\\s*",
             with: "",
             options: .regularExpression)
         s = s.replacingOccurrences(
@@ -646,6 +792,8 @@ public enum IslandMetrics: Sendable {
         s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
+        // A syslog timestamp plus a lone process name carries no status.
+        if isBareSyslog(trimmed) { return "" }
 
         // 11. Reject unparsed JSON, diff markers, compiler trace noise, hostnames, and shell fallbacks
         if isSuppressedGarbage(trimmed) {
@@ -659,11 +807,22 @@ public enum IslandMetrics: Sendable {
         return trimmed
     }
 
+    /// True for a syslog timestamp followed by a lone process name:
+    /// `2026-10-16 09:12:48.169514-0500 bantay`. Such a line has no status.
+    private static func isBareSyslog(_ text: String) -> Bool {
+        text.range(
+            of:
+                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+$",
+            options: .regularExpression
+        ) != nil
+    }
+
     /// True if the string is raw unparsed JSON, a diff chunk, internal daemon noise,
     /// or a multiplexer hostname/shell fallback.
     public static func isSuppressedGarbage(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return true }
+        if isBareSyslog(trimmed) { return true }
         let lower = trimmed.lowercased()
 
         // Unparsed JSON blobs or brackets
@@ -675,11 +834,12 @@ public enum IslandMetrics: Sendable {
             return true
         }
 
-        // Git diff chunks or compiler trace markers
+        // Git diff chunks, compiler trace markers, or raw syslog dates
         if trimmed.hasPrefix("@@") || trimmed.hasPrefix("diff --git")
             || trimmed.hasPrefix("[diff_block") || trimmed.hasPrefix("::error")
             || trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:")
             || trimmed.hasPrefix("Completed At:")
+            || trimmed.range(of: "^\\d{4}-\\d{2}-\\d{2}", options: .regularExpression) != nil
         {
             return true
         }
@@ -732,6 +892,7 @@ public enum IslandMetrics: Sendable {
         switch char.lowercased() {
         case "y": return .approve
         case "n": return .deny
+        case "r": return .reply
         case "0"..."9": return .option(Int(String(char)) ?? 0)
         default: return nil
         }
@@ -745,6 +906,7 @@ public enum IslandMetrics: Sendable {
         case approveTop
         case denyTop
         case snooze15
+        case openSettings
     }
 
     /// Map a key-down event to a global hotkey action. Requires Option and
@@ -765,6 +927,7 @@ public enum IslandMetrics: Sendable {
         case 16: return .approveTop
         case 45: return .denyTop
         case 1: return .snooze15
+        case 43: return .openSettings
         default: return nil
         }
     }
@@ -808,6 +971,7 @@ public enum IslandMetrics: Sendable {
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
+        case reply
         case option(Int)
     }
 
@@ -825,14 +989,30 @@ public enum IslandMetrics: Sendable {
     /// trimming to just topInset cut off the bottom of the taller approval
     /// pill.
     public static func closedSize(
-        topInset: CGFloat, notchWidth: CGFloat, hasNotification: Bool = false
+        topInset: CGFloat, notchWidth: CGFloat, hasNotification: Bool = false,
+        cardHeight: CGFloat = notificationHeight
     ) -> CGSize {
         if hasNotification {
             return CGSize(
                 width: min(max(notchWidth, notificationWidth), expandedWidth),
-                height: topInset + notificationHeight)
+                height: topInset + notificationTopGap + cardHeight)
         }
         return CGSize(width: min(max(notchWidth, 0), expandedWidth), height: topInset + pillHeight)
+    }
+
+    /// Card height for a notification. Approvals get the taller detail card;
+    /// completion and failure notices keep the compact height.
+    static func notificationCardHeight(for kind: AgentEventKind?) -> CGFloat {
+        switch kind {
+        case .accessRequest, .waiting: return approvalNotificationHeight
+        default: return notificationHeight
+        }
+    }
+
+    /// Content origin for a closed notification: below the notch plus a small
+    /// gap, never inside the notch cutout.
+    public static func notificationTopOffset(topInset: CGFloat) -> CGFloat {
+        topInset + notificationTopGap
     }
 
     /// The expanded roster content size, height-capped.
@@ -843,7 +1023,8 @@ public enum IslandMetrics: Sendable {
     public static func contentHeight(
         isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0,
         shelfTabVisible: Bool = false, overflowCount: Int = 0, groupCount: Int = 0,
-        footerVisible: Bool = true, hasNotification: Bool = false
+        footerVisible: Bool = true, hasNotification: Bool = false,
+        cardHeight: CGFloat = notificationHeight
     ) -> CGFloat {
         if isExpanded {
             return expandedSize(
@@ -853,7 +1034,7 @@ public enum IslandMetrics: Sendable {
             ).height - topInset
         }
         if hasNotification {
-            return notificationHeight
+            return cardHeight
         }
         return pillHeight
     }
@@ -974,6 +1155,24 @@ public enum IslandMetrics: Sendable {
         hovering
     }
 
+    /// Hover-expansion is suppressed while a notification popup is on screen.
+    /// Otherwise the panel morphs out from under the pointer before the
+    /// popup's Approve/Deny buttons can be clicked.
+    public static func shouldExpandOnHover(
+        hovering: Bool, isExpanded: Bool, hasPopup: Bool
+    ) -> Bool {
+        hovering && !isExpanded && !hasPopup
+    }
+
+    /// Stable pane identity used by every approval surface. Standalone agents
+    /// have no multiplexer pane id, so the synthetic `standalone:<source>` id
+    /// keeps the notch, Notification Center, and menu-bar actions in agreement.
+    public static func actionablePaneId(paneId: String?, source: String?) -> String? {
+        if let paneId, !paneId.isEmpty { return paneId }
+        guard let source, !source.isEmpty else { return nil }
+        return "standalone:\(source)"
+    }
+
     public static func shouldCollapse(isExpanded: Bool, hasAgents: Bool) -> Bool {
         isExpanded && !hasAgents
     }
@@ -1050,7 +1249,78 @@ public enum IslandMetrics: Sendable {
     }
 
     public static func requiresApproval(_ kind: String) -> Bool {
-        kind == "accessRequest" || kind == "access_request"
+        kind == "accessRequest" || kind == "access_request" || kind == "waiting"
+    }
+
+    /// Clean an approval prompt without destroying what the user is deciding
+    /// on. The HUD cleaner shortens absolute paths and rejects JSON, which is
+    /// the opposite of what a security prompt needs; this keeps the command,
+    /// file path, or question intact and only removes terminal control codes
+    /// and excess whitespace.
+    public static func cleanApprovalDetail(
+        _ text: String, maxCharacters: Int = 360
+    ) -> String {
+        var s = LogFormatter.stripControlCharacters(text)
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = s.split(
+            separator: "\n", omittingEmptySubsequences: false
+        ).map { line in
+            String(line)
+                .replacingOccurrences(
+                    of: "[\\t ]+", with: " ", options: .regularExpression
+                )
+                .trimmingCharacters(in: .whitespaces)
+        }
+        s = lines.joined(separator: "\n")
+        s = s.replacingOccurrences(
+            of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return "" }
+        guard maxCharacters > 0, s.count > maxCharacters else { return s }
+        let prefix = String(s.prefix(maxCharacters - 3))
+        return prefix.trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
+
+    /// True when a title or message says only that an agent is blocked, with
+    /// no command, path, tool, or question attached. Generic text must not
+    /// displace the live pane excerpt.
+    public static func isGenericApprovalText(_ text: String?) -> Bool {
+        guard let text else { return true }
+        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return true }
+        let generic: Set<String> = [
+            "needs input", "needs approval", "agent requires input",
+            "agent needs input", "agent needs approval", "approval required",
+            "permission required", "waiting", "blocked",
+            "claude needs approval", "claude needs your input",
+            "claude needs your approval", "opencode needs approval",
+        ]
+        if generic.contains(lower) { return true }
+        return lower.hasPrefix("agent requires input")
+    }
+
+    /// Distill a terminal pane tail into a short approval excerpt. Blank
+    /// lines, separator rules, and status-bar chrome drop out; the last few
+    /// meaningful lines (usually the prompt itself) stay.
+    public static func approvalExcerpt(from raw: String, maxLines: Int = 4) -> String {
+        guard !raw.isEmpty else { return "" }
+        let cleaned = LogFormatter.cleanedTail(
+            raw, maxLines: 18, maxLineLength: 200)
+        let meaningful = cleaned.filter { line in
+            let stripped = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !stripped.isEmpty else { return false }
+            let lower = stripped.lowercased()
+            if lower.contains("esc to interrupt") { return false }
+            if lower.hasPrefix("press ") && lower.contains(" to ") { return false }
+            if lower.hasPrefix("tokens:") || lower.hasPrefix("context:") {
+                return false
+            }
+            return stripped.unicodeScalars.contains {
+                CharacterSet.alphanumerics.contains($0)
+            }
+        }
+        return meaningful.suffix(max(maxLines, 1)).joined(separator: "\n")
     }
 
     // MARK: - Diff-stat cache (plan 016 1a)
@@ -1109,6 +1379,17 @@ public enum IslandMetrics: Sendable {
 
     /// Gap between the island edge and a peek panel docked beside it.
     public static let peekGap: CGFloat = 8
+
+    /// Convert a SwiftUI `.global` frame (window content space, top-left
+    /// origin) into AppKit screen coordinates (bottom-left origin). The island
+    /// panel is borderless, so its content fills the window frame.
+    public static func screenRect(fromGlobalRect rect: CGRect, windowFrame: CGRect) -> CGRect {
+        CGRect(
+            x: windowFrame.minX + rect.minX,
+            y: windowFrame.maxY - rect.maxY,
+            width: rect.width,
+            height: rect.height)
+    }
 
     /// Calculates the peek panel frame docked beside or below the island.
     public static func peekFrame(

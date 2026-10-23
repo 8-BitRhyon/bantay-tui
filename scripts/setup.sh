@@ -146,7 +146,13 @@ chmod 600 "$EVENTS_FILE"
 
 echo "bantay-tui: data directory ready at $DATA_DIR"
 
-BINARY="$(cd "$(dirname "$0")/.." && pwd)/.build/debug/bantay"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BINARY="$ROOT/.build/release/bantay"
+if [[ -f "$ROOT/.build/debug/bantay" && (! -f "$BINARY" || "$ROOT/.build/debug/bantay" -nt "$BINARY") ]]; then
+  BINARY="$ROOT/.build/debug/bantay"
+elif [[ ! -x "$BINARY" ]]; then
+  BINARY="$ROOT/.build/debug/bantay"
+fi
 if [[ ! -x "$BINARY" ]]; then
   echo "bantay-tui: binary not found at $BINARY -- build with 'swift build' first"
   echo "bantay-tui: skipping launch agent install"
@@ -205,13 +211,31 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Sign bundle with designated requirement so TCC permissions persist across restarts.
+# Sign the bundle with a stable identity so macOS TCC grants survive rebuilds.
+# Ad-hoc signatures use a per-build cdhash as the designated requirement, so
+# Accessibility resets every time the binary changes. The local self-signed
+# identity keeps the requirement anchored to the certificate instead.
 SIGN_IDENTITY="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "Bantay"; then
-  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Bantay" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  SIGN_IDENTITY="$CODESIGN_IDENTITY"
+elif DEV_IDENTITY="$(bash "$ROOT/scripts/ensure-dev-signing-identity.sh")"; then
+  SIGN_IDENTITY="$DEV_IDENTITY"
 fi
 echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui (identity: $SIGN_IDENTITY)"
-codesign --force --deep --sign "$SIGN_IDENTITY" -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
+else
+  # Unlock the dedicated dev-signing keychain non-interactively so codesign
+  # never blocks on a GUI authorization dialog.
+  DEV_KEYCHAIN="${BANTAY_DEV_KEYCHAIN:-$HOME/.config/bantay/signing.keychain-db}"
+  DEV_PW_FILE="$HOME/.config/bantay/.signing-keychain-pass"
+  if [[ -f "$DEV_KEYCHAIN" && -f "$DEV_PW_FILE" ]]; then
+    security unlock-keychain -p "$(cat "$DEV_PW_FILE")" "$DEV_KEYCHAIN" >/dev/null 2>&1 || true
+    codesign --force --keychain "$DEV_KEYCHAIN" --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+  else
+    codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+  fi
+fi
 
 # Ensure TCC uses the designated identifier requirement.
 if command -v sqlite3 >/dev/null 2>&1; then
@@ -237,6 +261,13 @@ cat > "$AGENTS_PLIST" <<PLIST
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BANTAY_DEBUG</key>
+        <string>1</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>$DATA_DIR/bantay.log</string>
     <key>StandardErrorPath</key>
@@ -248,5 +279,9 @@ PLIST
 launchctl bootout gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) "$AGENTS_PLIST" 2>/dev/null || \
   launchctl load "$AGENTS_PLIST" 2>/dev/null || true
+
+if [[ -d "$HOME/.local/bin" ]]; then
+  ln -sf "$LAUNCH_BIN" "$HOME/.local/bin/bantay"
+fi
 
 echo "bantay-tui: launch agent installed at $AGENTS_PLIST (binary: $INSTALLED_BIN)"

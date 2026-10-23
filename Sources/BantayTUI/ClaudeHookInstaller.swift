@@ -155,7 +155,7 @@ enum ClaudeHookInstaller {
                 "source": "claude",
                 "type": "access_request",
                 "title": title,
-                "message": "Claude needs approval",
+                "message": "Claude wants to use \(toolName)",
                 "variance": "yes-no",
             ]
             if let mode, mode == "bypassPermissions" {
@@ -200,7 +200,7 @@ enum ClaudeHookInstaller {
                     "source": "claude",
                     "type": "access_request",
                     "title": title,
-                    "message": "Claude needs your input",
+                    "message": "Claude wants to use \(toolName)",
                     "variance": "yes-no",
                 ]
             }

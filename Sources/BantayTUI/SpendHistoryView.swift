@@ -27,31 +27,45 @@ struct SpendHistoryView: View {
     private var headerSummary: some View {
         let (projected, _) = store.projectedRunRate(budget: budget)
         let weekTotal = store.totalPastWeekUSD()
+        let todayTotal = store.dailyRecords[SpendHistoryStore.dateKey()]?.totalCostUSD ?? 0
 
-        return HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Past 7 Days")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(BantayTheme.textTertiary)
-                Text(String(format: "$%.2f", weekTotal))
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundColor(BantayTheme.textPrimary)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Today")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Text(String(format: "$%.2f", todayTotal))
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundColor(BantayTheme.textPrimary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Past 7 Days")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Text(String(format: "$%.2f", weekTotal))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(BantayTheme.textSecondary)
+                }
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Projected Today")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Text(String(format: "$%.2f / day", projected))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(
+                            projected > budget
+                                ? BantayTheme.statusFailed
+                                : (projected > budget * 0.8
+                                    ? BantayTheme.statusAttention : BantayTheme.statusWorking)
+                        )
+                }
             }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("Projected Today")
-                    .font(.system(size: 9, weight: .semibold))
+            if todayTotal <= 0 {
+                Text("No spend recorded today. Usage appears after an agent transcript changes.")
+                    .font(.system(size: 9.5, weight: .medium))
                     .foregroundColor(BantayTheme.textTertiary)
-                Text(String(format: "$%.2f / day", projected))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundColor(
-                        projected > budget
-                            ? BantayTheme.statusFailed
-                            : (projected > budget * 0.8
-                                ? BantayTheme.statusAttention : BantayTheme.statusWorking)
-                    )
             }
         }
     }

@@ -1,13 +1,187 @@
 import AppKit
+import Combine
+import Network
 import SwiftUI
 
 @main
 struct DynamicIslandApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() {
+        Self.handleEarlyCommandLineArguments()
+    }
+
+    private static func sendSocketCommand(method: String, params: [String: Any]) {
+        let socketPath = ControlGateway.socketPath()
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            fputs("[bantay] Daemon socket not found at \(socketPath)\n", stderr)
+            exit(1)
+        }
+        let sema = DispatchSemaphore(value: 0)
+        let id = "cli:\(method)"
+        let paramsData = (try? JSONSerialization.data(withJSONObject: params)) ?? Data("{}".utf8)
+        let paramsString = String(data: paramsData, encoding: .utf8) ?? "{}"
+        let line = "{\"id\":\"\(id)\",\"method\":\"\(method)\",\"params\":\(paramsString)}\n"
+        let endpoint = NWEndpoint.unix(path: socketPath)
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        let queue = DispatchQueue(label: "bantay.cli.socket", qos: .userInitiated)
+        connection.stateUpdateHandler = { state in
+            if case .ready = state {
+                connection.send(
+                    content: Data(line.utf8),
+                    completion: .contentProcessed { _ in })
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) {
+                    data, _, _, _ in
+                    if let data = data, let str = String(data: data, encoding: .utf8) {
+                        print(str.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                    sema.signal()
+                }
+            } else if case .failed = state {
+                sema.signal()
+            }
+        }
+        connection.start(queue: queue)
+        _ = sema.wait(timeout: .now() + 2.0)
+        connection.cancel()
+        exit(0)
+    }
+
+    private static func handleEarlyCommandLineArguments() {
+        if CommandLine.arguments.contains("--mcp") || CommandLine.arguments.contains("mcp") {
+            BantayMCPServer.runStdioLoop()
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--ping") || CommandLine.arguments.contains("ping") {
+            sendSocketCommand(method: "bantay.ping", params: [:])
+        }
+        if CommandLine.arguments.contains("--settings")
+            || CommandLine.arguments.contains("settings")
+        {
+            let routeArg =
+                CommandLine.arguments.drop(while: { $0 != "--settings" && $0 != "settings" })
+                .dropFirst().first(where: { !$0.hasPrefix("--") })
+            var params: [String: Any] = [:]
+            if let routeArg, let route = SettingsRoute.resolve(cliArgument: routeArg) {
+                params["route"] = route.rawValue
+            }
+            sendSocketCommand(method: "settings.open", params: params)
+        }
+        if CommandLine.arguments.contains("--permissions")
+            || CommandLine.arguments.contains("permissions")
+        {
+            let granted = StripWindowRegistry.hasAccessibilityPermission()
+            if granted {
+                print("Accessibility permission: GRANTED")
+            } else {
+                print("Accessibility permission: NOT GRANTED")
+                print("Opening macOS System Settings Privacy & Security > Accessibility...")
+                StripWindowRegistry.promptAccessibilityPermission()
+                StripWindowRegistry.openAccessibilitySettings()
+            }
+            exit(0)
+        }
+        if let stripIdx = CommandLine.arguments.firstIndex(where: {
+            $0 == "strip" || $0 == "--strip"
+        }) {
+            let sub =
+                CommandLine.arguments.indices.contains(stripIdx + 1)
+                ? CommandLine.arguments[stripIdx + 1] : "toggle"
+            let argumentStart = stripIdx + 2
+            func option(_ flag: String, default defaultValue: String) -> String {
+                let arguments = CommandLine.arguments
+                if let flagIndex = arguments.indices.first(where: {
+                    $0 >= argumentStart && arguments[$0] == flag
+                }), arguments.indices.contains(flagIndex + 1) {
+                    return arguments[flagIndex + 1]
+                }
+                if arguments.indices.contains(argumentStart) {
+                    let candidate = arguments[argumentStart]
+                    if !candidate.hasPrefix("--") {
+                        return candidate
+                    }
+                }
+                return defaultValue
+            }
+            switch sub {
+            case "toggle":
+                sendSocketCommand(method: "strip.toggle", params: [:])
+            case "focus":
+                let dir = option("--dir", default: "right")
+                sendSocketCommand(method: "strip.focus", params: ["direction": dir])
+            case "center":
+                sendSocketCommand(method: "strip.center", params: [:])
+            case "width":
+                let mode = option("--mode", default: "cycle")
+                sendSocketCommand(method: "strip.width", params: ["mode": mode])
+            case "approval":
+                sendSocketCommand(method: "strip.approval", params: [:])
+            case "status":
+                sendSocketCommand(method: "strip.status", params: [:])
+            case "overview":
+                sendSocketCommand(method: "strip.overview", params: [:])
+            case "hud":
+                sendSocketCommand(method: "strip.hud", params: [:])
+            case "reorder":
+                let arguments = CommandLine.arguments
+                let from: Int
+                let to: Int
+                if let fromIndex = arguments.firstIndex(of: "--from"),
+                    let toIndex = arguments.firstIndex(of: "--to"),
+                    arguments.indices.contains(fromIndex + 1),
+                    arguments.indices.contains(toIndex + 1)
+                {
+                    from = Int(arguments[fromIndex + 1]) ?? 0
+                    to = Int(arguments[toIndex + 1]) ?? 1
+                } else {
+                    let fromRaw =
+                        arguments.indices.contains(stripIdx + 2)
+                        ? arguments[stripIdx + 2] : "0"
+                    let toRaw =
+                        arguments.indices.contains(stripIdx + 3)
+                        ? arguments[stripIdx + 3] : "1"
+                    from = Int(fromRaw) ?? 0
+                    to = Int(toRaw) ?? 1
+                }
+                sendSocketCommand(method: "strip.reorder", params: ["from": from, "to": to])
+            case "autochain":
+                let slug = option("--slug", default: "")
+                sendSocketCommand(
+                    method: "strip.autochain", params: slug.isEmpty ? [:] : ["slug": slug])
+            case "pin":
+                let col =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? Int(CommandLine.arguments[stripIdx + 2]) : nil
+                sendSocketCommand(
+                    method: "strip.pin",
+                    params: col != nil ? ["columnIndex": col!] : [:])
+            case "stack":
+                let dir =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? CommandLine.arguments[stripIdx + 2] : "right"
+                sendSocketCommand(method: "strip.stack", params: ["direction": dir])
+            case "unstack":
+                let dir =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? CommandLine.arguments[stripIdx + 2] : "right"
+                let toRight = (dir != "left")
+                sendSocketCommand(method: "strip.unstack", params: ["toRight": toRight])
+            case "tabbed":
+                let col =
+                    CommandLine.arguments.indices.contains(stripIdx + 2)
+                    ? Int(CommandLine.arguments[stripIdx + 2]) : nil
+                sendSocketCommand(
+                    method: "strip.tabbed",
+                    params: col != nil ? ["columnIndex": col!] : [:])
+            default:
+                sendSocketCommand(method: "strip.toggle", params: [:])
+            }
+        }
+    }
+
     var body: some Scene {
         Settings {
-            SettingsView()
+            EmptyView()
         }
     }
 }
@@ -20,13 +194,21 @@ final class KeyablePanel: NSPanel {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+    override init() {
+        super.init()
+        Self.dbg("AppDelegate.init called")
+    }
+
     @MainActor static var window: NSWindow?
     /// The live app-delegate instance, for non-main-actor callbacks.
-    @MainActor static weak var shared: AppDelegate?
+    @MainActor static var shared: AppDelegate?
     /// Set once the island has shown at least once; un-gates `hideAtStartup`.
     @MainActor static var didShowOnce = false
     /// True while the user has forced the island visible via the tray menu.
     @MainActor static var isForcedVisible = false
+    /// The island hid itself for a full-screen app and should return when the
+    /// user leaves that Space.
+    @MainActor static var fullScreenHidIsland = false
     /// Set at launch when the one-time welcome sheet must appear.
     @MainActor static var pendingWelcome = false
     /// Mirror of the island's F2 compose field state (set by NotchStatusView)
@@ -35,9 +217,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor static var composingPaneId: String?
     private var statusItem: NSStatusItem?
     private var screenChangeObserver: NSObjectProtocol?
-    private var fullScreenObserver: NSObjectProtocol?
-    private var fullScreenExitObserver: NSObjectProtocol?
     private var spaceChangeObserver: NSObjectProtocol?
+    private var fullScreenCancellable: AnyCancellable?
     private var wakeObserver: NSObjectProtocol?
     @MainActor private static var settleTask: Task<Void, Never>?
     private var hotkeyMonitors: [Any] = []
@@ -50,11 +231,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// script runs so the action can't double-fire.
     @MainActor private var uninstallMenuItem: NSMenuItem?
 
-    /// Diagnostic trace written to stderr (landld captures it in bantay.err).
+    /// Diagnostic trace written to stderr (launchd captures it in bantay.err).
     static func dbg(_ message: String) {
-        let line = "[bantay] \(message)\n"
-        FileHandle.standardError.write(Data(line.utf8))
-        FileHandle.standardError.synchronizeFile()
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let line = "[bantay] [\(pid)] \(message)\n"
+        fputs(line, stderr)
+        fflush(stderr)
     }
 
     @MainActor
@@ -122,12 +304,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if CommandLine.arguments.contains("--mcp") || CommandLine.arguments.contains("mcp") {
-            BantayMCPServer.runStdioLoop()
-            exit(0)
-        }
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
+        FullScreenMonitor.shared.start()
+        bindFullScreenMonitor()
+        QuotaMonitor.shared.startPolling()
         // Data dir + events file always exist (setup.sh parity) so the
         // events pipeline and LaunchAgent logs have a home.
         LaunchAgent.ensureDataDirectory()
@@ -141,6 +322,147 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         startBadgeTimer()
         updateIngestServer()
         updateControlGateway()
+        NotificationCenter.default.addObserver(
+            forName: .openSettingsRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let route =
+                (note.userInfo?["route"] as? String).flatMap(SettingsRoute.init(rawValue:))
+                ?? .general
+            Task { @MainActor in
+                Self.dbg("Notification openSettingsRequested received, calling showSettings")
+                AppDelegate.showSettings(route: route)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripToggleRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.toggle()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripFocusRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let dir = (note.userInfo?["direction"] as? String) ?? "right"
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.focusColumn(direction: dir)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripCenterRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.centerActiveColumn()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripWidthRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let mode = (note.userInfo?["mode"] as? String) ?? "cycle"
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.cycleWidth(mode: mode)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripApprovalRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.jumpToApprovalAgent()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripOverviewRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.toggleOverviewMode()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripReorderRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let from = (note.userInfo?["from"] as? Int) ?? 0
+            let to = (note.userInfo?["to"] as? Int) ?? 1
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.reorderColumn(fromIndex: from, toIndex: to)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripAutochainRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let slug = note.userInfo?["slug"] as? String
+            _ = MainActor.assumeIsolated {
+                StripWindowManager.shared.autoChainCurrentProject(slug: slug)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripPinRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let col = note.userInfo?["columnIndex"] as? Int
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.togglePin(columnIndex: col)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripStackRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let dir = (note.userInfo?["direction"] as? String) ?? "right"
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.stack(direction: dir)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripUnstackRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let toRight = (note.userInfo?["toRight"] as? Bool) ?? true
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.unstack(toRight: toRight)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripTabbedRequested,
+            object: nil,
+            queue: .main
+        ) { note in
+            let col = note.userInfo?["columnIndex"] as? Int
+            MainActor.assumeIsolated {
+                StripWindowManager.shared.toggleTabbed(columnIndex: col)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripHudRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                DesktopHUDController.shared.toggle()
+            }
+        }
+        StripStatusProvider.current = { StripWindowManager.shared.statusSnapshot() }
+        StripWindowManager.shared.start()
         Self.dbg(
             "didFinishLaunching: seen=\(UserDefaults.standard.bool(forKey: "hasSeenOnboarding"))")
         if !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") {
@@ -150,14 +472,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if AgentEventManager.shared.agents.isEmpty {
             config.panelPinned = false
         }
+        if CommandLine.arguments.contains("--settings")
+            || CommandLine.arguments.contains("settings")
+        {
+            openSettings()
+        }
+        let shouldShowAtLaunch =
+            Self.isForcedVisible
+            || IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: FullScreenMonitor.shared.isFullScreen,
+                showInFullScreen: config.showInFullScreen)
         if config.hideAtStartup && !config.showIslandWhenIdle {
             Self.dbg("launch: hideAtStartup set, island stays hidden until an event")
-        } else {
+        } else if shouldShowAtLaunch {
             Self.dbg(
                 "launch: showing island (hideAtStartup=\(config.hideAtStartup) idleShow=\(config.showIslandWhenIdle))"
             )
             Self.showAtNotch()
+        } else {
+            Self.dbg("launch: full screen active, island stays hidden")
         }
+    }
+
+    @MainActor
+    private func bindFullScreenMonitor() {
+        fullScreenCancellable = FullScreenMonitor.shared.$isFullScreen
+            .receive(on: DispatchQueue.main)
+            .sink { isFullScreen in
+                Task { @MainActor in
+                    AppDelegate.handleFullScreenStateChange(isFullScreen)
+                }
+            }
     }
 
     @MainActor
@@ -234,20 +579,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         ) { _ in
             MainActor.assumeIsolated { AppDelegate.handleDisplayChange() }
         }
-        fullScreenObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didEnterFullScreenNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition(entering: true) }
-        }
-        fullScreenExitObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didExitFullScreenNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            MainActor.assumeIsolated { AppDelegate.handleFullScreenTransition(entering: false) }
-        }
         spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
@@ -273,6 +604,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             try? await Task.sleep(
                 for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
             guard !Task.isCancelled else { return }
+            FullScreenMonitor.shared.refreshNow()
+            applyFullScreenPolicy(isFullScreen: FullScreenMonitor.shared.isFullScreen)
             reanchorIfGhosted()
             reposition()
             if window?.isVisible == true { showAtNotch() }
@@ -293,29 +626,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    /// Re-evaluate island visibility after a full-screen transition and
-    /// re-anchor once the WindowServer settles the new frame.
+    /// Re-evaluate island visibility after a full-screen change and re-anchor
+    /// once the WindowServer settles the new frame.
     @MainActor
-    static func handleFullScreenTransition(entering: Bool) {
+    static func handleFullScreenStateChange(_ isFullScreen: Bool) {
+        applyFullScreenPolicy(isFullScreen: isFullScreen)
         settleTask?.cancel()
-        if IslandMetrics.FullScreenPolicy.shouldShow(
-            inFullScreen: entering, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
-        {
-            showAtNotch()
-        } else {
-            hide()
-        }
         settleTask = Task { @MainActor in
             try? await Task.sleep(
                 for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
             guard !Task.isCancelled else { return }
-            if IslandMetrics.FullScreenPolicy.shouldShow(
-                inFullScreen: entering, showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
-            {
-                showAtNotch()
-            } else {
-                hide()
+            applyFullScreenPolicy(isFullScreen: isFullScreen)
+        }
+    }
+
+    /// Applies the user's "Keep island in full screen" preference without
+    /// resurrecting an island the user or launch settings left hidden.
+    @MainActor
+    static func applyFullScreenPolicy(isFullScreen: Bool) {
+        let shouldShow =
+            isForcedVisible
+            || IslandMetrics.FullScreenPolicy.shouldShow(
+                inFullScreen: isFullScreen,
+                showInFullScreen: NotchHUDConfig.shared.showInFullScreen)
+
+        guard shouldShow else {
+            if window?.isVisible == true {
+                fullScreenHidIsland = true
             }
+            hide()
+            return
+        }
+
+        if isFullScreen {
+            // Keep an already-visible island anchored. Do not reveal one that
+            // hideAtStartup or the tray left hidden.
+            if window?.isVisible == true || isForcedVisible {
+                showAtNotch()
+            }
+            return
+        }
+
+        if fullScreenHidIsland {
+            fullScreenHidIsland = false
+            showAtNotch()
+        } else if window?.isVisible == true || isForcedVisible {
+            showAtNotch()
         }
     }
 
@@ -327,6 +683,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             try? await Task.sleep(
                 for: .seconds(IslandMetrics.FullScreenPolicy.transitionSettleDelay))
             guard !Task.isCancelled else { return }
+            FullScreenMonitor.shared.refreshNow()
+            applyFullScreenPolicy(isFullScreen: FullScreenMonitor.shared.isFullScreen)
             reposition()
             if window?.isVisible == true { showAtNotch() }
         }
@@ -408,12 +766,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             (16, .approveTop),
             (45, .denyTop),
             (1, .snooze15),
+            (43, .openSettings),
         ].filter { keyCode, action in
             switch action {
             case .toggleIsland: return true
             case .approveTop: return config.globalHotkeyApproveEnabled
             case .denyTop: return config.globalHotkeyDenyEnabled
             case .snooze15: return config.globalHotkeySnoozeEnabled
+            case .openSettings: return true
             }
         }
         for (_, action) in enabledActions {
@@ -466,6 +826,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             config.snoozeUntilRestart = false
             config.snoozedUntil = Date().addingTimeInterval(900)
             NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+        case .openSettings:
+            showSettings()
         }
     }
 
@@ -605,7 +967,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let agents = AgentEventManager.shared.agents
         let topApproval = agents.first { $0.kind == .accessRequest || $0.kind == .waiting }
-        if let topApproval, let paneId = topApproval.paneId {
+        if let topApproval,
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: topApproval.paneId, source: topApproval.source)
+        {
             let cleanPrompt =
                 topApproval.title.flatMap {
                     let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
@@ -667,7 +1032,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
 
-                if isBlocked, let paneId = agent.paneId {
+                if isBlocked,
+                    let paneId = IslandMetrics.actionablePaneId(
+                        paneId: agent.paneId, source: agent.source)
+                {
                     let header = NSMenuItem(
                         title: "\(agent.source) needs approval", action: nil, keyEquivalent: "")
                     header.isEnabled = false
@@ -755,6 +1123,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             keyEquivalent: "")
         disableItem.target = self
         menu.addItem(disableItem)
+
+        let desktopItem = NSMenuItem(
+            title: DesktopHUDController.shared.isVisible
+                ? "Hide Desktop HUD" : "Open Desktop HUD",
+            action: #selector(toggleDesktopHUD),
+            keyEquivalent: "")
+        desktopItem.target = self
+        menu.addItem(desktopItem)
 
         let snoozeMenu = NSMenu()
         let snoozeItem = NSMenuItem(
@@ -908,9 +1284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard parts.count == 2, let index = Int(parts[1]) else { return }
         let paneId = parts[0]
         let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-        AgentEventManager.shared.performAction(paneId: paneId) {
-            $0.approveChoice(paneId: paneId, choice: number)
-        }
+        AgentEventManager.shared.approveChoice(paneId: paneId, choice: number)
     }
 
     @MainActor
@@ -937,8 +1311,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         Self.isForcedVisible.toggle()
         if Self.isForcedVisible {
             Self.didShowOnce = true
+            Self.fullScreenHidIsland = false
             Self.showAtNotch()
         } else {
+            Self.fullScreenHidIsland = false
             Self.hide()
         }
         NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
@@ -949,6 +1325,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let config = NotchHUDConfig.shared
         config.islandEnabled.toggle()
         NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+    }
+
+    @MainActor
+    @objc private func toggleDesktopHUD() {
+        DesktopHUDController.shared.toggle()
     }
 
     @MainActor
@@ -987,44 +1368,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor private var settingsWindowInstance: NSWindow?
 
     @MainActor
-    static func showSettings() {
-        shared?.openSettings()
+    static func showSettings(route: SettingsRoute = .general) {
+        shared?.openSettingsWindow(route: route)
     }
 
     @MainActor
     @objc func openSettings() {
+        openSettingsWindow(route: .general)
+    }
+
+    @MainActor
+    func openSettingsWindow(route: SettingsRoute) {
+        Self.dbg("openSettings: 1 start")
         let window = settingsWindowInstance ?? makeSettingsWindow()
+        Self.dbg("openSettings: 2 window obtained")
         settingsWindowInstance = window
         NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
-        window.center()
-        NSApp.setActivationPolicy(.regular)
+        NotificationCenter.default.post(
+            name: .settingsRouteRequested, object: nil,
+            userInfo: ["route": route.rawValue])
+        Self.dbg("openSettings: 3 settingsWillOpen posted")
+        if let targetScreen = Self.islandScreen() ?? NSScreen.main {
+            let screenRect = targetScreen.visibleFrame
+            let x = screenRect.midX - window.frame.width / 2
+            let y = screenRect.midY - window.frame.height / 2
+            window.setFrameOrigin(NSPoint(x: x, y: y))
+        } else {
+            window.center()
+        }
+        Self.dbg("openSettings: 4 frame set")
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        Self.dbg("openSettings: 5 makeKeyAndOrderFront")
         window.makeKeyAndOrderFront(nil)
+        Self.dbg("openSettings: 6 orderFrontRegardless")
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+        Self.dbg("openSettings: 7 done")
     }
 
     @MainActor
     private func makeSettingsWindow() -> NSWindow {
+        Self.dbg("makeSettingsWindow: 1 creating window")
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
         window.title = "Bantay-TUI Settings"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        Self.dbg("makeSettingsWindow: 2 creating NSHostingController")
         window.contentViewController = NSHostingController(rootView: SettingsView())
+        Self.dbg("makeSettingsWindow: 3 NSHostingController created")
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 640, height: 480)
         window.delegate = self
-        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        // Stay above the island panel (`.statusBar + 8`) so opening Settings
+        // never leaves the notch covering its controls.
+        window.level = .statusBar + 9
+        Self.dbg("makeSettingsWindow: 4 done")
         return window
     }
 
     func windowWillClose(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window == settingsWindowInstance {
-            Task { @MainActor in
-                NSApp.setActivationPolicy(.accessory)
-            }
-        }
+        Self.dbg("AppDelegate: windowWillClose called: \(notification.name)")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Self.dbg("AppDelegate: applicationWillTerminate called!")
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

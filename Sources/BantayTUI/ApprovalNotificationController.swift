@@ -10,6 +10,7 @@ final class ApprovalNotificationController: NSObject,
 
     static let categoryID = "BANTAY_APPROVAL"
     static let choiceCategoryID = "BANTAY_APPROVAL_CHOICE"
+    static let reviewCategoryID = "BANTAY_REVIEW"
     static let completedCategoryID = "BANTAY_COMPLETED"
     static let failedCategoryID = "BANTAY_FAILED"
 
@@ -56,7 +57,7 @@ final class ApprovalNotificationController: NSObject,
             choiceActions.append(
                 UNNotificationAction(
                     identifier: Self.choiceActionIDPrefix + String(index),
-                    title: "\(index + 1)…",
+                    title: "Choice \(index + 1)",
                     options: [.authenticationRequired]))
         }
         let viewSession = UNNotificationAction(
@@ -75,6 +76,9 @@ final class ApprovalNotificationController: NSObject,
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
                 identifier: Self.choiceCategoryID, actions: choiceActions,
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
+                identifier: Self.reviewCategoryID, actions: [focus, dismiss],
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
                 identifier: Self.completedCategoryID, actions: [viewSession, dismiss],
@@ -97,11 +101,18 @@ final class ApprovalNotificationController: NSObject,
         guard let paneId, hasBundleProxy else { return }
         install()
         let content = UNMutableNotificationContent()
-        content.title = "\(source) needs approval"
-        content.body = approvalBody(title: title, choices: choices)
-        content.sound = .default
         let hasChoices = choices?.isEmpty == false
-        content.categoryIdentifier = hasChoices ? Self.choiceCategoryID : Self.categoryID
+        let concrete = isConcreteApprovalTitle(title)
+        content.title =
+            concrete || hasChoices ? "\(source) needs approval" : "\(source) is waiting"
+        content.body =
+            concrete || hasChoices
+            ? approvalBody(title: title, choices: choices)
+            : "Open Bantay to review the request before deciding."
+        content.sound = .default
+        content.categoryIdentifier =
+            hasChoices
+            ? Self.choiceCategoryID : (concrete ? Self.categoryID : Self.reviewCategoryID)
         var info: [String: String] = ["paneId": paneId, "source": source]
         if let cwd { info["cwd"] = cwd }
         if let sessionPath { info["sessionPath"] = sessionPath }
@@ -114,6 +125,19 @@ final class ApprovalNotificationController: NSObject,
                 NSLog("approval-notify: %@ failed: %@", paneId, String(describing: error))
             }
         }
+    }
+
+    /// A notification may offer Approve and Deny only when it names the exact
+    /// request. Status-only blocked heartbeats get Review/Focus actions.
+    private func isConcreteApprovalTitle(_ title: String?) -> Bool {
+        guard let title else { return false }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let generic: Set<String> = [
+            "blocked", "waiting", "needs input", "needs approval",
+            "agent requires input", "approval required", "permission required",
+        ]
+        return !generic.contains(trimmed.lowercased())
     }
 
     /// Post a completion notification with actionable "View in Browser" button.
@@ -252,12 +276,12 @@ final class ApprovalNotificationController: NSObject,
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                manager.approve(paneId: paneId)
             case Self.denyActionID:
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+                manager.deny(paneId: paneId)
             case Self.viewSessionActionID:
                 let slug = cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? source
                 RichSessionViewer.openInBrowser(
@@ -288,9 +312,7 @@ final class ApprovalNotificationController: NSObject,
                         Self.choiceActionIDPrefix.count)
                     guard let index = Int(indexString) else { return }
                     let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    manager.performAction(paneId: paneId) {
-                        $0.approveChoice(paneId: paneId, choice: number)
-                    }
+                    manager.approveChoice(paneId: paneId, choice: number)
                 }
             }
         }

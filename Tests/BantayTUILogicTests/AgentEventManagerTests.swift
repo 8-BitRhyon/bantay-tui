@@ -116,6 +116,55 @@
             }
         }
 
+        @Test("answered approval ignores a repeated blocked event")
+        func answeredApprovalIsSuppressed() throws {
+            try withTempFile { _, manager in
+                let approval = AgentEvent(
+                    source: "claude", kind: .accessRequest, title: "rm -rf build",
+                    message: "Claude wants to use Bash", paneId: "ack-1",
+                    workspaceId: nil, variance: .yesNo, choices: nil,
+                    playSound: false, persistent: false)
+                manager.publishEventForTesting(approval)
+                #expect(manager.currentEvent?.paneId == "ack-1")
+
+                manager.acknowledgeApproval(paneId: "ack-1")
+                #expect(manager.currentEvent == nil)
+                #expect(manager.pendingApprovals["ack-1"] == nil)
+
+                manager.publishEventForTesting(approval)
+                #expect(manager.currentEvent == nil)
+
+                manager.publishEventForTesting(
+                    AgentEvent(
+                        source: "claude", kind: .progress, title: "working",
+                        message: nil, paneId: "ack-1", workspaceId: nil,
+                        variance: nil, choices: nil, playSound: false,
+                        persistent: false))
+                manager.publishEventForTesting(approval)
+                #expect(manager.currentEvent?.kind == .accessRequest)
+            }
+        }
+
+        @Test("standalone approval is acknowledged by synthetic pane id")
+        func standaloneApprovalIsSuppressed() throws {
+            try withTempFile { _, manager in
+                let approval = AgentEvent(
+                    source: "claude", kind: .accessRequest, title: "touch file",
+                    message: nil, paneId: nil, workspaceId: nil,
+                    variance: .yesNo, choices: nil, playSound: false,
+                    persistent: false)
+                manager.publishEventForTesting(approval)
+                #expect(manager.currentEvent?.kind == .accessRequest)
+
+                manager.acknowledgeApproval(paneId: "standalone:claude")
+                #expect(manager.currentEvent == nil)
+                #expect(manager.pendingApprovals["claude"] == nil)
+
+                manager.publishEventForTesting(approval)
+                #expect(manager.currentEvent == nil)
+            }
+        }
+
         @Test("clear dismisses current event")
         func clearDismissesCurrentEvent() throws {
             try withTempFile { file, manager in

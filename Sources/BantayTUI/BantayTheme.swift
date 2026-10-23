@@ -26,6 +26,9 @@ public enum BantayTheme {
     public static let statusFailed = Color(hex: "FF453A")  // Coral Red / Error
     public static let statusQuota = Color(hex: "FF9F0A")  // Orange / Quota Warning
     public static let statusIdle = Color(hex: "8E8E93")  // Silver / Standby
+    /// Focused window chrome. Cyan belongs to focus; amber belongs to
+    /// approvals, so the two states never share a color.
+    public static let statusFocus = Color(hex: "38BDF8")  // Sky / Focus
 
     // MARK: - Text Hierarchy
     public static let textPrimary = Color.white
