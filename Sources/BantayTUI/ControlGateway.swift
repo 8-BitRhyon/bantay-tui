@@ -25,6 +25,7 @@ enum ControlGateway {
         case stripStack
         case stripUnstack
         case stripTabbed
+        case stripHud
         case unknown
     }
 
@@ -83,6 +84,7 @@ enum ControlGateway {
             "strip.width", "strip.approval", "strip.status",
             "strip.overview", "strip.reorder", "strip.autochain",
             "strip.pin", "strip.stack", "strip.unstack", "strip.tabbed",
+            "strip.hud",
         ]
 
         static func isKnown(_ method: String) -> Bool {
@@ -137,6 +139,7 @@ enum ControlGateway {
         case "strip.stack": return .stripStack
         case "strip.unstack": return .stripUnstack
         case "strip.tabbed": return .stripTabbed
+        case "strip.hud": return .stripHud
         default: return .unknown
         }
     }
@@ -421,6 +424,13 @@ final class ControlGatewayServer: @unchecked Sendable {
             return ControlGateway.GatewayResponse.ok(
                 id: request.id,
                 result: ["tabbed": true])
+        case .stripHud:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripHudRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["toggled": true])
         case .unknown:
             return ControlGateway.GatewayResponse.error(
                 id: request.id, code: "unknown_method", message: request.method)

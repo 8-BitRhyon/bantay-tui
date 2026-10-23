@@ -30,7 +30,32 @@ public struct StripStatusSnapshot: Sendable {
     public let isFullScreen: Bool
     public let activeColumnIndex: Int
     public let accessibility: Bool
+    public let desktopHUDVisible: Bool
     public let columns: [Column]
+
+    public init(
+        enabled: Bool,
+        defaultWidthPreset: Double,
+        gap: Double,
+        inset: Double,
+        overview: Bool,
+        isFullScreen: Bool,
+        activeColumnIndex: Int,
+        accessibility: Bool,
+        desktopHUDVisible: Bool = false,
+        columns: [Column]
+    ) {
+        self.enabled = enabled
+        self.defaultWidthPreset = defaultWidthPreset
+        self.gap = gap
+        self.inset = inset
+        self.overview = overview
+        self.isFullScreen = isFullScreen
+        self.activeColumnIndex = activeColumnIndex
+        self.accessibility = accessibility
+        self.desktopHUDVisible = desktopHUDVisible
+        self.columns = columns
+    }
 
     /// JSON-safe representation for the NDJSON control gateway.
     public var jsonObject: [String: Any] {
@@ -43,6 +68,7 @@ public struct StripStatusSnapshot: Sendable {
             "isFullScreen": isFullScreen,
             "activeColumnIndex": activeColumnIndex,
             "accessibility": accessibility,
+            "desktopHUDVisible": desktopHUDVisible,
             "columns": columns.map { column -> [String: Any] in
                 [
                     "index": column.index,

@@ -4,6 +4,7 @@ import SwiftUI
 struct NotchHeaderBarView: View {
     @ObservedObject var eventManager: AgentEventManager
     @ObservedObject private var quotaMonitor = QuotaMonitor.shared
+    @ObservedObject private var desktopHUD = DesktopHUDController.shared
     let counts: IslandMetrics.AgentCounts
     let mascotState: MascotState
     @Binding var selectedTab: ShelfTab
@@ -65,10 +66,37 @@ struct NotchHeaderBarView: View {
                 }
             }
             pinButton
+            desktopBridgePill
             settingsButton
         }
         .padding(.horizontal, 14)
         .frame(height: IslandMetrics.headerHeight)
+    }
+
+    /// Lightweight bridge to Desktop mode. Observes only the HUD
+    /// controller (toggle/window-count changes), never the strip manager,
+    /// so strip scrolling cannot re-render the notch header.
+    private var desktopBridgePill: some View {
+        Button {
+            desktopHUD.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "rectangle.split.3x1")
+                    .font(.system(size: 8, weight: .semibold))
+                Text("Desktop \(desktopHUD.windowCount)")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .foregroundColor(BantayTheme.textTertiary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.05), in: Capsule())
+            .fixedSize(horizontal: true, vertical: true)
+        }
+        .buttonStyle(.plain)
+        .help("Open the Desktop strip HUD")
+        .accessibilityLabel("Open Desktop strip HUD, \(desktopHUD.windowCount) windows")
     }
 
     private var mascotButton: some View {

@@ -8481,6 +8481,13 @@ struct LogicCheckMain {
                 kiloDetected: true, totalTokens: 0, tokensPerMinute: 0) == true,
             "P1 kilo detection counts as usage data")
 
+        check(
+            ControlGateway.route(method: "strip.hud") == .stripHud,
+            "P2 strip.hud routes to the desktop HUD")
+        check(
+            ControlGateway.GatewayRoute.stripCatalog.contains("strip.hud"),
+            "P2 strip.hud is a known gateway method")
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 

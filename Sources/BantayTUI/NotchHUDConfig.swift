@@ -18,6 +18,9 @@ extension Notification.Name {
     static let stripStackRequested = Notification.Name("stripStackRequested")
     static let stripUnstackRequested = Notification.Name("stripUnstackRequested")
     static let stripTabbedRequested = Notification.Name("stripTabbedRequested")
+    static let stripHudRequested = Notification.Name("stripHudRequested")
+    static let notchCollapseRequested = Notification.Name("notchCollapseRequested")
+    static let notchExpandRequested = Notification.Name("notchExpandRequested")
 }
 
 @MainActor

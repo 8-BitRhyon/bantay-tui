@@ -59,6 +59,12 @@
             #expect(SettingsRoute.resolve(cliArgument: "nope") == nil)
         }
 
+        @Test("desktop HUD gateway route")
+        func desktopHudRoute() {
+            #expect(ControlGateway.route(method: "strip.hud") == .stripHud)
+            #expect(ControlGateway.GatewayRoute.stripCatalog.contains("strip.hud"))
+        }
+
         @Test("structured roster height grows and caps")
         func rosterHeight() {
             let metrics = IslandMetrics.RosterLayoutMetrics(

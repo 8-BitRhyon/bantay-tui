@@ -48,7 +48,6 @@ struct NotchStatusView: View {
     @State private var shelfDropGlow = false
     /// The persisted, thumbnail-rendering shelf (ShelfStore owns files).
     @ObservedObject private var shelfStore = ShelfStore.shared
-    @ObservedObject private var stripManager = StripWindowManager.shared
     @State private var lastChangeCount = NSPasteboard.general.changeCount
     @State private var legacyKeyMonitor: Any?
     /// Keyboard-navigation cursor over `mergedRoster` (plan 016 4b). Nil means
@@ -411,6 +410,16 @@ struct NotchStatusView: View {
             withAnimation(morphAnimation) {
                 expandTo(!isExpanded)
             }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchCollapseRequested)
+        ) { _ in
+            if isExpanded { expandTo(false) }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchExpandRequested)
+        ) { _ in
+            if !isExpanded { expandTo(true) }
         }
         .onReceive(
             Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -1551,71 +1560,6 @@ struct NotchStatusView: View {
                 }
             }
 
-            if stripManager.config.isEnabled && !stripManager.isFullScreen
-                && !StripWindowRegistry.hasAccessibilityPermission()
-            {
-                Button(action: {
-                    StripWindowRegistry.openAccessibilitySettings()
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "hand.raised.fill")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(
-                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255))
-                        Text("Accessibility Permission Needed to Arrange Windows")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundColor(.white)
-                        Text("[Grant in Settings]")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundColor(
-                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255))
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(
-                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255).opacity(
-                                    0.12))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(
-                                Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255).opacity(
-                                    0.4), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 2)
-            }
-
-            if stripManager.config.isEnabled && !stripManager.isFullScreen
-                && !stripManager.columns.isEmpty
-            {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    StripMiniMapHUD(
-                        columns: stripManager.columns,
-                        activeColumnIndex: stripManager.activeColumnIndex,
-                        visibleWindowIDs: stripManager.layoutResult.visibleWindowIDs,
-                        onSelectColumn: { index in
-                            // A second tap on the active column cycles its
-                            // windows instead of doing nothing.
-                            if index == stripManager.activeColumnIndex,
-                                stripManager.columns.indices.contains(index),
-                                stripManager.columns[index].windows.count > 1
-                            {
-                                stripManager.focusNextWindow()
-                            } else {
-                                stripManager.jumpToColumn(index: index)
-                            }
-                        }
-                    )
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-            }
-
             if NotchHUDConfig.shared.showShelfTab {
                 NotchTabBarView(selectedTab: $selectedTab)
             }
@@ -1853,6 +1797,9 @@ struct NotchStatusView: View {
     }
 
     private func expandTo(_ expanded: Bool) {
+        if expanded {
+            DesktopHUDController.shared.hide()
+        }
         withAnimation(morphAnimation) {
             isExpanded = expanded
         }

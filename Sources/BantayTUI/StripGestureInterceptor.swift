@@ -97,6 +97,12 @@ public final class StripGestureInterceptor {
             return
         }
 
+        // Space toggles the Desktop HUD (layout-independent keyCode 49).
+        if keyCode == 49 {
+            DesktopHUDController.shared.toggle()
+            return
+        }
+
         switch chars {
         case "r":
             StripWindowManager.shared.cycleWidth()

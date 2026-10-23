@@ -447,6 +447,7 @@ public final class StripWindowManager: ObservableObject {
             isFullScreen: isFullScreen,
             activeColumnIndex: activeColumnIndex,
             accessibility: StripWindowRegistry.hasAccessibilityPermission(),
+            desktopHUDVisible: DesktopHUDController.shared.isVisible,
             columns: columns.enumerated().map { index, column in
                 StripStatusSnapshot.Column(
                     index: index,

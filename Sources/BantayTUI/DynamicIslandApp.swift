@@ -113,6 +113,8 @@ struct DynamicIslandApp: App {
                 sendSocketCommand(method: "strip.status", params: [:])
             case "overview":
                 sendSocketCommand(method: "strip.overview", params: [:])
+            case "hud":
+                sendSocketCommand(method: "strip.hud", params: [:])
             case "reorder":
                 let arguments = CommandLine.arguments
                 let from: Int
@@ -438,6 +440,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let col = note.userInfo?["columnIndex"] as? Int
             MainActor.assumeIsolated {
                 StripWindowManager.shared.toggleTabbed(columnIndex: col)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripHudRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                DesktopHUDController.shared.toggle()
             }
         }
         StripStatusProvider.current = { StripWindowManager.shared.statusSnapshot() }
@@ -1103,6 +1114,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         disableItem.target = self
         menu.addItem(disableItem)
 
+        let desktopItem = NSMenuItem(
+            title: DesktopHUDController.shared.isVisible
+                ? "Hide Desktop HUD" : "Open Desktop HUD",
+            action: #selector(toggleDesktopHUD),
+            keyEquivalent: "")
+        desktopItem.target = self
+        menu.addItem(desktopItem)
+
         let snoozeMenu = NSMenu()
         let snoozeItem = NSMenuItem(
             title: config.isSnoozed ? "Snooze active" : "Snooze…",
@@ -1296,6 +1315,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let config = NotchHUDConfig.shared
         config.islandEnabled.toggle()
         NotificationCenter.default.post(name: .notchVisibilityChanged, object: nil)
+    }
+
+    @MainActor
+    @objc private func toggleDesktopHUD() {
+        DesktopHUDController.shared.toggle()
     }
 
     @MainActor
