@@ -652,6 +652,13 @@ public enum IslandMetrics: Sendable {
         static func selectionNumbers(_ selection: Set<Int>) -> [Int] {
             selection.sorted()
         }
+
+        /// Multi-select Submit is valid only with at least one option
+        /// picked. Sending an empty selection pushes a blank line into the
+        /// agent's terminal, so every Submit button gates on this.
+        static func canSubmitMulti(selection: Set<Int>) -> Bool {
+            !selection.isEmpty
+        }
     }
 
     /// What a blocked event asks of the user. Options always win: when an

@@ -629,7 +629,8 @@ final class AgentEventManager: ObservableObject {
                 choices: event.choices,
                 cwd: snap?.cwd,
                 sessionPath: snap?.sessionPath,
-                roster: self.agents
+                roster: self.agents,
+                isMulti: event.variance == .multi
             )
             MultiAgentTimelineStore.shared.recordEvent(
                 agentName: source,

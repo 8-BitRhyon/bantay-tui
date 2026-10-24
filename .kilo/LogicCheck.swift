@@ -777,6 +777,52 @@ struct LogicCheckMain {
             qCapped.count == IslandMetrics.maxNotificationQueueCount,
             "queue caps at five cards")
 
+        // -- Multi-select answers: every surface gates empty Submit, shows
+        // up to six options, and banners/push never partial-answer.
+        check(
+            !IslandMetrics.ApprovalControls.canSubmitMulti(selection: []),
+            "empty multi selection cannot submit")
+        check(
+            IslandMetrics.ApprovalControls.canSubmitMulti(selection: [1, 3]),
+            "picked multi selection can submit")
+        let manyChoices = (1...8).map { "option \($0)" }
+        let multiControls = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: manyChoices)
+        check(
+            multiControls.isMulti,
+            "multi variance with choices is multi")
+        check(
+            multiControls.displayedLabels().count
+                == IslandMetrics.ApprovalControls.maxDisplayedOptions,
+            "popup shows at most six options")
+        check(
+            multiControls.overflowCount() == 2,
+            "popup overflow counts hidden options")
+        check(
+            ApprovalNotificationController.multiCategoryID == "BANTAY_MULTI",
+            "multi banner category is registered")
+        let multiPush = AgentAlertNotifier.ntfyActions(
+            paneId: "w3:p3", choices: manyChoices,
+            callbackBase: "https://push.example", token: "t",
+            isMulti: true)
+        check(
+            multiPush == nil,
+            "multi-select offers no one-tap push buttons")
+        let questionPush = AgentAlertNotifier.ntfyActions(
+            paneId: "w3:p3", choices: ["Staging", "Production", "Canary"],
+            callbackBase: "https://push.example", token: "t")
+        check(
+            questionPush?.contains("Deny") != true
+                && questionPush?.contains("/choice") == true,
+            "question push offers choices without Deny")
+        let permPush = AgentAlertNotifier.ntfyActions(
+            paneId: "w3:p3", choices: nil,
+            callbackBase: "https://push.example", token: "t")
+        check(
+            permPush?.contains("Approve") == true
+                && permPush?.contains("Deny") == true,
+            "plain permission push keeps Approve and Deny")
+
         // -- Hover state machine (invariant 10-11)
 
         check(

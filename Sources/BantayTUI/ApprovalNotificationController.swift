@@ -11,6 +11,7 @@ final class ApprovalNotificationController: NSObject,
     static let categoryID = "BANTAY_APPROVAL"
     static let choiceCategoryID = "BANTAY_APPROVAL_CHOICE"
     static let questionCategoryID = "BANTAY_QUESTION"
+    static let multiCategoryID = "BANTAY_MULTI"
     static let reviewCategoryID = "BANTAY_REVIEW"
     static let completedCategoryID = "BANTAY_COMPLETED"
     static let failedCategoryID = "BANTAY_FAILED"
@@ -96,6 +97,9 @@ final class ApprovalNotificationController: NSObject,
                 identifier: Self.questionCategoryID, actions: questionActions,
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
+                identifier: Self.multiCategoryID, actions: [answer, focus],
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
                 identifier: Self.reviewCategoryID, actions: [focus, dismiss],
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
@@ -114,9 +118,12 @@ final class ApprovalNotificationController: NSObject,
     /// Post an approval notification for a blocked event. Events carrying
     /// two or more choices are questions, not permissions: they get an
     /// Answer action and numbered choices, never Approve/Deny.
+    /// Multi-select prompts cannot be answered from a banner (buttons have
+    /// no toggle state, and one tap must never partial-answer a pick-several
+    /// question), so they get Answer plus Focus and the body lists options.
     func postApproval(
         source: String, paneId: String?, title: String?, choices: [String]?,
-        cwd: String? = nil, sessionPath: String? = nil
+        cwd: String? = nil, sessionPath: String? = nil, isMulti: Bool = false
     ) {
         guard let paneId, hasBundleProxy else { return }
         install()
@@ -125,19 +132,23 @@ final class ApprovalNotificationController: NSObject,
         let isQuestion = (choices?.count ?? 0) >= 2
         let concrete = isConcreteApprovalTitle(title)
         content.title =
-            isQuestion
-            ? "\(source) has a question"
-            : (concrete || hasChoices ? "\(source) needs approval" : "\(source) is waiting")
+            isMulti
+            ? "\(source) has a multi-part question"
+            : (isQuestion
+                ? "\(source) has a question"
+                : (concrete || hasChoices ? "\(source) needs approval" : "\(source) is waiting"))
         content.body =
             concrete || hasChoices
             ? approvalBody(title: title, choices: choices)
             : "Open Bantay to review the request before deciding."
         content.sound = .default
         content.categoryIdentifier =
-            isQuestion
-            ? Self.questionCategoryID
-            : (hasChoices
-                ? Self.choiceCategoryID : (concrete ? Self.categoryID : Self.reviewCategoryID))
+            isMulti
+            ? Self.multiCategoryID
+            : (isQuestion
+                ? Self.questionCategoryID
+                : (hasChoices
+                    ? Self.choiceCategoryID : (concrete ? Self.categoryID : Self.reviewCategoryID)))
         var info: [String: String] = ["paneId": paneId, "source": source]
         if let cwd { info["cwd"] = cwd }
         if let sessionPath { info["sessionPath"] = sessionPath }

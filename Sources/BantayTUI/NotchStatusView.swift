@@ -1386,12 +1386,13 @@ struct NotchStatusView: View {
         _ controls: IslandMetrics.ApprovalControls
     ) -> String? {
         guard !controls.isYesNo, !controls.choices.isEmpty else { return nil }
-        let shown = controls.choices.prefix(3).enumerated().map {
+        let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
+        let shown = controls.choices.prefix(cap).enumerated().map {
             "\($0.offset + 1). \($0.element)"
         }
         var summary = shown.joined(separator: "  ")
-        if controls.choices.count > 3 {
-            summary += "  +\(controls.choices.count - 3)"
+        if controls.choices.count > cap {
+            summary += "  +\(controls.choices.count - cap)"
         }
         return summary
     }
@@ -1430,7 +1431,8 @@ struct NotchStatusView: View {
         event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
         resolving: Bool
     ) -> some View {
-        let options = Array(controls.choices.prefix(3))
+        let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
+        let options = Array(controls.choices.prefix(cap))
         if options.isEmpty {
             notificationActionButton(
                 title: "Approve", systemName: "checkmark", color: .green,
@@ -1452,6 +1454,16 @@ struct NotchStatusView: View {
                     dismissNotification(event.id)
                 }
             }
+            if controls.choices.count > cap {
+                approvalActionButton(
+                    label: Text("+\(controls.choices.count - cap)"),
+                    color: .white.opacity(0.6),
+                    help: "More options — open the inbox to answer",
+                    accessibilityLabel: "More options, open inbox"
+                ) {
+                    withAnimation(morphAnimation) { expandTo(true) }
+                }
+            }
         }
     }
 
@@ -1460,26 +1472,43 @@ struct NotchStatusView: View {
         event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
         resolving: Bool
     ) -> some View {
-        let options = Array(controls.choices.prefix(3))
+        let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
+        let options = Array(controls.choices.prefix(cap))
+        let selection = queueSelections[paneId] ?? []
+        let numbers = IslandMetrics.ApprovalControls.selectionNumbers(selection)
+        let canSubmit = IslandMetrics.ApprovalControls.canSubmitMulti(selection: selection)
         ForEach(Array(options.enumerated()), id: \.offset) { index, label in
             let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-            let selected = queueSelections[paneId]?.contains(number) == true
+            let selected = selection.contains(number)
             approvalActionButton(
                 label: Text("\(number)"),
                 color: selected ? .green : .white.opacity(0.65),
                 help: label,
+                disabled: resolving,
                 accessibilityLabel: "\(number). \(label)"
             ) {
                 queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
-                    queueSelections[paneId] ?? [], index: index)
+                    selection, index: index)
+            }
+        }
+        if controls.choices.count > cap {
+            approvalActionButton(
+                label: Text("+\(controls.choices.count - cap)"),
+                color: .white.opacity(0.6),
+                help: "More options — open the inbox to answer",
+                accessibilityLabel: "More options, open inbox"
+            ) {
+                withAnimation(morphAnimation) { expandTo(true) }
             }
         }
         approvalActionButton(
-            systemName: "checkmark.circle.fill", color: .green,
-            help: "Submit selections", disabled: resolving
+            systemName: "checkmark.circle.fill",
+            color: canSubmit ? .green : .white.opacity(0.3),
+            help: canSubmit
+                ? "Submit selections (\(numbers.map(String.init).joined(separator: ", ")))"
+                : "Pick at least one option first",
+            disabled: resolving || !canSubmit
         ) {
-            let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-                queueSelections[paneId] ?? [])
             eventManager.approveMulti(paneId: paneId, selections: numbers)
             queueSelections.removeValue(forKey: paneId)
             dismissNotification(event.id)
@@ -2111,7 +2140,8 @@ struct NotchStatusView: View {
                     title: event.title ?? event.message,
                     choices: event.choices,
                     cwd: agent?.cwd,
-                    sessionPath: agent?.sessionPath)
+                    sessionPath: agent?.sessionPath,
+                    isMulti: agent?.approval.isMulti ?? (event.variance == .multi))
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 withAnimation(.easeInOut(duration: 0.3)) { showDetail = true }

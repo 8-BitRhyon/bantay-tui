@@ -952,6 +952,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(.separator())
 
         let agents = AgentEventManager.shared.agents
+        // Prune menu multi-select picks for panes that are no longer
+        // blocked, mirroring the popup's queueSelections prune.
+        let blockedKeys = Set(
+            agents
+                .filter { $0.kind == .accessRequest || $0.kind == .waiting }
+                .compactMap {
+                    IslandMetrics.actionablePaneId(paneId: $0.paneId, source: $0.source)
+                })
+        for key in menuMultiSelections.keys where !blockedKeys.contains(key) {
+            menuMultiSelections.removeValue(forKey: key)
+        }
         let topApproval = agents.first { $0.kind == .accessRequest || $0.kind == .waiting }
         if let topApproval,
             let paneId = IslandMetrics.actionablePaneId(
@@ -1058,7 +1069,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     submenu.addItem(header)
                     submenu.addItem(.separator())
                     let controls = agent.approval
-                    if surface == .permission, controls.isYesNo {
+                    if controls.isMulti {
+                        // Multi-select: toggle each option with a checkmark,
+                        // then Submit once. Single taps must never
+                        // partial-answer a pick-several question.
+                        // Menu-local selections: the popup keeps its own.
+                        let picked = menuMultiSelections[paneId] ?? []
+                        for (index, text) in controls.choices.enumerated() {
+                            let number = IslandMetrics.ApprovalControls.optionNumber(
+                                forIndex: index)
+                            let item = NSMenuItem(
+                                title: "\(number). \(text)",
+                                action: #selector(toggleMultiChoiceAgent(_:)),
+                                keyEquivalent: "")
+                            item.target = self
+                            item.representedObject = "\(paneId)|\(index)"
+                            item.state = picked.contains(number) ? .on : .off
+                            submenu.addItem(item)
+                        }
+                        let numbers = IslandMetrics.ApprovalControls.selectionNumbers(picked)
+                        let submit = NSMenuItem(
+                            title: numbers.isEmpty
+                                ? "Submit (pick at least one)"
+                                : "Submit (\(numbers.map(String.init).joined(separator: ", ")))",
+                            action: #selector(submitMultiAgent(_:)),
+                            keyEquivalent: "")
+                        submit.target = self
+                        submit.representedObject = paneId
+                        submit.isEnabled = IslandMetrics.ApprovalControls.canSubmitMulti(
+                            selection: picked)
+                        submenu.addItem(submit)
+                    } else if surface == .permission, controls.isYesNo {
                         submenu.addItem(
                             menuItem(
                                 title: "Approve", action: #selector(approveAgent(_:)),
@@ -1316,6 +1357,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func openInbox(_ sender: NSMenuItem) {
         Self.showAtNotch()
         NotificationCenter.default.post(name: .notchExpandRequested, object: nil)
+    }
+
+    /// Menu-local multi-select state. The closed popup keeps its own
+    /// toggles; each surface submits only what was picked in it.
+    private var menuMultiSelections: [String: Set<Int>] = [:]
+
+    /// Toggle one multi-select option from the menu bar submenu.
+    @MainActor
+    @objc private func toggleMultiChoiceAgent(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let index = Int(parts[1]) else { return }
+        let paneId = parts[0]
+        menuMultiSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
+            menuMultiSelections[paneId] ?? [], index: index)
+    }
+
+    /// Submit the menu-picked multi-select options. Disabled when empty.
+    @MainActor
+    @objc private func submitMultiAgent(_ sender: NSMenuItem) {
+        guard let paneId = sender.representedObject as? String else { return }
+        let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
+            menuMultiSelections[paneId] ?? [])
+        guard
+            IslandMetrics.ApprovalControls.canSubmitMulti(
+                selection: menuMultiSelections[paneId] ?? [])
+        else {
+            return
+        }
+        AgentEventManager.shared.approveMulti(paneId: paneId, selections: numbers)
+        menuMultiSelections.removeValue(forKey: paneId)
     }
 
     @MainActor
