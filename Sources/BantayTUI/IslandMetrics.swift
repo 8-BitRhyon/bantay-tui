@@ -829,6 +829,49 @@ public enum IslandMetrics: Sendable {
         return formatter.string(from: date)
     }
 
+    /// Contribution-streak math over active day-starts. Current counts
+    /// consecutive active days ending today (or yesterday when today is
+    /// quiet); longest is the best run anywhere. Zero gap tolerance, like
+    /// every streak clone since GitHub removed native streaks.
+    public static func usageStreak(
+        activeDays: [Date], now: Date = Date()
+    ) -> (current: Int, longest: Int) {
+        let calendar = Calendar.current
+        let days = Set(activeDays.map { calendar.startOfDay(for: $0) })
+        guard !days.isEmpty else { return (0, 0) }
+        let today = calendar.startOfDay(for: now)
+        var day: Date? =
+            days.contains(today)
+            ? today : calendar.date(byAdding: .day, value: -1, to: today)
+        var current = 0
+        while let active = day, days.contains(active) {
+            current += 1
+            day = calendar.date(byAdding: .day, value: -1, to: active)
+        }
+        var longest = 0
+        for day in days {
+            guard
+                let prev = calendar.date(byAdding: .day, value: -1, to: day),
+                !days.contains(prev)
+            else {
+                continue
+            }
+            var run = 0
+            var cursor = day
+            while days.contains(cursor) {
+                run += 1
+                guard
+                    let next = calendar.date(byAdding: .day, value: 1, to: cursor)
+                else {
+                    break
+                }
+                cursor = next
+            }
+            longest = max(longest, run)
+        }
+        return (current, longest)
+    }
+
     /// Strips ANSI escape sequences, control characters, braille spinners, log envelopes,
     /// markdown links, and paths to format clean single-line HUD strings.
     /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.

@@ -311,6 +311,110 @@ enum OpenCodeUsageAdapter {
         return oldest
     }
 
+    /// Lifetime ledger totals from the pre-aggregated `session_v2` row
+    /// sums — one cheap query, no message scan. The authoritative answer
+    /// for "how much have I ever spent", matching `opencode stats`.
+    struct LifetimeTotals: Equatable, Sendable {
+        let tokens: Int
+        let cost: Double
+        let sessions: Int
+    }
+
+    static func lifetimeTotals(
+        home: String = NSHomeDirectory()
+    ) -> LifetimeTotals? {
+        let url = databaseURL(home: home)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let sql =
+            "SELECT COALESCE(SUM(tokens_input+tokens_output+tokens_reasoning"
+            + "+tokens_cache_read+tokens_cache_write),0),"
+            + " COALESCE(SUM(cost),0), COUNT(*)"
+            + " FROM session_v2"
+        guard
+            let row = sqlite3QueryOpenCode(sql: sql, db: url)?.first,
+            row.count >= 3,
+            let tokens = Int(row[0]),
+            let cost = Double(row[1]),
+            let sessions = Int(row[2]),
+            sessions > 0
+        else { return nil }
+        return LifetimeTotals(tokens: tokens, cost: cost, sessions: sessions)
+    }
+
+    /// Per-day message aggregates, newest first, for streaks, active-day
+    /// counts, and windowed scopes. Day boundaries use local time, matching
+    /// every contribution-grid convention.
+    struct DayBucket: Equatable, Sendable {
+        let dayStart: Date
+        let tokens: Int
+        let cost: Double
+        let messages: Int
+    }
+
+    static func dailyBuckets(
+        days: Int, now: Date = Date(), home: String = NSHomeDirectory()
+    ) -> [DayBucket] {
+        let url = databaseURL(home: home)
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let calendar = Calendar.current
+        guard
+            let startDay = calendar.date(
+                byAdding: .day, value: -max(days - 1, 0),
+                to: calendar.startOfDay(for: now))
+        else { return [] }
+        let sinceMs = Int64(startDay.timeIntervalSince1970 * 1000)
+        let sql =
+            "SELECT date(time_created/1000,'unixepoch','localtime'),"
+            + " COALESCE(SUM(CAST(json_extract(data,'$.tokens.input') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.output') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.reasoning') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.cache.read') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.cache.write') AS INTEGER)),0),"
+            + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0),"
+            + " COUNT(*)"
+            + " FROM session_message WHERE type='assistant'"
+            + " AND time_created >= \(sinceMs)"
+            + " GROUP BY 1 ORDER BY 1 DESC"
+        guard let rows = sqlite3QueryOpenCode(sql: sql, db: url) else { return [] }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone.current
+        var buckets: [DayBucket] = []
+        for row in rows {
+            guard row.count >= 4,
+                let day = formatter.date(from: row[0]),
+                let tokens = Int(row[1]),
+                let cost = Double(row[2]),
+                let messages = Int(row[3])
+            else {
+                continue
+            }
+            buckets.append(
+                DayBucket(
+                    dayStart: calendar.startOfDay(for: day), tokens: tokens,
+                    cost: cost, messages: messages))
+        }
+        return buckets
+    }
+
+    /// Revision sentinel for the ledger files (db + WAL + SHM). Refresh
+    /// cached lifetime queries only when this moves; polling a SUM every
+    /// few seconds would waste the exactness it buys.
+    static func ledgerRevision(home: String = NSHomeDirectory()) -> UInt64 {
+        let base = databaseURL(home: home).path
+        var latest: UInt64 = 0
+        for path in [base, base + "-wal", base + "-shm"] {
+            guard
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                let date = attrs[.modificationDate] as? Date
+            else {
+                continue
+            }
+            latest = max(latest, UInt64(date.timeIntervalSince1970))
+        }
+        return latest
+    }
+
     private static func sqlite3QueryOpenCode(sql: String, db: URL) -> [[String]]? {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI

@@ -3255,8 +3255,33 @@ struct LogicCheckMain {
             finish("Same finish")
             check(rows().count - baseRows == 2, "new burst after progress records again")
             check(
-                rows().first?.isDelta == true,
-                "observed burst records a true delta")
+                rows().first?.isWindowEstimate == true
+                    && rows().first?.isDelta == false,
+                "uncovered sources fall back to window estimates")
+            // Covered sources meter true deltas against lifetime counters.
+            dup.setLifetimeCounterForTesting(
+                source: "metered-agent", tokens: 10_000, cost: 1.00)
+            dup.publishEventForTesting(
+                AgentEvent(
+                    source: "metered-agent", kind: .progress, title: "Metered work",
+                    message: nil, paneId: "metered:pane", workspaceId: nil,
+                    variance: nil, choices: nil, playSound: false,
+                    persistent: false))
+            dup.setLifetimeCounterForTesting(
+                source: "metered-agent", tokens: 12_500, cost: 1.25)
+            Thread.sleep(forTimeInterval: 1.2)
+            dup.publishEventForTesting(
+                AgentEvent(
+                    source: "metered-agent", kind: .completed, title: "Metered done",
+                    message: nil, paneId: "metered:pane", workspaceId: nil,
+                    variance: nil, choices: nil, playSound: false,
+                    persistent: false))
+            let metered = SessionHistoryStore.shared.sessions.first {
+                $0.title == "Metered done" && $0.agentName == "metered-agent"
+            }
+            check(
+                metered?.totalTokens == 2_500 && metered?.isDelta == true,
+                "covered sources record lifetime deltas")
             dup.stop()
         }
 
@@ -6783,6 +6808,128 @@ struct LogicCheckMain {
         check(
             totals.legacyExcluded == 2,
             "summary reports excluded legacy rows")
+
+        // -- Metering robustness: per-turn dedup, incremental accrual,
+        // ledger scopes, and streak math.
+        let dupA =
+            "{\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}},\"requestId\":\"r1\"}"
+        let dupB =
+            "{\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}},\"requestId\":\"r1\"}"
+        let other =
+            "{\"message\":{\"id\":\"m2\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}},\"requestId\":\"r2\"}"
+        let raw = UsageParser.parseAll(lines: [dupA, dupB, other])
+        check(raw.inputTokens == 300, "raw parseAll keeps summing repeats")
+        let turnDeduped = UsageParser.parseAllDeduped(lines: [dupA, dupB, other])
+        check(
+            turnDeduped.usage.inputTokens == 200,
+            "deduped parse counts each turn once")
+        let redup = UsageParser.parseAllDeduped(lines: [dupA], seen: turnDeduped.seen)
+        check(
+            redup.usage.inputTokens == 0,
+            "dedup identity set survives across polls")
+        let noid = "{\"usage\":{\"input_tokens\":10}}"
+        let noidTwice = UsageParser.parseAllDeduped(lines: [noid, noid])
+        check(
+            noidTwice.usage.inputTokens == 20,
+            "unidentified lines are never dropped")
+
+        // Incremental accrual over temp transcript files: appended bytes
+        // only, monotonic, no double count.
+        do {
+            let tmpHome = NSTemporaryDirectory() + "bantay-accrue-\(UUID().uuidString)"
+            let projDir = tmpHome + "/.claude/projects/proj"
+            try? FileManager.default.createDirectory(
+                atPath: projDir, withIntermediateDirectories: true)
+            let file = projDir + "/sess.jsonl"
+            let line =
+                "{\"message\":{\"id\":\"a1\",\"usage\":{\"input_tokens\":1000}},\"requestId\":\"q1\"}\n"
+            try? line.write(toFile: file, atomically: true, encoding: .utf8)
+            var acc = UsageTracker.LifetimeAccrualState()
+            acc = UsageTracker.accrueLifetime(
+                home: tmpHome, names: ["claude"], state: acc)
+            check(
+                acc.tokensBySource["claude"] == 1000,
+                "accrual reads the full file on first sight")
+            check(
+                acc.covered.contains("claude"),
+                "accrual marks observed sources covered")
+            acc = UsageTracker.accrueLifetime(
+                home: tmpHome, names: ["claude"], state: acc)
+            check(
+                acc.tokensBySource["claude"] == 1000,
+                "re-poll without appends adds nothing")
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: file)) {
+                try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data(line.utf8))
+                try? handle.close()
+            }
+            acc = UsageTracker.accrueLifetime(
+                home: tmpHome, names: ["claude"], state: acc)
+            check(
+                acc.tokensBySource["claude"] == 1000,
+                "re-logged turns do not recount")
+            let fresh =
+                "{\"message\":{\"id\":\"a2\",\"usage\":{\"input_tokens\":500}},\"requestId\":\"q2\"}\n"
+            if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: file)) {
+                try? handle.seekToEnd()
+                try? handle.write(contentsOf: Data(fresh.utf8))
+                try? handle.close()
+            }
+            acc = UsageTracker.accrueLifetime(
+                home: tmpHome, names: ["claude"], state: acc)
+            check(
+                acc.tokensBySource["claude"] == 1500,
+                "appended turns accrue monotonically")
+            try? FileManager.default.removeItem(atPath: tmpHome)
+        }
+
+        // Ledger scopes: missing DB yields nothing, never zeros-as-data.
+        do {
+            let emptyHome = NSTemporaryDirectory() + "bantay-nodb-\(UUID().uuidString)"
+            try? FileManager.default.createDirectory(
+                atPath: emptyHome, withIntermediateDirectories: true)
+            check(
+                OpenCodeUsageAdapter.lifetimeTotals(home: emptyHome) == nil,
+                "lifetime totals are nil without a ledger")
+            check(
+                OpenCodeUsageAdapter.dailyBuckets(days: 7, home: emptyHome).isEmpty,
+                "day buckets are empty without a ledger")
+            check(
+                OpenCodeUsageAdapter.ledgerRevision(home: emptyHome) == 0,
+                "ledger revision is zero without files")
+            try? FileManager.default.removeItem(atPath: emptyHome)
+        }
+
+        // Streak math: zero gap tolerance, today-or-yesterday anchor.
+        do {
+            let calendar = Calendar.current
+            let noon =
+                calendar.date(
+                    bySettingHour: 12, minute: 0, second: 0, of: Date()) ?? Date()
+            func day(_ offset: Int) -> Date {
+                calendar.date(byAdding: .day, value: offset, to: noon) ?? noon
+            }
+            let broken = IslandMetrics.usageStreak(
+                activeDays: [day(0), day(-1), day(-3)], now: noon)
+            check(
+                broken.current == 2 && broken.longest == 2,
+                "streak breaks on a gap")
+            let longer = IslandMetrics.usageStreak(
+                activeDays: [day(0), day(-1), day(-5), day(-6), day(-7)],
+                now: noon)
+            check(
+                longer.current == 2 && longer.longest == 3,
+                "longest run survives elsewhere")
+            let quiet = IslandMetrics.usageStreak(
+                activeDays: [day(-2), day(-3)], now: noon)
+            check(
+                quiet.current == 0 && quiet.longest == 2,
+                "quiet today and yesterday ends the streak")
+            let empty = IslandMetrics.usageStreak(activeDays: [], now: noon)
+            check(
+                empty.current == 0 && empty.longest == 0,
+                "no active days means no streak")
+        }
         // -- Clearing: legacy wipe keeps true deltas, full wipe empties.
         do {
             let tag = "ClearProbe \(UUID().uuidString)"

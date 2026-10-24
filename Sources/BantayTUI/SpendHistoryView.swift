@@ -6,12 +6,22 @@ struct SpendHistoryView: View {
     @ObservedObject private var store = SpendHistoryStore.shared
     private let budget: Double
 
+    private enum SpendScope: String, CaseIterable {
+        case lifetime = "Lifetime"
+        case week = "7 days"
+        case day = "24 hours"
+    }
+
+    @State private var scope: SpendScope = .lifetime
+
     init(budget: Double = NotchHUDConfig.shared.dailyBudgetUSD) {
         self.budget = budget
     }
 
     var body: some View {
         VStack(spacing: 8) {
+            scopePills
+            ledgerSection
             headerSummary
             weekBarChart
             agentBreakdown
@@ -24,12 +34,116 @@ struct SpendHistoryView: View {
         )
     }
 
+    private var scopePills: some View {
+        HStack(spacing: 4) {
+            Text("OPENCODE LEDGER")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(BantayTheme.textTertiary)
+            Spacer(minLength: 0)
+            ForEach(SpendScope.allCases, id: \.self) { option in
+                Button {
+                    scope = option
+                } label: {
+                    Text(option.rawValue)
+                        .font(
+                            .system(
+                                size: 8.5,
+                                weight: scope == option ? .bold : .medium)
+                        )
+                        .foregroundColor(
+                            scope == option
+                                ? BantayTheme.textPrimary : BantayTheme.textTertiary
+                        )
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(
+                            scope == option
+                                ? BantayTheme.cardSelected : Color.clear,
+                            in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Spend window: \(option.rawValue)")
+            }
+        }
+    }
+
+    /// Authoritative ledger numbers for the selected window: lifetime
+    /// totals plus streak, active days, and session count. The local
+    /// sections below stay on device-local records; this row states its
+    /// window so scopes never silently mix.
+    private var ledgerSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if scope == .lifetime,
+                let life = OpenCodeUsageAdapter.lifetimeTotals()
+            {
+                let buckets = OpenCodeUsageAdapter.dailyBuckets(days: 400)
+                let activeDays = buckets.filter { $0.messages > 0 }.map(\.dayStart)
+                let streak = IslandMetrics.usageStreak(activeDays: activeDays)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(IslandMetrics.compactTokenCount(life.tokens))
+                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        .foregroundColor(BantayTheme.textPrimary)
+                    Text("TOKENS LIFETIME")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Spacer(minLength: 0)
+                    Text(String(format: "$%.2f", life.cost))
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundColor(BantayTheme.statusCompleted)
+                }
+                HStack(spacing: 6) {
+                    Text("\(life.sessions) sessions")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(BantayTheme.textSecondary)
+                    Text("· \(activeDays.count) active days")
+                        .font(.system(size: 9))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Text("· \(streak.current)-day streak")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(BantayTheme.statusAttention)
+                    if streak.longest > streak.current {
+                        Text("(best \(streak.longest))")
+                            .font(.system(size: 9))
+                            .foregroundColor(BantayTheme.textTertiary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .accessibilityLabel(
+                    "\(life.tokens) lifetime tokens, $\(String(format: "%.2f", life.cost)), \(streak.current) day streak"
+                )
+            } else {
+                let days = scope == .week ? 7 : 1
+                let buckets = OpenCodeUsageAdapter.dailyBuckets(days: days)
+                let tokens = buckets.reduce(0) { $0 + $1.tokens }
+                let cost = buckets.reduce(0.0) { $0 + $1.cost }
+                HStack(alignment: .firstTextBaseline) {
+                    Text(IslandMetrics.compactTokenCount(tokens))
+                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        .foregroundColor(BantayTheme.textPrimary)
+                    Text("TOKENS · \(scope.rawValue.uppercased())")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(BantayTheme.textTertiary)
+                    Spacer(minLength: 0)
+                    Text(String(format: "$%.2f", cost))
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundColor(BantayTheme.statusCompleted)
+                }
+                .accessibilityLabel(
+                    "\(tokens) tokens in the \(scope.rawValue), $\(String(format: "%.2f", cost))"
+                )
+            }
+        }
+    }
+
     private var headerSummary: some View {
         let (projected, _) = store.projectedRunRate(budget: budget)
         let weekTotal = store.totalPastWeekUSD()
         let todayTotal = store.dailyRecords[SpendHistoryStore.dateKey()]?.totalCostUSD ?? 0
 
         return VStack(alignment: .leading, spacing: 6) {
+            Text("THIS MAC · LOCAL RECORDS")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(BantayTheme.textTertiary)
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Today")

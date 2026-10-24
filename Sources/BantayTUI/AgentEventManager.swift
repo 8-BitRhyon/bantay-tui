@@ -355,6 +355,15 @@ final class AgentEventManager: ObservableObject {
     /// records current-minus-baseline so rows show their own spend, never
     /// the lifetime cumulative total.
     private var usageBaselineByKey: [String: (tokens: Int, cost: Double)] = [:]
+    /// Monotonic lifetime per-source counters feeding those baselines.
+    /// Rolling-window snapshots slide as old activity ages out, so deltas
+    /// must come from here. Transcripts accrue incrementally; the opencode
+    /// ledger refreshes on file change.
+    private var lifetimeAccrual = UsageTracker.LifetimeAccrualState()
+    private var lifetimeOpencodeRevision: UInt64 = 0
+    /// Whether the baseline came from a covered source (true delta) or a
+    /// rolling window (honest estimate). Pruned with the other per-pane maps.
+    private var baselineCoveredByKey: [String: Bool] = [:]
     /// Last recorded completion fingerprint per pane (kind + title). Kills
     /// the 48-rows-for-one-finish class: heartbeats with no work between
     /// completions record once. Cleared by progress/started, pruned with the
@@ -711,9 +720,11 @@ final class AgentEventManager: ObservableObject {
             }
             if usageBaselineByKey[key] == nil {
                 usageBaselineByKey[key] = (
-                    tokens: usage.tokensBySource[event.sourceKey] ?? 0,
-                    cost: usage.costBySource[event.sourceKey] ?? 0
+                    tokens: lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0,
+                    cost: lifetimeAccrual.costBySource[event.sourceKey] ?? 0
                 )
+                baselineCoveredByKey[key] = lifetimeAccrual.covered.contains(
+                    event.sourceKey)
             }
             // New working burst re-arms completion recording: the next
             // completion for this pane is a real finish, not a heartbeat.
@@ -734,10 +745,24 @@ final class AgentEventManager: ObservableObject {
                 completedFingerprintByKey[key] = fingerprint
                 recordedFreshFinish = true
                 let baseline = usageBaselineByKey[key]
+                let covered =
+                    baselineCoveredByKey[key]
+                    ?? lifetimeAccrual.covered.contains(event.sourceKey)
                 let snap = self.agents.first {
                     (event.paneId != nil && $0.paneId == event.paneId)
                         || $0.source == event.sourceKey
                 }
+                // Covered sources meter against monotonic lifetime counters.
+                // Uncovered sources fall back to the rolling window — an
+                // honest estimate, labeled as one downstream.
+                let currentTokens =
+                    covered
+                    ? (lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0)
+                    : (usage.tokensBySource[event.sourceKey] ?? 0)
+                let currentCost =
+                    covered
+                    ? (lifetimeAccrual.costBySource[event.sourceKey] ?? 0)
+                    : (usage.costBySource[event.sourceKey] ?? 0)
                 SessionHistoryStore.shared.addSession(
                     AgentSessionRecord(
                         id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",
@@ -746,10 +771,10 @@ final class AgentEventManager: ObservableObject {
                         startTime: sessionStart,
                         durationSeconds: completionDuration ?? 0,
                         totalTokens: SessionUsageDelta.tokens(
-                            current: usage.tokensBySource[event.sourceKey] ?? 0,
+                            current: currentTokens,
                             baseline: baseline?.tokens ?? 0),
                         costUSD: SessionUsageDelta.cost(
-                            current: usage.costBySource[event.sourceKey] ?? 0,
+                            current: currentCost,
                             baseline: baseline?.cost ?? 0),
                         status: event.kind == .completed ? "Completed" : "Failed",
                         project: snap?.projectContext?.project
@@ -759,9 +784,11 @@ final class AgentEventManager: ObservableObject {
                         cwd: snap?.cwd,
                         // No baseline means no observed start: the numbers
                         // are lifetime totals, labeled as such downstream.
-                        isDelta: baseline != nil))
+                        isDelta: covered && baseline != nil,
+                        isWindowEstimate: !covered && baseline != nil))
             }
             usageBaselineByKey.removeValue(forKey: key)
+            baselineCoveredByKey.removeValue(forKey: key)
         }
         // Recents and the away digest follow the same dupe rule: a repeated
         // heartbeat must not push the same finish five times.
@@ -1182,6 +1209,27 @@ extension AgentEventManager {
                 }.value
                 self.usage = usageAndRate.0
                 self.usageRate = usageAndRate.1
+                // Lifetime counters for session deltas. Transcript files
+                // accrue incrementally (appended bytes only); the opencode
+                // ledger refreshes from its monotonic sums on file change.
+                self.lifetimeAccrual = UsageTracker.accrueLifetime(
+                    home: NSHomeDirectory(),
+                    names: agents.map { $0.agent },
+                    state: self.lifetimeAccrual)
+                let revision = OpenCodeUsageAdapter.ledgerRevision(
+                    home: NSHomeDirectory())
+                if revision != self.lifetimeOpencodeRevision {
+                    self.lifetimeOpencodeRevision = revision
+                    if let life = OpenCodeUsageAdapter.snapshot(
+                        since: 30 * 365 * 86400, now: now, home: NSHomeDirectory())
+                    {
+                        self.lifetimeAccrual.tokensBySource["opencode"] =
+                            life.tokensBySource["opencode"] ?? 0
+                        self.lifetimeAccrual.costBySource["opencode"] =
+                            life.costBySource["opencode"] ?? 0
+                        self.lifetimeAccrual.covered.insert("opencode")
+                    }
+                }
             }
             SpendHistoryStore.shared.recordUsage(
                 snapshot: self.usage,
@@ -1222,6 +1270,9 @@ extension AgentEventManager {
         let liveAgentKeys = Set(agents.compactMap { $0.paneId ?? $0.agent })
         startedAtByPane = startedAtByPane.filter { liveAgentKeys.contains($0.key) }
         usageBaselineByKey = usageBaselineByKey.filter { liveAgentKeys.contains($0.key) }
+        baselineCoveredByKey = baselineCoveredByKey.filter {
+            liveAgentKeys.contains($0.key)
+        }
         completedFingerprintByKey = completedFingerprintByKey.filter {
             liveAgentKeys.contains($0.key)
         }
@@ -1631,6 +1682,14 @@ extension AgentEventManager {
     /// Test seam: inject an event like the pipeline would.
     func publishEventForTesting(_ event: AgentEvent) {
         showEvent(event)
+    }
+
+    /// Test seam: seed a covered lifetime counter so delta math runs
+    /// without polling the real filesystem.
+    func setLifetimeCounterForTesting(source: String, tokens: Int, cost: Double) {
+        lifetimeAccrual.tokensBySource[source] = tokens
+        lifetimeAccrual.costBySource[source] = cost
+        lifetimeAccrual.covered.insert(source)
     }
 
     /// Test seam: current event readout for harness assertions.
