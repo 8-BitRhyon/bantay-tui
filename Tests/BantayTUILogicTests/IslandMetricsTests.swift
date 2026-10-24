@@ -212,6 +212,18 @@
             #expect(excerpt.contains("Do you want to proceed?"))
             #expect(!excerpt.contains("Esc to interrupt"))
         }
+
+        @Test("live excerpt needs a prompt signal")
+        func promptGate() {
+            #expect(IslandMetrics.looksLikePrompt("Do you want to proceed?"))
+            #expect(IslandMetrics.looksLikePrompt("1. Staging\n2. Production"))
+            #expect(IslandMetrics.looksLikePrompt("Allow writing /tmp/file? (y/n)"))
+            #expect(!IslandMetrics.looksLikePrompt("Muse Spark 1.3 Contributor"))
+            #expect(
+                !IslandMetrics.looksLikePrompt(
+                    "Jump to latest\nBuild succeeded in 2s"))
+            #expect(!IslandMetrics.looksLikePrompt(""))
+        }
     }
 
     @Suite("HUD Text Sanitization")

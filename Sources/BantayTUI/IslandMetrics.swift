@@ -48,6 +48,9 @@ public enum IslandMetrics: Sendable {
     /// Approval cards carry the command, file path, or prompt text, so they
     /// need room for several wrapped lines plus the action row.
     public static let approvalNotificationHeight: CGFloat = 160
+    /// Multi-select cards move the option toggles onto their own row above
+    /// the footer so the stepper, Submit, and focus buttons never collide.
+    public static let approvalNotificationMultiExtraHeight: CGFloat = 30
     public static let notificationWidth: CGFloat = 432
     public static let notificationCornerRadius: CGFloat = 20
     /// Clearance between the physical notch and a closed notification card.
@@ -659,6 +662,35 @@ public enum IslandMetrics: Sendable {
         static func canSubmitMulti(selection: Set<Int>) -> Bool {
             !selection.isEmpty
         }
+    }
+
+    /// Whether a live pane excerpt reads like a real prompt. Pane tails
+    /// usually hold whatever scrolled by (chat transcripts, build logs),
+    /// not the question — without a prompt signal the card must fall
+    /// back to Review instead of showing random transcript text.
+    /// Numbered options match `1.` / `2)` at a line start only, so
+    /// version strings like `1.3` never count.
+    static func looksLikePrompt(_ text: String) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        if text.contains("?") { return true }
+        let lower = text.lowercased()
+        let signals = [
+            "approve", "deny", "allow once", "allow", "confirm",
+            "(y/n)", "[y/n]", " y/n ", "press ",
+            "pick", "choose", "select", "option", "answer",
+            "❯", "›", "»",
+        ]
+        if signals.contains(where: { lower.contains($0) }) { return true }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for line in trimmed.components(separatedBy: "\n") {
+            let line = line.trimmingCharacters(in: .whitespaces)
+            guard let first = line.first, first.isNumber else { continue }
+            let rest = line.drop(while: { $0.isNumber })
+            if rest.hasPrefix(". ") || rest.hasPrefix(") ") { return true }
+        }
+        return false
     }
 
     /// What a blocked event asks of the user. Options always win: when an

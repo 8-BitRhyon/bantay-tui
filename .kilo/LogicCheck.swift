@@ -6656,6 +6656,21 @@ struct LogicCheckMain {
             !excerpt.contains("Esc to interrupt"),
             "L142 pane excerpt drops status-bar chrome"
         )
+        check(
+            IslandMetrics.looksLikePrompt("Do you want to proceed?"),
+            "live excerpt passes questions")
+        check(
+            IslandMetrics.looksLikePrompt("1. Staging\n2. Production"),
+            "live excerpt passes numbered options")
+        check(
+            !IslandMetrics.looksLikePrompt("Muse Spark 1.3 Contributor"),
+            "version strings are not prompts")
+        check(
+            !IslandMetrics.looksLikePrompt("Jump to latest\nBuild succeeded in 2s"),
+            "transcript chatter is not a prompt")
+        check(
+            IslandMetrics.approvalNotificationMultiExtraHeight > 0,
+            "multi cards reserve their own toggle row")
 
         // 2. ApprovalNotificationController action and category constants
         check(

@@ -1052,6 +1052,14 @@ struct NotchStatusView: View {
                     .truncationMode(.tail)
             }
 
+            // Multi-select toggles get their own row so the footer never
+            // collides with the options. Submit stays in the footer.
+            if surface == .question, controls.isMulti, let paneId {
+                notificationMultiOptions(
+                    event: event, paneId: paneId, controls: controls,
+                    resolving: resolving)
+            }
+
             Spacer(minLength: 0)
 
             HStack(spacing: 6) {
@@ -1105,6 +1113,8 @@ struct NotchStatusView: View {
         .frame(
             width: IslandMetrics.notificationWidth,
             height: IslandMetrics.approvalNotificationHeight
+                + ((surface == .question && controls.isMulti)
+                    ? IslandMetrics.approvalNotificationMultiExtraHeight : 0)
         )
         .contentShape(Rectangle())
     }
@@ -1337,6 +1347,12 @@ struct NotchStatusView: View {
                     maxLines: 18)
                 excerpt = transcript.suffix(4).joined(separator: "\n")
             }
+            // Pane tails usually hold whatever scrolled by, not the prompt.
+            // Without a prompt signal the card falls back to Review instead
+            // of showing random transcript text as the request.
+            if !IslandMetrics.looksLikePrompt(excerpt) {
+                excerpt = ""
+            }
             await MainActor.run {
                 guard self.activeNotification?.id == expectedID else { return }
                 self.notificationDetail = excerpt
@@ -1472,35 +1488,61 @@ struct NotchStatusView: View {
         event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
         resolving: Bool
     ) -> some View {
+        // Toggles live on their own row above the footer
+        // (notificationMultiOptions). Only Submit stays in the footer so the
+        // stepper and focus buttons never collide with the options.
+        notificationMultiSubmit(
+            event: event, paneId: paneId, resolving: resolving)
+    }
+
+    /// Multi-select toggle row, rendered above the card footer. Capped at
+    /// six with a `+N` inbox overflow, matching single-choice popups.
+    @ViewBuilder
+    private func notificationMultiOptions(
+        event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
+        resolving: Bool
+    ) -> some View {
         let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
         let options = Array(controls.choices.prefix(cap))
         let selection = queueSelections[paneId] ?? []
+        HStack(spacing: 6) {
+            ForEach(Array(options.enumerated()), id: \.offset) { index, label in
+                let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+                let selected = selection.contains(number)
+                approvalActionButton(
+                    label: Text("\(number)"),
+                    color: selected ? .green : .white.opacity(0.65),
+                    help: label,
+                    disabled: resolving,
+                    accessibilityLabel: "\(number). \(label)"
+                ) {
+                    queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
+                        selection, index: index)
+                }
+            }
+            if controls.choices.count > cap {
+                approvalActionButton(
+                    label: Text("+\(controls.choices.count - cap)"),
+                    color: .white.opacity(0.6),
+                    help: "More options — open the inbox to answer",
+                    accessibilityLabel: "More options, open inbox"
+                ) {
+                    withAnimation(morphAnimation) { expandTo(true) }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Multi-select Submit for the card footer. Disabled until at least one
+    /// option is picked; the picked numbers read back in the help text.
+    @ViewBuilder
+    private func notificationMultiSubmit(
+        event: AgentEvent, paneId: String, resolving: Bool
+    ) -> some View {
+        let selection = queueSelections[paneId] ?? []
         let numbers = IslandMetrics.ApprovalControls.selectionNumbers(selection)
         let canSubmit = IslandMetrics.ApprovalControls.canSubmitMulti(selection: selection)
-        ForEach(Array(options.enumerated()), id: \.offset) { index, label in
-            let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-            let selected = selection.contains(number)
-            approvalActionButton(
-                label: Text("\(number)"),
-                color: selected ? .green : .white.opacity(0.65),
-                help: label,
-                disabled: resolving,
-                accessibilityLabel: "\(number). \(label)"
-            ) {
-                queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
-                    selection, index: index)
-            }
-        }
-        if controls.choices.count > cap {
-            approvalActionButton(
-                label: Text("+\(controls.choices.count - cap)"),
-                color: .white.opacity(0.6),
-                help: "More options — open the inbox to answer",
-                accessibilityLabel: "More options, open inbox"
-            ) {
-                withAnimation(morphAnimation) { expandTo(true) }
-            }
-        }
         approvalActionButton(
             systemName: "checkmark.circle.fill",
             color: canSubmit ? .green : .white.opacity(0.3),
