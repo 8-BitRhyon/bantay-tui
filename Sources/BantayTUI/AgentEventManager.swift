@@ -744,10 +744,37 @@ final class AgentEventManager: ObservableObject {
             if completedFingerprintByKey[key] != fingerprint {
                 completedFingerprintByKey[key] = fingerprint
                 recordedFreshFinish = true
-                let baseline = usageBaselineByKey[key]
-                let covered =
+                // Ledger-metered sources skip in-memory baselines entirely:
+                // the ledger answers "as of session start" exactly, so short
+                // sessions cannot meter ~0.
+                let ledgerBaseline: (tokens: Int, cost: Double)? =
+                    UsageTracker.ledgerCoveredSources.contains(event.sourceKey)
+                        && OpenCodeUsageAdapter.detect()
+                    ? OpenCodeUsageAdapter.meterAsOf(
+                        beforeMs: Int64(sessionStart.timeIntervalSince1970 * 1000))
+                    : nil
+                let ledgerCurrent: UsageSnapshot? =
+                    ledgerBaseline == nil
+                    ? nil
+                    : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400)
+                var baseline = usageBaselineByKey[key]
+                var covered =
                     baselineCoveredByKey[key]
                     ?? lifetimeAccrual.covered.contains(event.sourceKey)
+                var currentTokens =
+                    covered
+                    ? (lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0)
+                    : (usage.tokensBySource[event.sourceKey] ?? 0)
+                var currentCost =
+                    covered
+                    ? (lifetimeAccrual.costBySource[event.sourceKey] ?? 0)
+                    : (usage.costBySource[event.sourceKey] ?? 0)
+                if let ledgerBaseline, let ledgerCurrent {
+                    baseline = ledgerBaseline
+                    covered = true
+                    currentTokens = ledgerCurrent.totalTokens
+                    currentCost = ledgerCurrent.costUSD
+                }
                 let snap = self.agents.first {
                     (event.paneId != nil && $0.paneId == event.paneId)
                         || $0.source == event.sourceKey
@@ -755,14 +782,6 @@ final class AgentEventManager: ObservableObject {
                 // Covered sources meter against monotonic lifetime counters.
                 // Uncovered sources fall back to the rolling window — an
                 // honest estimate, labeled as one downstream.
-                let currentTokens =
-                    covered
-                    ? (lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0)
-                    : (usage.tokensBySource[event.sourceKey] ?? 0)
-                let currentCost =
-                    covered
-                    ? (lifetimeAccrual.costBySource[event.sourceKey] ?? 0)
-                    : (usage.costBySource[event.sourceKey] ?? 0)
                 SessionHistoryStore.shared.addSession(
                     AgentSessionRecord(
                         id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",

@@ -6883,6 +6883,84 @@ struct LogicCheckMain {
             try? FileManager.default.removeItem(atPath: tmpHome)
         }
 
+        // Ledger wall detection: tool inputs mentioning quotas are
+        // not walls; only error finishes carrying the quota error count.
+        // Meter-as-of bounds baselines to session-start time.
+        do {
+            let fixHome = NSTemporaryDirectory() + "bantay-ledger-\(UUID().uuidString)"
+            let fixDir = fixHome + "/.local/share/opencode"
+            try? FileManager.default.createDirectory(
+                atPath: fixDir, withIntermediateDirectories: true)
+            let dbPath = fixDir + "/opencode.db"
+            func exec(_ sql: String) {
+                var handle: OpaquePointer?
+                guard sqlite3_open(dbPath, &handle) == SQLITE_OK, let handle else {
+                    return
+                }
+                defer { sqlite3_close(handle) }
+                sqlite3_exec(handle, sql, nil, nil, nil)
+            }
+            exec(
+                "CREATE TABLE session_message(id TEXT PRIMARY KEY, session_id TEXT,"
+                    + " type TEXT, seq INTEGER, time_created INTEGER,"
+                    + " time_updated INTEGER, data TEXT);")
+            exec(
+                "CREATE TABLE session_v2(id TEXT PRIMARY KEY, tokens_input INTEGER,"
+                    + " tokens_output INTEGER, tokens_reasoning INTEGER,"
+                    + " tokens_cache_read INTEGER, tokens_cache_write INTEGER,"
+                    + " cost REAL);")
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let t1 = nowMs - 2 * 3_600 * 1_000
+            let t2 = nowMs - 1 * 3_600 * 1_000
+            func insertMsg(
+                _ id: String, at ms: Int64, data: String
+            ) {
+                let safe = data.replacingOccurrences(of: "'", with: "''")
+                exec(
+                    "INSERT INTO session_message VALUES('\(id)','s1','assistant',0,"
+                        + "\(ms),\(ms),'\(safe)');")
+            }
+            insertMsg(
+                "m1", at: t1,
+                data: "{\"tokens\":{\"input\":100,\"output\":50,\"reasoning\":0,"
+                    + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":0.01,"
+                    + "\"model\":{\"providerID\":\"opencode-go\"},\"finish\":\"stop\"}")
+            insertMsg(
+                "m2", at: t2,
+                data: "{\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,"
+                    + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":0,"
+                    + "\"model\":{\"providerID\":\"opencode-go\"},"
+                    + "\"content\":[{\"name\":\"shell\",\"input\":{\"command\":"
+                    + "\"grep QuotaExceeded db\"}}]}")
+            let wallsBefore = OpenCodeUsageAdapter.goWallState(home: fixHome)
+            check(
+                wallsBefore?.wallsToday == 0,
+                "tool inputs mentioning quotas are not walls")
+            insertMsg(
+                "m3", at: t2 + 1_000,
+                data: "{\"tokens\":{\"input\":200,\"output\":0,\"reasoning\":0,"
+                    + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":0.02,"
+                    + "\"model\":{\"providerID\":\"opencode-go\"},\"finish\":\"stop\"}")
+            let asOf = OpenCodeUsageAdapter.meterAsOf(beforeMs: t2, home: fixHome)
+            check(
+                asOf?.tokens == 150,
+                "meter-as-of bounds to session-start time")
+            check(
+                OpenCodeUsageAdapter.meterAsOf(beforeMs: t1, home: fixHome) == nil,
+                "meter-as-of is nil before any message")
+            insertMsg(
+                "m4", at: nowMs,
+                data: "{\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,"
+                    + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":0,"
+                    + "\"model\":{\"providerID\":\"opencode-go\"},\"finish\":\"error\","
+                    + "\"error\":{\"message\":\"QuotaExceeded: daily limit\"}}")
+            let wallsAfter = OpenCodeUsageAdapter.goWallState(home: fixHome)
+            check(
+                wallsAfter?.wallsToday == 1 && wallsAfter?.limitedNow == true,
+                "error finishes carrying quota errors are walls")
+            try? FileManager.default.removeItem(atPath: fixHome)
+        }
+
         // Ledger scopes: missing DB yields nothing, never zeros-as-data.
         do {
             let emptyHome = NSTemporaryDirectory() + "bantay-nodb-\(UUID().uuidString)"

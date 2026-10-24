@@ -122,6 +122,9 @@ enum OpenCodeUsageAdapter {
 
     /// Go wall state scoped to `opencode-go` traffic only. Free-tier walls
     /// must never blame the Go row, and Go walls must never blame free tier.
+    /// Walls are real provider errors (`finish='error'` carrying the quota
+    /// error): a blind `data LIKE` also matches tool inputs, so even a debug
+    /// query mentioning the string would fake a wall.
     static func goWallState(
         now: Date = Date(),
         home: String = NSHomeDirectory()
@@ -137,7 +140,10 @@ enum OpenCodeUsageAdapter {
             "SELECT COUNT(*), COALESCE(MAX(time_created),0)"
             + " FROM session_message WHERE type='assistant'"
             + " AND json_extract(data,'$.model.providerID') = 'opencode-go'"
-            + " AND time_created >= \(startOfDayMs) AND data LIKE '%QuotaExceeded%'"
+            + " AND time_created >= \(startOfDayMs)"
+            + " AND json_extract(data,'$.finish') = 'error'"
+            + " AND LOWER(COALESCE(json_extract(data,'$.error.message'),''))"
+            + " LIKE '%quota%exceed%'"
         guard
             let row = sqlite3QueryOpenCode(sql: sql, db: url)?.first,
             row.count >= 2,
@@ -339,6 +345,35 @@ enum OpenCodeUsageAdapter {
             sessions > 0
         else { return nil }
         return LifetimeTotals(tokens: tokens, cost: cost, sessions: sessions)
+    }
+
+    /// Lifetime meter strictly before a moment: the same message-table sums
+    /// as `snapshot`, bounded by `time_created`. Session baselines must
+    /// describe the world when work STARTED, not when the progress event was
+    /// processed — otherwise short sessions meter ~0. Nil when the ledger is
+    /// missing or holds no earlier messages.
+    static func meterAsOf(
+        beforeMs: Int64, home: String = NSHomeDirectory()
+    ) -> (tokens: Int, cost: Double)? {
+        let url = databaseURL(home: home)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let sql =
+            "SELECT COALESCE(SUM(CAST(json_extract(data,'$.tokens.input') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.output') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.reasoning') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.cache.read') AS INTEGER)"
+            + "+CAST(json_extract(data,'$.tokens.cache.write') AS INTEGER)),0),"
+            + " COALESCE(SUM(CAST(json_extract(data,'$.cost') AS REAL)),0)"
+            + " FROM session_message WHERE type='assistant'"
+            + " AND time_created < \(beforeMs)"
+        guard
+            let row = sqlite3QueryOpenCode(sql: sql, db: url)?.first,
+            row.count >= 2,
+            let tokens = Int(row[0]),
+            let cost = Double(row[1]),
+            tokens > 0 || cost > 0
+        else { return nil }
+        return (tokens, cost)
     }
 
     /// Per-day message aggregates, newest first, for streaks, active-day
