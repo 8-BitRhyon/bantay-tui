@@ -1,5 +1,6 @@
 #if canImport(Testing)
     import CoreGraphics
+    import Foundation
     import Testing
 
     @testable import BantayTUI
