@@ -6678,6 +6678,34 @@ struct LogicCheckMain {
             IslandMetrics.multiOptionsExtraHeight(optionCount: 0) == 0,
             "multi grid reserves nothing without options")
 
+        // -- Session history: per-session deltas, compact counts, day groups.
+        check(
+            SessionUsageDelta.tokens(current: 120_000_000, baseline: 118_000_000) == 2_000_000,
+            "session tokens record their own delta, not the lifetime total")
+        check(
+            SessionUsageDelta.tokens(current: 50, baseline: 80) == 0,
+            "session token delta floors at zero")
+        check(
+            SessionUsageDelta.cost(current: 0.60, baseline: 0.55) > 0.04
+                && SessionUsageDelta.cost(current: 0.60, baseline: 0.55) < 0.06,
+            "session cost records its own delta")
+        check(
+            IslandMetrics.compactTokenCount(950) == "950",
+            "small token counts stay raw")
+        check(
+            IslandMetrics.compactTokenCount(38_400) == "38.4k",
+            "thousands compact to k")
+        check(
+            IslandMetrics.compactTokenCount(118_000_000) == "118M",
+            "millions compact to M")
+        check(
+            IslandMetrics.sessionDayLabel(for: Date()) == "Today",
+            "day groups label today")
+        check(
+            IslandMetrics.sessionDayLabel(
+                for: Date(timeIntervalSinceNow: -86_400)) == "Yesterday",
+            "day groups label yesterday")
+
         // 2. ApprovalNotificationController action and category constants
         check(
             ApprovalNotificationController.approveActionID == "BANTAY_APPROVE",

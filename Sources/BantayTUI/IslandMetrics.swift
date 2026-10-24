@@ -794,6 +794,34 @@ public enum IslandMetrics: Sendable {
         return remMinutes > 0 ? "\(hours)h\(remMinutes)m" : "\(hours)h"
     }
 
+    /// Compact token counts for session rows: 950 -> "950", 38_400 ->
+    /// "38.4k", 118_000_000 -> "118M". Raw counts are unreadable at scale.
+    public static func compactTokenCount(_ count: Int) -> String {
+        let n = max(count, 0)
+        if n < 1_000 { return "\(n)" }
+        if n < 1_000_000 {
+            let k = Double(n) / 1_000.0
+            return k >= 100 ? "\(Int(k.rounded()))k" : String(format: "%.1fk", k)
+        }
+        let m = Double(n) / 1_000_000.0
+        return m >= 100 ? "\(Int(m.rounded()))M" : String(format: "%.1fM", m)
+    }
+
+    /// Day-bucket label for session grouping. Today and Yesterday read
+    /// instantly; older days show the weekday and date.
+    public static func sessionDayLabel(for date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+            calendar.isDate(date, inSameDayAs: yesterday)
+        {
+            return "Yesterday"
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d"
+        return formatter.string(from: date)
+    }
+
     /// Strips ANSI escape sequences, control characters, braille spinners, log envelopes,
     /// markdown links, and paths to format clean single-line HUD strings.
     /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.

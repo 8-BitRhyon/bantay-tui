@@ -224,6 +224,17 @@
                     "Jump to latest\nBuild succeeded in 2s"))
             #expect(!IslandMetrics.looksLikePrompt(""))
         }
+
+        @Test("session usage records deltas and compact counts")
+        func sessionDeltas() {
+            #expect(
+                SessionUsageDelta.tokens(current: 120_000_000, baseline: 118_000_000)
+                    == 2_000_000)
+            #expect(SessionUsageDelta.tokens(current: 50, baseline: 80) == 0)
+            #expect(IslandMetrics.compactTokenCount(38_400) == "38.4k")
+            #expect(IslandMetrics.compactTokenCount(118_000_000) == "118M")
+            #expect(IslandMetrics.sessionDayLabel(for: Date()) == "Today")
+        }
     }
 
     @Suite("HUD Text Sanitization")

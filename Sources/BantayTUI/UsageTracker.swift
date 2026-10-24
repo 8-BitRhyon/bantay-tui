@@ -51,6 +51,13 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
     public var totalTokens: Int
     public var costUSD: Double
     public var status: String
+    /// Project directory name, git branch, transcript path, and working
+    /// directory captured at completion. Nil on rows recorded by older
+    /// builds; the history view degrades to title-only for those.
+    public var project: String?
+    public var branch: String?
+    public var sessionPath: String?
+    public var cwd: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -60,7 +67,11 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         durationSeconds: TimeInterval = 0,
         totalTokens: Int = 0,
         costUSD: Double = 0.0,
-        status: String = "Completed"
+        status: String = "Completed",
+        project: String? = nil,
+        branch: String? = nil,
+        sessionPath: String? = nil,
+        cwd: String? = nil
     ) {
         self.id = id
         self.agentName = agentName
@@ -70,6 +81,26 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         self.totalTokens = totalTokens
         self.costUSD = costUSD
         self.status = status
+        self.project = project
+        self.branch = branch
+        self.sessionPath = sessionPath
+        self.cwd = cwd
+    }
+
+    public var isFailed: Bool { status == "Failed" }
+}
+
+/// Per-session usage delta. The live usage snapshot is cumulative per
+/// source, so a finished session records current-minus-baseline (floored at
+/// zero), never the lifetime total. Baselines are captured when the session
+/// starts working.
+public enum SessionUsageDelta: Sendable {
+    public static func tokens(current: Int, baseline: Int) -> Int {
+        max(0, current - baseline)
+    }
+
+    public static func cost(current: Double, baseline: Double) -> Double {
+        max(0, current - baseline)
     }
 }
 

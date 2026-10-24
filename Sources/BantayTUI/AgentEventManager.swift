@@ -351,6 +351,10 @@ final class AgentEventManager: ObservableObject {
     /// Set when a pane transitions into progress/started; cleared when it
     /// leaves working state.
     private var startedAtByPane: [String: Date] = [:]
+    /// Per-source usage snapshot when a session started working. Completion
+    /// records current-minus-baseline so rows show their own spend, never
+    /// the lifetime cumulative total.
+    private var usageBaselineByKey: [String: (tokens: Int, cost: Double)] = [:]
     /// Latest approval prompt shape per pane, decoded from the event stream
     /// and enriched from the live pane when the event is only "blocked".
     var pendingApprovals: [String: PendingApproval] = [:]
@@ -697,6 +701,12 @@ final class AgentEventManager: ObservableObject {
             if startedAtByPane[key] == nil {
                 startedAtByPane[key] = event.createdAt
             }
+            if usageBaselineByKey[key] == nil {
+                usageBaselineByKey[key] = (
+                    tokens: usage.tokensBySource[event.sourceKey] ?? 0,
+                    cost: usage.costBySource[event.sourceKey] ?? 0
+                )
+            }
         } else if event.kind == .completed || event.kind == .failed
             || event.kind == .cancelled || event.kind == .clear
         {
@@ -705,6 +715,11 @@ final class AgentEventManager: ObservableObject {
 
         if event.kind == .completed || event.kind == .failed {
             let title = event.title ?? event.message ?? event.kind.label
+            let baseline = usageBaselineByKey[key]
+            let snap = self.agents.first {
+                (event.paneId != nil && $0.paneId == event.paneId)
+                    || $0.source == event.sourceKey
+            }
             SessionHistoryStore.shared.addSession(
                 AgentSessionRecord(
                     id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",
@@ -712,9 +727,19 @@ final class AgentEventManager: ObservableObject {
                     title: title,
                     startTime: sessionStart,
                     durationSeconds: completionDuration ?? 0,
-                    totalTokens: usage.tokensBySource[event.sourceKey] ?? 0,
-                    costUSD: usage.costBySource[event.sourceKey] ?? 0,
-                    status: event.kind == .completed ? "Completed" : "Failed"))
+                    totalTokens: SessionUsageDelta.tokens(
+                        current: usage.tokensBySource[event.sourceKey] ?? 0,
+                        baseline: baseline?.tokens ?? 0),
+                    costUSD: SessionUsageDelta.cost(
+                        current: usage.costBySource[event.sourceKey] ?? 0,
+                        baseline: baseline?.cost ?? 0),
+                    status: event.kind == .completed ? "Completed" : "Failed",
+                    project: snap?.projectContext?.project
+                        ?? snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
+                    branch: snap?.projectContext?.branch,
+                    sessionPath: snap?.sessionPath,
+                    cwd: snap?.cwd))
+            usageBaselineByKey.removeValue(forKey: key)
         }
         if (event.kind == .completed || event.kind == .failed) && !isActive {
             let recent = RecentCompletion(
@@ -1170,6 +1195,7 @@ extension AgentEventManager {
         }
         let liveAgentKeys = Set(agents.compactMap { $0.paneId ?? $0.agent })
         startedAtByPane = startedAtByPane.filter { liveAgentKeys.contains($0.key) }
+        usageBaselineByKey = usageBaselineByKey.filter { liveAgentKeys.contains($0.key) }
         self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)
