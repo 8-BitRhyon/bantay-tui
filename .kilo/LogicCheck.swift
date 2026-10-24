@@ -419,6 +419,68 @@ struct LogicCheckMain {
         sampleTask.completedAt = Date()
         check(sampleTask.category() == .completed, "BantayTask completed category")
 
+        // -- Task round trip on an isolated store: add, external ingest
+        // dedup, tombstone resurrection guard, orphan reset, echo gate.
+        do {
+            let tmpDir =
+                NSTemporaryDirectory() + "bantay-tasks-\(UUID().uuidString)"
+            try? FileManager.default.createDirectory(
+                atPath: tmpDir, withIntermediateDirectories: true)
+            let store = TaskStore(
+                fileURL: URL(fileURLWithPath: tmpDir + "/tasks.json"))
+            check(store.tasks.count == 2, "fresh store seeds welcome rows")
+            let added = store.addTask(
+                "Ship it @work !!", syncReminders: false)
+            check(
+                added.tags.contains("work") && added.priority == .high,
+                "add parses tags and priority")
+            let dupes = store.batchIngestExternalReminders([
+                (rawTitle: "File taxes", dueDate: nil, externalID: "ext-1"),
+                (rawTitle: "File taxes", dueDate: nil, externalID: "ext-1"),
+            ])
+            check(dupes.count == 1, "external ingest dedupes by title")
+            store.removeTask(added.id)
+            let resurrected = store.ingestExternalReminder(
+                rawTitle: "Ship it @work !!", externalID: nil)
+            check(resurrected == nil, "tombstones block resurrection")
+            let dead = store.addTask("Dead pane job", syncReminders: false)
+            store.overrideExecutionForTesting(
+                taskID: dead.id, state: .working, paneID: "w9:p9")
+            let live = store.addTask("Live pane job", syncReminders: false)
+            store.overrideExecutionForTesting(
+                taskID: live.id, state: .working, paneID: "w1:p1")
+            let desktop = store.addTask("Desktop job", syncReminders: false)
+            store.overrideExecutionForTesting(
+                taskID: desktop.id, state: .working, paneID: "app:antigravity")
+            let reset = store.resetOrphanedTasks(livePaneIDs: ["w1:p1"])
+            check(reset == 1, "only the dead-pane task resets")
+            let afterDead = store.tasks.first { $0.id == dead.id }
+            check(
+                afterDead?.executionState == .pending
+                    && afterDead?.linkedPaneID == nil,
+                "reset task returns to pending with no pane")
+            check(
+                store.tasks.first { $0.id == live.id }?.executionState == .working,
+                "live-pane task keeps working")
+            check(
+                store.tasks.first { $0.id == desktop.id }?.executionState == .working,
+                "standalone targets never count as orphaned")
+            try? FileManager.default.removeItem(atPath: tmpDir)
+        }
+
+        // -- Echo suppression gate.
+        check(
+            !RemindersProvider.shouldSuppressInboundSync(lastOwnWrite: nil),
+            "no own write means no suppression")
+        check(
+            RemindersProvider.shouldSuppressInboundSync(
+                lastOwnWrite: Date(), now: Date()),
+            "fresh own write suppresses echo")
+        check(
+            !RemindersProvider.shouldSuppressInboundSync(
+                lastOwnWrite: Date(timeIntervalSinceNow: -10), now: Date()),
+            "old own write lets sync through")
+
         let jsonQuotas = QuotaAxiTracker.parseQuotaJSON(
             "[{\"provider\":\"Anthropic\",\"remainingPercent\":85.0,\"reset\":\"12h\",\"tier\":\"Pro\"}]"
         )

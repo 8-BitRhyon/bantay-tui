@@ -1295,6 +1295,10 @@ extension AgentEventManager {
         completedFingerprintByKey = completedFingerprintByKey.filter {
             liveAgentKeys.contains($0.key)
         }
+        // Tasks stuck in flight on dead panes can never transition again.
+        // Reset them to pending while the live roster is in hand.
+        TaskStore.shared.resetOrphanedTasks(
+            livePaneIDs: Set(agents.compactMap { $0.paneId }))
         self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)

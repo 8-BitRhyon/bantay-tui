@@ -1,3 +1,4 @@
+import AppKit
 @preconcurrency import EventKit
 import Foundation
 
@@ -22,6 +23,20 @@ public final class RemindersProvider: ObservableObject {
 
     private var eventStoreObserver: NSObjectProtocol?
     private var debounceSyncTask: Task<Void, Never>?
+
+    /// Timestamp of our most recent EventKit write. Change notifications
+    /// arriving inside the suppression window are our own echo, not external
+    /// edits — syncing them back is churn that masks real failures.
+    private var lastOwnWriteAt: Date?
+    static let echoSuppressionSeconds: TimeInterval = 3
+
+    /// Pure echo gate: suppress inbound sync this soon after an own write.
+    static func shouldSuppressInboundSync(
+        lastOwnWrite: Date?, now: Date = Date()
+    ) -> Bool {
+        guard let lastOwnWrite else { return false }
+        return now.timeIntervalSince(lastOwnWrite) < echoSuppressionSeconds
+    }
 
     private init() {
         checkAuthorizationStatus()
@@ -61,8 +76,34 @@ public final class RemindersProvider: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
             guard let self else { return }
+            guard !Self.shouldSuppressInboundSync(lastOwnWrite: lastOwnWriteAt) else {
+                return
+            }
             await self.syncInboundReminders()
         }
+    }
+
+    /// True when Reminders access was denied or restricted. Re-prompting in
+    /// this state is a no-op — the UI must deep-link to System Settings.
+    public var permissionDenied: Bool {
+        guard ApprovalNotificationController.hasBundleProxy else { return false }
+        switch EKEventStore.authorizationStatus(for: .reminder) {
+        case .denied, .restricted:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Opens Privacy settings at Reminders when the grant was denied.
+    public func openPrivacySettings() {
+        guard
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders")
+        else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     /// Background inbound sync from Apple Reminders into Bantay TaskStore using
@@ -194,6 +235,7 @@ public final class RemindersProvider: ObservableObject {
         }
         do {
             try store.save(reminder, commit: true)
+            lastOwnWriteAt = Date()
             await refresh()
             return true
         } catch {
@@ -206,6 +248,7 @@ public final class RemindersProvider: ObservableObject {
         guard let store else { return }
         reminder.isCompleted = true
         try? store.save(reminder, commit: true)
+        lastOwnWriteAt = Date()
         await refresh()
     }
 
@@ -213,6 +256,7 @@ public final class RemindersProvider: ObservableObject {
     public func remove(_ reminder: EKReminder) async {
         guard let store else { return }
         try? store.remove(reminder, commit: true)
+        lastOwnWriteAt = Date()
         await refresh()
     }
 }

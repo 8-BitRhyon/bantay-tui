@@ -360,6 +360,43 @@ public final class TaskStore: ObservableObject {
         save()
     }
 
+    /// Test seam: force an execution state and pane link (mirrors dispatch).
+    func overrideExecutionForTesting(
+        taskID: UUID, state: TaskExecutionState, paneID: String?
+    ) {
+        guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
+        tasks[index].executionState = state
+        tasks[index].linkedPaneID = paneID
+    }
+
+    /// Resets tasks stuck in flight on dead panes. A task linked to a pane
+    /// that no longer exists (closed terminal, dead multiplexer) can never
+    /// transition again — without this it reads "working" forever. Returns
+    /// the reset count. Unlinked tasks are untouched: their agent may simply
+    /// not be running yet. Standalone and app targets (`standalone:`,
+    /// `app:`) are not panes and never count as orphaned.
+    @discardableResult
+    public func resetOrphanedTasks(livePaneIDs: Set<String>) -> Int {
+        var reset = 0
+        for index in 0..<tasks.count {
+            var task = tasks[index]
+            guard !task.isCompleted,
+                task.executionState == .working || task.executionState == .blocked,
+                let pane = task.linkedPaneID, !pane.isEmpty,
+                !pane.hasPrefix("standalone:"), !pane.hasPrefix("app:"),
+                !livePaneIDs.contains(pane)
+            else {
+                continue
+            }
+            task.executionState = .pending
+            task.linkedPaneID = nil
+            tasks[index] = task
+            reset += 1
+        }
+        if reset > 0 { save() }
+        return reset
+    }
+
     /// Single-pass categorized tasks struct for high-performance rendering.
     public struct CategorizedTasks: Equatable, Sendable {
         public let overdue: [BantayTask]
