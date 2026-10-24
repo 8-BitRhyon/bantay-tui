@@ -355,6 +355,11 @@ final class AgentEventManager: ObservableObject {
     /// records current-minus-baseline so rows show their own spend, never
     /// the lifetime cumulative total.
     private var usageBaselineByKey: [String: (tokens: Int, cost: Double)] = [:]
+    /// Last recorded completion fingerprint per pane (kind + title). Kills
+    /// the 48-rows-for-one-finish class: heartbeats with no work between
+    /// completions record once. Cleared by progress/started, pruned with the
+    /// other per-pane maps.
+    private var completedFingerprintByKey: [String: String] = [:]
     /// Latest approval prompt shape per pane, decoded from the event stream
     /// and enriched from the live pane when the event is only "blocked".
     var pendingApprovals: [String: PendingApproval] = [:]
@@ -688,6 +693,9 @@ final class AgentEventManager: ObservableObject {
         }
         var completionDuration: TimeInterval?
         let sessionStart = startedAtByPane[key] ?? event.createdAt
+        // True when this event recorded a fresh session row (not a dupe
+        // heartbeat). Gates recents + digest below on the same rule.
+        var recordedFreshFinish = false
         if event.kind == .completed || event.kind == .failed {
             if let start = startedAtByPane[key] {
                 completionDuration = event.createdAt.timeIntervalSince(start)
@@ -707,6 +715,9 @@ final class AgentEventManager: ObservableObject {
                     cost: usage.costBySource[event.sourceKey] ?? 0
                 )
             }
+            // New working burst re-arms completion recording: the next
+            // completion for this pane is a real finish, not a heartbeat.
+            completedFingerprintByKey.removeValue(forKey: key)
         } else if event.kind == .completed || event.kind == .failed
             || event.kind == .cancelled || event.kind == .clear
         {
@@ -715,34 +726,48 @@ final class AgentEventManager: ObservableObject {
 
         if event.kind == .completed || event.kind == .failed {
             let title = event.title ?? event.message ?? event.kind.label
-            let baseline = usageBaselineByKey[key]
-            let snap = self.agents.first {
-                (event.paneId != nil && $0.paneId == event.paneId)
-                    || $0.source == event.sourceKey
+            // Completion heartbeats re-emit the same finish for minutes.
+            // Record one row per working burst: identical kind+title with no
+            // progress since the last one is a dupe, not a new session.
+            let fingerprint = "\(event.kind.rawValue):\(title)"
+            if completedFingerprintByKey[key] != fingerprint {
+                completedFingerprintByKey[key] = fingerprint
+                recordedFreshFinish = true
+                let baseline = usageBaselineByKey[key]
+                let snap = self.agents.first {
+                    (event.paneId != nil && $0.paneId == event.paneId)
+                        || $0.source == event.sourceKey
+                }
+                SessionHistoryStore.shared.addSession(
+                    AgentSessionRecord(
+                        id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",
+                        agentName: event.sourceKey,
+                        title: title,
+                        startTime: sessionStart,
+                        durationSeconds: completionDuration ?? 0,
+                        totalTokens: SessionUsageDelta.tokens(
+                            current: usage.tokensBySource[event.sourceKey] ?? 0,
+                            baseline: baseline?.tokens ?? 0),
+                        costUSD: SessionUsageDelta.cost(
+                            current: usage.costBySource[event.sourceKey] ?? 0,
+                            baseline: baseline?.cost ?? 0),
+                        status: event.kind == .completed ? "Completed" : "Failed",
+                        project: snap?.projectContext?.project
+                            ?? snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
+                        branch: snap?.projectContext?.branch,
+                        sessionPath: snap?.sessionPath,
+                        cwd: snap?.cwd,
+                        // No baseline means no observed start: the numbers
+                        // are lifetime totals, labeled as such downstream.
+                        isDelta: baseline != nil))
             }
-            SessionHistoryStore.shared.addSession(
-                AgentSessionRecord(
-                    id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",
-                    agentName: event.sourceKey,
-                    title: title,
-                    startTime: sessionStart,
-                    durationSeconds: completionDuration ?? 0,
-                    totalTokens: SessionUsageDelta.tokens(
-                        current: usage.tokensBySource[event.sourceKey] ?? 0,
-                        baseline: baseline?.tokens ?? 0),
-                    costUSD: SessionUsageDelta.cost(
-                        current: usage.costBySource[event.sourceKey] ?? 0,
-                        baseline: baseline?.cost ?? 0),
-                    status: event.kind == .completed ? "Completed" : "Failed",
-                    project: snap?.projectContext?.project
-                        ?? snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
-                    branch: snap?.projectContext?.branch,
-                    sessionPath: snap?.sessionPath,
-                    cwd: snap?.cwd,
-                    isDelta: true))
             usageBaselineByKey.removeValue(forKey: key)
         }
-        if (event.kind == .completed || event.kind == .failed) && !isActive {
+        // Recents and the away digest follow the same dupe rule: a repeated
+        // heartbeat must not push the same finish five times.
+        if (event.kind == .completed || event.kind == .failed) && !isActive
+            && recordedFreshFinish
+        {
             let recent = RecentCompletion(
                 id: "\(key):\(event.kind.rawValue):\(event.createdAt.timeIntervalSince1970)",
                 source: event.sourceKey,
@@ -1197,6 +1222,9 @@ extension AgentEventManager {
         let liveAgentKeys = Set(agents.compactMap { $0.paneId ?? $0.agent })
         startedAtByPane = startedAtByPane.filter { liveAgentKeys.contains($0.key) }
         usageBaselineByKey = usageBaselineByKey.filter { liveAgentKeys.contains($0.key) }
+        completedFingerprintByKey = completedFingerprintByKey.filter {
+            liveAgentKeys.contains($0.key)
+        }
         self.agents = mergeApprovals(into: result.roster)
         for event in result.events {
             showEvent(event)

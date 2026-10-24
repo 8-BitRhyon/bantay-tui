@@ -156,6 +156,19 @@ public final class SessionHistoryStore: ObservableObject {
                 "Unit test harness suite L64",
             ])
             sessions = decoded.filter { !demo.contains($0.title) }
+            // One-time migration: every stored row predates reliable
+            // per-session deltas (no baselines were ever captured, and the
+            // first delta build stamped lifetime totals as deltas). Mark
+            // them all legacy so the summary excludes them from sums.
+            if !UserDefaults.standard.bool(forKey: "bantay_session_delta_migrated") {
+                sessions = sessions.map { row in
+                    var legacy = row
+                    legacy.isDelta = false
+                    return legacy
+                }
+                UserDefaults.standard.set(true, forKey: "bantay_session_delta_migrated")
+                save()
+            }
         } else {
             sessions = []
         }

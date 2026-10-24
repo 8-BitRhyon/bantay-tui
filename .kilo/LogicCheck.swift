@@ -3204,6 +3204,62 @@ struct LogicCheckMain {
             check(manager.recentCompletions.isEmpty, "L38 expand acknowledges recents")
         }
 
+        // L38c. Completion heartbeat dedup: identical kind+title with no
+        // work between records one session row, not one per heartbeat.
+        // A progress event re-arms recording for the next real finish.
+        do {
+            let tmp2 = NSTemporaryDirectory() + "bantay-check-dupe.jsonl"
+            try? FileManager.default.removeItem(atPath: tmp2)
+            FileManager.default.createFile(atPath: tmp2, contents: nil)
+            let dup = AgentEventManager(
+                eventsFileURL: URL(fileURLWithPath: tmp2), capture: false)
+            func finish(_ title: String) {
+                dup.publishEventForTesting(
+                    AgentEvent(
+                        source: "dupe-agent", kind: .completed, title: title,
+                        message: nil, paneId: "dupe:pane", workspaceId: nil,
+                        variance: nil, choices: nil, playSound: false,
+                        persistent: false))
+            }
+            func work() {
+                dup.publishEventForTesting(
+                    AgentEvent(
+                        source: "dupe-agent", kind: .progress, title: "Same finish",
+                        message: nil, paneId: "dupe:pane", workspaceId: nil,
+                        variance: nil, choices: nil, playSound: false,
+                        persistent: false))
+            }
+            func rows() -> [AgentSessionRecord] {
+                SessionHistoryStore.shared.sessions.filter {
+                    $0.title == "Same finish" && $0.agentName == "dupe-agent"
+                }
+            }
+            func recents() -> Int {
+                dup.recentCompletions.filter { $0.source == "dupe-agent" }.count
+            }
+            // The shared history store persists across harness runs: diff
+            // against the baseline so stale rows cannot mask the assertions.
+            let baseRows = rows().count
+            finish("Same finish")
+            finish("Same finish")
+            finish("Same finish")
+            check(rows().count - baseRows == 1, "heartbeat dupes record one row")
+            check(recents() == 1, "heartbeat dupes push one recent")
+            check(
+                rows().first?.isDelta == false,
+                "no-baseline rows are legacy-marked, never fake deltas")
+            // Session ids carry one-second resolution: space the next burst
+            // so the id guard cannot mask the fingerprint re-arm.
+            Thread.sleep(forTimeInterval: 1.2)
+            work()
+            finish("Same finish")
+            check(rows().count - baseRows == 2, "new burst after progress records again")
+            check(
+                rows().first?.isDelta == true,
+                "observed burst records a true delta")
+            dup.stop()
+        }
+
         // L39. F13 stable layout: empty and one-row rosters reserve the same
         // viewport; growth caps at available height; negative counts are safe.
         let emptyHeight = IslandMetrics.stableRosterHeight(
