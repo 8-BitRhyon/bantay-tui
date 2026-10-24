@@ -61,7 +61,6 @@ struct SettingsView: View {
     @State private var idleStyle = NotchHUDConfig.shared.idleStyle.rawValue
     @State private var idleMaxChips = NotchHUDConfig.shared.clampedIdleMaxChips
     @State private var expandedGroupByState = NotchHUDConfig.shared.expandedGroupByState
-    @State private var hotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
     @State private var hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
     @State private var hotkeyDeny = NotchHUDConfig.shared.globalHotkeyDenyEnabled
     @State private var hotkeySnooze = NotchHUDConfig.shared.globalHotkeySnoozeEnabled
@@ -1459,12 +1458,6 @@ struct SettingsView: View {
 
             if selectedCategory == .general && matchesSearch("Quick actions") {
                 Section("Quick actions") {
-                    Toggle("Global shortcut ⌥Space", isOn: $hotkeyEnabled)
-                        .help("Show/hide the island from any app.")
-                        .onChange(of: hotkeyEnabled) { newValue in
-                            NotchHUDConfig.shared.globalHotkeyEnabled = newValue
-                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
-                        }
                     Toggle("Keyboard shortcuts in roster", isOn: $keyboardShortcuts)
                         .help("With the island focused: Y approve, N deny, R reply, 1-9 choose.")
                         .onChange(of: keyboardShortcuts) { newValue in
@@ -1541,7 +1534,6 @@ struct SettingsView: View {
         stripChevrons = stripCfg.showNavigationChevrons
         desktopHUDPinned = DesktopHUDController.shared.isPinned
         openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
-        hotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
         hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
         hotkeyDeny = NotchHUDConfig.shared.globalHotkeyDenyEnabled
         hotkeySnooze = NotchHUDConfig.shared.globalHotkeySnoozeEnabled

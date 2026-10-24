@@ -3881,14 +3881,15 @@ struct LogicCheckMain {
         check(monotonic && walk == 4, "L49 down-walk 0..4 is monotonic, no wrap (walk \(walk))")
 
         // MARK: - L47 global hotkey mapping (3c)
-        // Documented table: ⌥Space=toggle (49), ⌥Y=approve top (16),
-        // ⌥N=deny top (45), ⌥S=snooze 15m (1). Physical, layout-independent
-        // keyCodes. Modifier exclusivity: only Option; any of Shift/Control/
-        // Command disqualifies. Unknown keyCodes -> nil.
+        // Documented table: ⌥Y=approve top (16), ⌥N=deny top (45),
+        // ⌥S=snooze 15m (1). Physical, layout-independent keyCodes. Modifier
+        // exclusivity: only Option; any of Shift/Control/Command
+        // disqualifies. Unknown keyCodes -> nil. There is deliberately no
+        // island toggle shortcut: Option+Space belongs to launchers.
         let opt = NSEvent.ModifierFlags.option
         check(
-            IslandMetrics.hotkeyAction(keyCode: 49, modifiers: [opt]) == .toggleIsland,
-            "L47 49+option -> toggleIsland")
+            IslandMetrics.hotkeyAction(keyCode: 49, modifiers: [opt]) == nil,
+            "L47 49+option -> nil (no toggle shortcut)")
         check(
             IslandMetrics.hotkeyAction(keyCode: 16, modifiers: [opt]) == .approveTop,
             "L47 16+option -> approveTop")

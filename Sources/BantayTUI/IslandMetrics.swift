@@ -899,10 +899,10 @@ public enum IslandMetrics: Sendable {
     }
 
     /// Global ⌥-key actions dispatched from the key-down monitor. Physical
-    /// keyCodes are layout-independent: Space=toggle, Y=approve, N=deny,
-    /// S=snooze.
+    /// keyCodes are layout-independent: Y=approve, N=deny, S=snooze.
+    /// There is no island toggle shortcut: Option+Space belongs to launchers,
+    /// so the island toggles through hover and the menu bar instead.
     public enum HotkeyAction: Sendable {
-        case toggleIsland
         case approveTop
         case denyTop
         case snooze15
@@ -923,7 +923,6 @@ public enum IslandMetrics: Sendable {
             || modifiers.contains(.command)
         guard hasOption, !extraModifier else { return nil }
         switch keyCode {
-        case 49: return .toggleIsland
         case 16: return .approveTop
         case 45: return .denyTop
         case 1: return .snooze15

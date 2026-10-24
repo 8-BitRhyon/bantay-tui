@@ -38,7 +38,7 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 ## Architectural Components
 
 ### 1. Control Plane & User Interface
-- `DynamicIslandApp.swift`: Main application entry point running as an accessory application (`LSUIElement`). Manages the top-level `NSPanel`, menu bar tray item, global hotkey registration (`⌥Space`), and screen configuration observers.
+- `DynamicIslandApp.swift`: Main application entry point running as an accessory application (`LSUIElement`). Manages the top-level `NSPanel`, menu bar tray item, global hotkeys (`⌥Y`/`⌥N`/`⌥S`/`⌥,`), and screen configuration observers.
 - `NotchStatusView.swift`: Root view for the expanded notch control plane. Hosts the counts header bar, roster scroll view, and core tabs (Inbox, Tasks, History) with utility pills (Shelf, Notes, Media).
 - `ApprovalCardView.swift`: Unified approval card for blocked agents. Shows the exact request, risk badge, queue position, and actions. Waiting states show Review and Open instead of blind Approve and Deny.
 - `ApprovalPromptResolver.swift`: Pure parser for live pane prompts. Extracts the exact command, path, question, numbered choices, multi-select choices, and risk tier from terminal text.

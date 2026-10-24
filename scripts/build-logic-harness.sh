@@ -20,7 +20,6 @@ UI_ONLY=(
   DesktopHUDController.swift
   DesktopHUDView.swift
   DynamicIslandApp.swift
-  GlobalHotkeyManager.swift
   MultiAgentTimelineView.swift
   NotchCommonViews.swift
   NotchHeaderBarView.swift

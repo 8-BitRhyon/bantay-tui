@@ -56,11 +56,6 @@ struct NotchStatusView: View {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @FocusState private var promptFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Brief white border flash when the global hotkey fires (item 10).
-    @State private var hotkeyBlink = false
-    /// Cancels the pending hotkey-blink reset so rapid presses extend the
-    /// flash rather than stacking resets.
-    @State private var hotkeyBlinkResetTask: Task<Void, Never>?
     private let adapter: any PlexerAdapter = PlexerFactory.makeAdapter()
 
     /// Docked idle chips sit flush in the notch row; only expanded/center drop
@@ -442,13 +437,6 @@ struct NotchStatusView: View {
             }
         }
         .onReceive(
-            NotificationCenter.default.publisher(for: .notchGlobalHotkeyTriggered)
-        ) { _ in
-            withAnimation(morphAnimation) {
-                expandTo(!isExpanded)
-            }
-        }
-        .onReceive(
             NotificationCenter.default.publisher(for: .notchCollapseRequested)
         ) { _ in
             if isExpanded { expandTo(false) }
@@ -491,27 +479,6 @@ struct NotchStatusView: View {
                 handleNavigationKey(keyCode)
             }
         )
-        .onReceive(
-            NotificationCenter.default.publisher(for: .notchHotkeyPressed)
-        ) { _ in
-            if isExpanded {
-                expandTo(false)
-            } else if !eventManager.agents.isEmpty {
-                expandTo(true)
-            } else {
-                // Nothing to expand — blink the pill so the user knows the
-                // hotkey was received (item 10: hotkey feedback). Cancel any
-                // pending reset so rapid presses extend the blink instead of
-                // stacking resets that truncate it.
-                hotkeyBlinkResetTask?.cancel()
-                withAnimation(.easeOut(duration: 0.12)) { hotkeyBlink = true }
-                hotkeyBlinkResetTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(220))
-                    guard !Task.isCancelled else { return }
-                    withAnimation(.easeOut(duration: 0.15)) { hotkeyBlink = false }
-                }
-            }
-        }
         .sheet(isPresented: $showWelcome) {
             WelcomeView()
         }
@@ -807,13 +774,10 @@ struct NotchStatusView: View {
                 if isExpanded || !isCenteredClosed {
                     RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
                         .strokeBorder(
-                            hotkeyBlink
-                                ? .white.opacity(0.55)
-                                : spendStrokeColor,
-                            lineWidth: hotkeyBlink ? 1.5 : 1
+                            spendStrokeColor,
+                            lineWidth: 1
                         )
                         .frame(width: islandWidth, height: islandHeight)
-                        .animation(.easeOut(duration: 0.12), value: hotkeyBlink)
                 }
             }
             .opacity(isCenteredClosed && !isExpanded ? 0 : 1)

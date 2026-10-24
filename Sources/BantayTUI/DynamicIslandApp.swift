@@ -762,14 +762,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let config = NotchHUDConfig.shared
         guard config.globalHotkeyEnabled else { return }
         let enabledActions: [(UInt16, IslandMetrics.HotkeyAction)] = [
-            (49, .toggleIsland),
             (16, .approveTop),
             (45, .denyTop),
             (1, .snooze15),
             (43, .openSettings),
         ].filter { keyCode, action in
             switch action {
-            case .toggleIsland: return true
             case .approveTop: return config.globalHotkeyApproveEnabled
             case .denyTop: return config.globalHotkeyDenyEnabled
             case .snooze15: return config.globalHotkeySnoozeEnabled
@@ -801,22 +799,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    @MainActor
-    static func handleHotkeyToggle() {
-        if window?.isVisible == true {
-            hide()
-        } else {
-            showAtNotch()
-            NotificationCenter.default.post(name: .notchHotkeyPressed, object: nil)
-        }
-    }
-
     /// Dispatches a global hotkey action to the appropriate handler.
     @MainActor
     static func handleHotkeyAction(_ action: IslandMetrics.HotkeyAction) {
         switch action {
-        case .toggleIsland:
-            handleHotkeyToggle()
         case .approveTop:
             performApprovalHotkey(approve: true)
         case .denyTop:

@@ -2,7 +2,6 @@ import Foundation
 
 extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
-    static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
     static let settingsWillOpen = Notification.Name("settingsWillOpen")
     static let openSettingsRequested = Notification.Name("openSettingsRequested")
     static let settingsRouteRequested = Notification.Name("settingsRouteRequested")

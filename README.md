@@ -11,7 +11,7 @@ Bantay supports agents running in Herdr, tmux, Zellij, standard terminals, and d
 
 ### 1. The Notch Island (HUD)
 - **Idle Status Strip**: Shows agent chips next to the notch with color status dots. The strip clamps to screen bounds to prevent menu bar overlap.
-- **Expanded Control Plane**: Press `⌥Space` or hover over the notch to open the main control panel:
+- **Expanded Control Plane**: Hover over the notch to open the main control panel:
   - **Approval Cards**: Blocked agents render as cards. Each card shows the exact request, risk badge, queue position, and full choice labels.
   - **Review-Only Waits**: Prompts without a concrete request or choices offer Review and Open, never a blind Approve or Deny.
   - **State-Grouped Roster**: Organizes agents into `Needs you`, `Working`, and `Idle`. Subagents fold under their project with an expander.
@@ -41,7 +41,7 @@ Bantay includes a horizontal window tiling engine for macOS:
 
 | Action | Method |
 |---|---|
-| Open or close Notch Island | Press `⌥Space` |
+| Open or close Notch Island | Hover the notch or use the menu bar |
 | Approve or deny in HUD | Press `Y` or `N` |
 | Reply to the top agent | Press `R` |
 | Select numbered choice | Press `1` through `9` |
@@ -158,7 +158,8 @@ Settings are stored in `UserDefaults` under domain `BantayTUI`. Open the Setting
 | `idleStyle` | `names` | Style of idle chips (`names`, `dots`, or `summary`) |
 | `idleMaxChips` | `3` | Maximum visible chips before the `+N` badge (1 to 6) |
 | `expandedGroupByState` | `true` | Group agents by status in the roster |
-| `globalHotkeyEnabled` | `true` | Enable the global `⌥Space` shortcut |
+| `globalHotkeyEnabled` | `true` | Enable global hotkeys (`⌥Y` approve, `⌥N` deny, `⌥S` snooze, `⌥,` settings) |
+| `globalHotkeyApproveEnabled` / `globalHotkeyDenyEnabled` / `globalHotkeySnoozeEnabled` | `true` / `true` / `false` | Toggle each global hotkey separately |
 | `keyboardShortcuts` | `true` | Enable `Y`, `N`, and number keys in the HUD |
 | `edgeGlowEnabled` | `true` | Show amber edge glow when an approval is waiting |
 | `showShelfTab` / `shelfLimit` | `true` / `20` | Enable the Shelf tab and set item limit |
