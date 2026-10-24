@@ -1044,7 +1044,7 @@ struct NotchStatusView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if let choiceSummary {
+            if let choiceSummary, !(surface == .question && controls.isMulti) {
                 Text(choiceSummary)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.cyan.opacity(0.85))
@@ -1114,7 +1114,8 @@ struct NotchStatusView: View {
             width: IslandMetrics.notificationWidth,
             height: IslandMetrics.approvalNotificationHeight
                 + ((surface == .question && controls.isMulti)
-                    ? IslandMetrics.approvalNotificationMultiExtraHeight : 0)
+                    ? IslandMetrics.multiOptionsExtraHeight(
+                        optionCount: controls.choices.count) : 0)
         )
         .contentShape(Rectangle())
     }
@@ -1495,8 +1496,10 @@ struct NotchStatusView: View {
             event: event, paneId: paneId, resolving: resolving)
     }
 
-    /// Multi-select toggle row, rendered above the card footer. Capped at
-    /// six with a `+N` inbox overflow, matching single-choice popups.
+    /// Labeled multi-select toggle grid, rendered above the card footer.
+    /// Every option is a tappable chip with its number and label — never a
+    /// bare number pointing at a text line. Two columns, capped at six with
+    /// a `+N` inbox overflow, matching single-choice popups.
     @ViewBuilder
     private func notificationMultiOptions(
         event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
@@ -1505,32 +1508,60 @@ struct NotchStatusView: View {
         let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
         let options = Array(controls.choices.prefix(cap))
         let selection = queueSelections[paneId] ?? []
-        HStack(spacing: 6) {
+        LazyVGrid(
+            columns: [GridItem(.flexible()), GridItem(.flexible())],
+            alignment: .leading, spacing: 6
+        ) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, label in
                 let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
                 let selected = selection.contains(number)
-                approvalActionButton(
-                    label: Text("\(number)"),
-                    color: selected ? .green : .white.opacity(0.65),
-                    help: label,
-                    disabled: resolving,
-                    accessibilityLabel: "\(number). \(label)"
-                ) {
+                Button {
                     queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
                         selection, index: index)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(
+                            systemName: selected
+                                ? "checkmark.square.fill" : "square"
+                        )
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(
+                            selected ? .green : .white.opacity(0.5))
+                        Text("\(number) · \(label)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(height: IslandMetrics.multiOptionRowHeight)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                selected
+                                    ? Color.green.opacity(0.18)
+                                    : Color.white.opacity(0.06))
+                    )
                 }
+                .buttonStyle(.plain)
+                .disabled(resolving)
+                .help(label)
+                .accessibilityLabel(
+                    "Option \(number): \(label)\(selected ? ", selected" : "")")
             }
-            if controls.choices.count > cap {
-                approvalActionButton(
-                    label: Text("+\(controls.choices.count - cap)"),
-                    color: .white.opacity(0.6),
-                    help: "More options — open the inbox to answer",
-                    accessibilityLabel: "More options, open inbox"
-                ) {
-                    withAnimation(morphAnimation) { expandTo(true) }
-                }
+        }
+        if controls.choices.count > cap {
+            Button {
+                withAnimation(morphAnimation) { expandTo(true) }
+            } label: {
+                Text("+\(controls.choices.count - cap) more — open inbox")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
             }
-            Spacer(minLength: 0)
+            .buttonStyle(.plain)
+            .help("More options — open the inbox to answer")
+            .accessibilityLabel("More options, open inbox")
         }
     }
 

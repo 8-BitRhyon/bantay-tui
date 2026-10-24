@@ -6669,8 +6669,14 @@ struct LogicCheckMain {
             !IslandMetrics.looksLikePrompt("Jump to latest\nBuild succeeded in 2s"),
             "transcript chatter is not a prompt")
         check(
-            IslandMetrics.approvalNotificationMultiExtraHeight > 0,
-            "multi cards reserve their own toggle row")
+            IslandMetrics.multiOptionsExtraHeight(optionCount: 5) == 3 * 28 + 2 * 6,
+            "multi grid reserves three rows for five options")
+        check(
+            IslandMetrics.multiOptionsExtraHeight(optionCount: 8) == 3 * 28 + 2 * 6,
+            "multi grid caps at six options")
+        check(
+            IslandMetrics.multiOptionsExtraHeight(optionCount: 0) == 0,
+            "multi grid reserves nothing without options")
 
         // 2. ApprovalNotificationController action and category constants
         check(

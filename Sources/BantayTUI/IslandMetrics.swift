@@ -48,9 +48,16 @@ public enum IslandMetrics: Sendable {
     /// Approval cards carry the command, file path, or prompt text, so they
     /// need room for several wrapped lines plus the action row.
     public static let approvalNotificationHeight: CGFloat = 160
-    /// Multi-select cards move the option toggles onto their own row above
-    /// the footer so the stepper, Submit, and focus buttons never collide.
-    public static let approvalNotificationMultiExtraHeight: CGFloat = 30
+    /// Two-column labeled toggle grid for multi-select popups: one row per
+    /// pair of options, so buttons never collide with the footer. Capped at
+    /// six options with the rest behind the inbox overflow.
+    public static let multiOptionRowHeight: CGFloat = 28
+    public static func multiOptionsExtraHeight(optionCount: Int, cap: Int = 6) -> CGFloat {
+        let shown = min(max(optionCount, 0), max(cap, 1))
+        guard shown > 0 else { return 0 }
+        let rows = (shown + 1) / 2
+        return CGFloat(rows) * multiOptionRowHeight + CGFloat(max(rows - 1, 0)) * 6
+    }
     public static let notificationWidth: CGFloat = 432
     public static let notificationCornerRadius: CGFloat = 20
     /// Clearance between the physical notch and a closed notification card.
