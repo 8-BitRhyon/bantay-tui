@@ -222,6 +222,11 @@
             #expect(!IslandMetrics.looksLikePrompt("Muse Spark 1.3 Contributor"))
             #expect(
                 !IslandMetrics.looksLikePrompt(
+                    "db0c11f-work-ledger-1 and fresh screenshots confirming the render"))
+            #expect(
+                IslandMetrics.looksLikePrompt("Confirm deploy to production"))
+            #expect(
+                !IslandMetrics.looksLikePrompt(
                     "Jump to latest\nBuild succeeded in 2s"))
             #expect(!IslandMetrics.looksLikePrompt(""))
         }

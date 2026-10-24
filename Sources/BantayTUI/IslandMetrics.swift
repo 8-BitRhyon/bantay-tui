@@ -675,21 +675,28 @@ public enum IslandMetrics: Sendable {
     /// usually hold whatever scrolled by (chat transcripts, build logs),
     /// not the question — without a prompt signal the card must fall
     /// back to Review instead of showing random transcript text.
-    /// Numbered options match `1.` / `2)` at a line start only, so
-    /// version strings like `1.3` never count.
+    /// Keywords match whole words only, so "confirming the render" never
+    /// counts but "confirm deploy" does. Numbered options match `1.` / `2)`
+    /// at a line start only, so version strings like `1.3` never count.
     static func looksLikePrompt(_ text: String) -> Bool {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
         }
         if text.contains("?") { return true }
         let lower = text.lowercased()
-        let signals = [
-            "approve", "deny", "allow once", "allow", "confirm",
-            "(y/n)", "[y/n]", " y/n ", "press ",
-            "pick", "choose", "select", "option", "answer",
+        let phraseSignals = [
+            "allow once", "(y/n)", "[y/n]", " y/n ", "press ",
             "❯", "›", "»",
         ]
-        if signals.contains(where: { lower.contains($0) }) { return true }
+        if phraseSignals.contains(where: { lower.contains($0) }) { return true }
+        let words = lower.components(separatedBy: CharacterSet.alphanumerics.inverted)
+        let wordSet = Set(words.filter { !$0.isEmpty })
+        let keywords: Set<String> = [
+            "approve", "approves", "deny", "denies", "allow", "allows",
+            "confirm", "confirms", "pick", "picks", "choose", "chooses",
+            "select", "selects", "option", "options", "answer", "answers",
+        ]
+        if !wordSet.isDisjoint(with: keywords) { return true }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         for line in trimmed.components(separatedBy: "\n") {
             let line = line.trimmingCharacters(in: .whitespaces)

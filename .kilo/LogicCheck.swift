@@ -6666,6 +6666,13 @@ struct LogicCheckMain {
             !IslandMetrics.looksLikePrompt("Muse Spark 1.3 Contributor"),
             "version strings are not prompts")
         check(
+            !IslandMetrics.looksLikePrompt(
+                "db0c11f-work-ledger-1 and fresh screenshots confirming the render"),
+            "confirming prose is not a prompt")
+        check(
+            IslandMetrics.looksLikePrompt("Confirm deploy to production"),
+            "confirm as a whole word is a prompt")
+        check(
             !IslandMetrics.looksLikePrompt("Jump to latest\nBuild succeeded in 2s"),
             "transcript chatter is not a prompt")
         check(
