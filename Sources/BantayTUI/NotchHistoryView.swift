@@ -405,9 +405,20 @@ struct NotchHistoryView: View {
             Text("·")
                 .font(.system(size: 8))
                 .foregroundColor(.white.opacity(0.3))
-            Text(String(format: "$%.2f", session.costUSD))
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundColor(.green.opacity(0.8))
+            Text(
+                session.isDelta
+                    ? String(format: "$%.2f", session.costUSD)
+                    : "\(String(format: "$%.2f", session.costUSD)) total"
+            )
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundColor(
+                session.isDelta ? .green.opacity(0.8) : .green.opacity(0.45)
+            )
+            .help(
+                session.isDelta
+                    ? "Cost of this session"
+                    : "Lifetime total at the time; recorded before per-session tracking."
+            )
             Text("·")
                 .font(.system(size: 8))
                 .foregroundColor(.white.opacity(0.3))
