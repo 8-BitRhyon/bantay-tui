@@ -957,31 +957,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let paneId = IslandMetrics.actionablePaneId(
                 paneId: topApproval.paneId, source: topApproval.source)
         {
-            let cleanPrompt =
-                topApproval.title.flatMap {
-                    let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
-                    return c.isEmpty ? nil : ": \(c)"
-                } ?? ""
-            let approveTitle = "✓ Approve \(topApproval.source)\(cleanPrompt)"
-            let approveItem = NSMenuItem(
-                title: approveTitle,
-                action: #selector(approveAgent(_:)),
-                keyEquivalent: "y"
-            )
-            approveItem.keyEquivalentModifierMask = [.option]
-            approveItem.target = self
-            approveItem.representedObject = paneId
-            menu.addItem(approveItem)
+            let topSurface = IslandMetrics.promptSurfaceKind(
+                eventKind: topApproval.kind,
+                actionable: topApproval.approvalActionable,
+                choiceCount: topApproval.approval.choices.count)
+            switch topSurface {
+            case .permission:
+                let cleanPrompt =
+                    topApproval.title.flatMap {
+                        let c = IslandMetrics.cleanHUDText($0, maxCharacters: 40)
+                        return c.isEmpty ? nil : ": \(c)"
+                    } ?? ""
+                let approveTitle = "✓ Approve \(topApproval.source)\(cleanPrompt)"
+                let approveItem = NSMenuItem(
+                    title: approveTitle,
+                    action: #selector(approveAgent(_:)),
+                    keyEquivalent: "y"
+                )
+                approveItem.keyEquivalentModifierMask = [.option]
+                approveItem.target = self
+                approveItem.representedObject = paneId
+                menu.addItem(approveItem)
 
-            let denyItem = NSMenuItem(
-                title: "✕ Deny \(topApproval.source)",
-                action: #selector(denyAgent(_:)),
-                keyEquivalent: "n"
-            )
-            denyItem.keyEquivalentModifierMask = [.option]
-            denyItem.target = self
-            denyItem.representedObject = paneId
-            menu.addItem(denyItem)
+                let denyItem = NSMenuItem(
+                    title: "✕ Deny \(topApproval.source)",
+                    action: #selector(denyAgent(_:)),
+                    keyEquivalent: "n"
+                )
+                denyItem.keyEquivalentModifierMask = [.option]
+                denyItem.target = self
+                denyItem.representedObject = paneId
+                menu.addItem(denyItem)
+            case .question:
+                let answerItem = NSMenuItem(
+                    title: "? Answer \(topApproval.source)",
+                    action: #selector(openInbox(_:)),
+                    keyEquivalent: "")
+                answerItem.target = self
+                menu.addItem(answerItem)
+            case .waiting:
+                let reviewItem = NSMenuItem(
+                    title: "… Review \(topApproval.source)",
+                    action: #selector(openInbox(_:)),
+                    keyEquivalent: "")
+                reviewItem.target = self
+                menu.addItem(reviewItem)
+            }
             menu.addItem(.separator())
         }
 
@@ -1022,13 +1043,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     let paneId = IslandMetrics.actionablePaneId(
                         paneId: agent.paneId, source: agent.source)
                 {
+                    let surface = IslandMetrics.promptSurfaceKind(
+                        eventKind: agent.kind,
+                        actionable: agent.approvalActionable,
+                        choiceCount: agent.approval.choices.count)
                     let header = NSMenuItem(
-                        title: "\(agent.source) needs approval", action: nil, keyEquivalent: "")
+                        title: surface == .permission
+                            ? "\(agent.source) needs approval"
+                            : (surface == .question
+                                ? "\(agent.source) has a question"
+                                : "\(agent.source) is waiting"),
+                        action: nil, keyEquivalent: "")
                     header.isEnabled = false
                     submenu.addItem(header)
                     submenu.addItem(.separator())
                     let controls = agent.approval
-                    if controls.isYesNo {
+                    if surface == .permission, controls.isYesNo {
                         submenu.addItem(
                             menuItem(
                                 title: "Approve", action: #selector(approveAgent(_:)),
@@ -1037,7 +1067,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                             menuItem(
                                 title: "Deny", action: #selector(denyAgent(_:)),
                                 paneId: paneId))
-                    } else {
+                    } else if surface == .permission || surface == .question {
                         let labels = controls.optionLabels
                         for (index, optLabel) in labels.enumerated() {
                             let text =
@@ -1053,9 +1083,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         if controls.optionLabels.isEmpty {
                             submenu.addItem(
                                 menuItem(
-                                    title: "Approve", action: #selector(approveAgent(_:)),
+                                    title: "Review in inbox",
+                                    action: #selector(openInbox(_:)),
                                     paneId: paneId))
                         }
+                    } else {
+                        submenu.addItem(
+                            menuItem(
+                                title: "Review in inbox",
+                                action: #selector(openInbox(_:)),
+                                paneId: paneId))
                     }
                     submenu.addItem(.separator())
                 }
@@ -1271,6 +1308,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let paneId = parts[0]
         let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
         AgentEventManager.shared.approveChoice(paneId: paneId, choice: number)
+    }
+
+    /// Opens the Agents inbox for review without resolving anything.
+    /// Questions and waiting states route here instead of Approve/Deny.
+    @MainActor
+    @objc private func openInbox(_ sender: NSMenuItem) {
+        Self.showAtNotch()
+        NotificationCenter.default.post(name: .notchExpandRequested, object: nil)
     }
 
     @MainActor

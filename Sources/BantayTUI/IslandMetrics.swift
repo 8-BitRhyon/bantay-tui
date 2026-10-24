@@ -674,6 +674,58 @@ public enum IslandMetrics: Sendable {
         return .waiting
     }
 
+    /// Maximum stacked closed-notification cards. New events never silently
+    /// replace older ones; overflow drops the lowest-priority oldest first.
+    static let maxNotificationQueueCount = 5
+
+    /// Priority rank for closed-notification queue order. Approvals and
+    /// questions outrank failure and completion notices; ties break oldest
+    /// first so the queue is first-come, first-served within a rank.
+    static func notificationQueueRank(_ kind: AgentEventKind) -> Int {
+        switch kind {
+        case .accessRequest: return 0
+        case .waiting: return 1
+        case .failed: return 2
+        case .completed: return 3
+        case .progress, .started: return 4
+        case .idle, .cancelled, .clear: return 5
+        }
+    }
+
+    /// Insert an event into the closed-notification queue: same-id replaces
+    /// in place (content refresh, never a duplicate), otherwise appends,
+    /// sorts by rank then age, and caps the length.
+    static func notificationQueueInsert(
+        _ queue: [AgentEvent], event: AgentEvent, cap: Int = maxNotificationQueueCount
+    ) -> [AgentEvent] {
+        var next = queue.filter { $0.id != event.id }
+        next.append(event)
+        next.sort {
+            let left = notificationQueueRank($0.kind)
+            let right = notificationQueueRank($1.kind)
+            if left != right { return left < right }
+            return $0.createdAt < $1.createdAt
+        }
+        if next.count > max(cap, 1) {
+            next = Array(next.prefix(max(cap, 1)))
+        }
+        return next
+    }
+
+    /// Remove one event from the queue by id. No-op when absent.
+    static func notificationQueueRemove(
+        _ queue: [AgentEvent], id: UUID
+    ) -> [AgentEvent] {
+        queue.filter { $0.id != id }
+    }
+
+    /// Clamp a selected queue index after insert/remove so the stepper never
+    /// points past the end.
+    static func notificationQueueClampIndex(_ index: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return min(max(index, 0), count - 1)
+    }
+
     // MARK: - Peripheral-vision & speed snacks
 
     /// Pulsing approval edge-glow color (amber, blocked state).

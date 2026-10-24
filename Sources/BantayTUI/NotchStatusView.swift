@@ -38,7 +38,8 @@ struct NotchStatusView: View {
     @State private var peekText: String = ""
     @State private var peekTask: Task<Void, Never>?
     @State private var clipboardItems: [ClipboardItem] = []
-    @State private var activeNotification: AgentEvent? = nil
+    @State private var notificationQueue: [AgentEvent] = []
+    @State private var queueIndex = 0
     @State private var notificationDismissTask: Task<Void, Never>? = nil
     /// Live pane excerpt for approvals whose event carries no command or
     /// prompt (multiplexer status events). Fetched asynchronously.
@@ -136,6 +137,15 @@ struct NotchStatusView: View {
 
     private var hasActiveNotification: Bool {
         !isExpanded && activeNotification != nil
+    }
+
+    /// The card on screen: the selected queue entry, clamped. Older entries
+    /// are never silently replaced; the stepper reaches every queued card.
+    private var activeNotification: AgentEvent? {
+        guard !notificationQueue.isEmpty else { return nil }
+        let index = IslandMetrics.notificationQueueClampIndex(
+            queueIndex, count: notificationQueue.count)
+        return notificationQueue[index]
     }
 
     private var activeNotificationCardHeight: CGFloat {
@@ -1045,6 +1055,9 @@ struct NotchStatusView: View {
             Spacer(minLength: 0)
 
             HStack(spacing: 6) {
+                if notificationQueue.count > 1 {
+                    queueStepper
+                }
                 Spacer(minLength: 0)
                 if let paneId {
                     switch surface {
@@ -1223,13 +1236,70 @@ struct NotchStatusView: View {
         }
     }
 
-    private func dismissNotification(_ id: UUID) {
-        withAnimation(morphAnimation) {
-            if activeNotification?.id == id {
-                activeNotification = nil
+    /// Queue stepper: cycles the visible card without resolving anything.
+    /// New arrivals never silently replace the card being read.
+    private var queueStepper: some View {
+        HStack(spacing: 2) {
+            Button {
+                cycleQueueIndex(by: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help("Previous notification")
+            .accessibilityLabel("Previous notification")
+            Text("\(queueIndex + 1) of \(notificationQueue.count)")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundColor(.white.opacity(0.55))
+                .accessibilityLabel(
+                    "Notification \(queueIndex + 1) of \(notificationQueue.count)")
+            Button {
+                cycleQueueIndex(by: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Next notification")
+            .accessibilityLabel("Next notification")
+        }
+    }
+
+    private func dismissNotification(_ id: UUID) {
+        let topBefore = activeNotification?.id
+        withAnimation(morphAnimation) {
+            notificationQueue = IslandMetrics.notificationQueueRemove(
+                notificationQueue, id: id)
+            queueIndex = IslandMetrics.notificationQueueClampIndex(
+                queueIndex, count: notificationQueue.count)
+        }
+        if activeNotification?.id != topBefore {
+            cancelNotificationDetail()
+        }
+    }
+
+    /// Step the visible card through the queue. Detail follows the new top.
+    private func cycleQueueIndex(by delta: Int) {
+        guard notificationQueue.count > 1 else { return }
+        let count = notificationQueue.count
+        let next = (queueIndex + delta + count) % count
+        withAnimation(morphAnimation) {
+            queueIndex = next
         }
         cancelNotificationDetail()
+        if let top = activeNotification,
+            top.kind == .accessRequest || top.kind == .waiting
+        {
+            loadNotificationDetail(for: top)
+        }
     }
 
     /// Fetch a live pane excerpt when the approval event has no concrete
@@ -1970,10 +2040,16 @@ struct NotchStatusView: View {
                 || event.kind == .completed || event.kind == .failed
             {
                 withAnimation(morphAnimation) {
-                    activeNotification = event
+                    notificationQueue = IslandMetrics.notificationQueueInsert(
+                        notificationQueue, event: event)
+                    queueIndex = 0
                 }
-                if event.kind == .accessRequest || event.kind == .waiting {
-                    loadNotificationDetail(for: event)
+                // Detail belongs to the visible top card: reload it whenever
+                // the top is an approval, matching the old per-event refresh.
+                if let top = activeNotification,
+                    top.kind == .accessRequest || top.kind == .waiting
+                {
+                    loadNotificationDetail(for: top)
                 } else {
                     cancelNotificationDetail()
                 }
@@ -1983,19 +2059,19 @@ struct NotchStatusView: View {
                         try? await Task.sleep(for: .seconds(5))
                         guard !Task.isCancelled else { return }
                         withAnimation(morphAnimation) {
-                            if activeNotification?.id == event.id {
-                                activeNotification = nil
-                            }
+                            dismissNotification(event.id)
                         }
                     }
                 }
             } else {
-                let isWaitingApproval =
-                    activeNotification?.kind == .accessRequest
-                    || activeNotification?.kind == .waiting
-                if !isWaitingApproval {
+                let visibleKinds = Set(notificationQueue.map(\.kind))
+                let hasApprovalCard =
+                    visibleKinds.contains(.accessRequest)
+                    || visibleKinds.contains(.waiting)
+                if !hasApprovalCard {
                     withAnimation(morphAnimation) {
-                        activeNotification = nil
+                        notificationQueue = []
+                        queueIndex = 0
                     }
                     cancelNotificationDetail()
                 }
@@ -2041,11 +2117,39 @@ struct NotchStatusView: View {
                 withAnimation(.easeInOut(duration: 0.3)) { showDetail = true }
             }
         } else {
-            if activeNotification?.kind == .accessRequest || activeNotification?.kind == .waiting {
-                withAnimation(morphAnimation) {
-                    activeNotification = nil
+            // No current event: prune queued approvals whose pane is no
+            // longer blocked, so answered prompts vanish while other panes'
+            // cards stay. Transient notices clear with the event stream.
+            let blocked = eventManager.agents.filter {
+                $0.kind == .accessRequest || $0.kind == .waiting
+            }
+            func stillBlocked(_ item: AgentEvent) -> Bool {
+                blocked.contains {
+                    (item.paneId != nil && $0.paneId == item.paneId)
+                        || $0.source == item.sourceKey
                 }
-                cancelNotificationDetail()
+            }
+            let topBefore = activeNotification?.id
+            withAnimation(morphAnimation) {
+                notificationQueue = notificationQueue.filter { item in
+                    switch item.kind {
+                    case .accessRequest, .waiting:
+                        return stillBlocked(item)
+                    default:
+                        return false
+                    }
+                }
+                queueIndex = IslandMetrics.notificationQueueClampIndex(
+                    queueIndex, count: notificationQueue.count)
+            }
+            if activeNotification?.id != topBefore {
+                if let top = activeNotification,
+                    top.kind == .accessRequest || top.kind == .waiting
+                {
+                    loadNotificationDetail(for: top)
+                } else {
+                    cancelNotificationDetail()
+                }
             }
         }
     }

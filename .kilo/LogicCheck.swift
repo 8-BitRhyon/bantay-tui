@@ -725,6 +725,58 @@ struct LogicCheckMain {
                 == .waiting,
             "non-actionable approval is review-only")
 
+        // -- Notification queue: new arrivals never silently replace the
+        // card being read; priority rank then age; same-id refreshes.
+        let qDone = AgentEvent(
+            source: "kilo", kind: .completed, title: "done", message: nil,
+            paneId: "w3:p9", workspaceId: "w3", variance: nil, choices: nil,
+            playSound: false, persistent: false)
+        let qAsk = AgentEvent(
+            source: "kilo", kind: .accessRequest, title: "ask", message: nil,
+            paneId: "w3:p3", workspaceId: "w3", variance: nil, choices: nil,
+            playSound: true, persistent: true)
+        let qWait = AgentEvent(
+            source: "kilo", kind: .waiting, title: "wait", message: nil,
+            paneId: "w3:p4", workspaceId: "w3", variance: nil, choices: nil,
+            playSound: true, persistent: true)
+        var queue: [AgentEvent] = []
+        queue = IslandMetrics.notificationQueueInsert(queue, event: qDone)
+        queue = IslandMetrics.notificationQueueInsert(queue, event: qWait)
+        queue = IslandMetrics.notificationQueueInsert(queue, event: qAsk)
+        check(
+            queue.map(\.kind) == [.accessRequest, .waiting, .completed],
+            "queue sorts approvals before notices")
+        let refreshed = queue.count
+        queue = IslandMetrics.notificationQueueInsert(queue, event: qAsk)
+        check(
+            queue.count == refreshed,
+            "same-id reinsert refreshes without duplicating")
+        queue = IslandMetrics.notificationQueueRemove(queue, id: qAsk.id)
+        check(
+            queue.map(\.kind) == [.waiting, .completed],
+            "remove drops one card by id")
+        check(
+            IslandMetrics.notificationQueueRemove(queue, id: UUID()).count == queue.count,
+            "remove of absent id is a no-op")
+        check(
+            IslandMetrics.notificationQueueClampIndex(9, count: 2) == 1,
+            "stepper index clamps past the end")
+        check(
+            IslandMetrics.notificationQueueClampIndex(0, count: 0) == 0,
+            "stepper index on empty queue is zero")
+        var qCapped: [AgentEvent] = []
+        for i in 0..<8 {
+            qCapped = IslandMetrics.notificationQueueInsert(
+                qCapped,
+                event: AgentEvent(
+                    source: "kilo", kind: .completed, title: "n\(i)", message: nil,
+                    paneId: "w3:p\(i)", workspaceId: "w3", variance: nil,
+                    choices: nil, playSound: false, persistent: false))
+        }
+        check(
+            qCapped.count == IslandMetrics.maxNotificationQueueCount,
+            "queue caps at five cards")
+
         // -- Hover state machine (invariant 10-11)
 
         check(
