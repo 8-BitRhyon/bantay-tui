@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -50,24 +51,40 @@ public enum StandaloneAgentDispatcher {
             || clean == "zed" || clean == "vscode" || clean == "code"
     }
 
+    /// Accessibility gate: synthesized keystrokes silently fail without
+    /// the grant. Callers treat false as delivery failure, never success.
+    public static func accessibilityGranted() -> Bool {
+        AXIsProcessTrusted()
+    }
+
     @MainActor
+    @discardableResult
     public static func dispatchPrompt(
         agentName: String,
         text: String,
         cwd: String? = nil,
         pid: Int? = nil,
         autoSend: Bool = true
-    ) {
-        guard enableInputSynthesis else { return }
+    ) -> Bool {
+        guard enableInputSynthesis, accessibilityGranted() else { return false }
 
         let cleanName = cleanAgentName(from: agentName)
 
-        // 1. Copy text to pasteboard
+        // 1. Save the clipboard; dispatch clobbers it and must restore.
+        let savedTypes = NSPasteboard.general.types ?? []
+        let savedStrings = savedTypes.compactMap {
+            NSPasteboard.general.string(forType: $0)
+        }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
 
-        // 2. Focus target application or terminal via TerminalFocusser
-        _ = TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid)
+        // 2. Focus target application or terminal via TerminalFocusser.
+        // A failed focus aborts: pasting into the frontmost window would
+        // inject the task into the wrong app.
+        guard TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid) else {
+            restoreClipboard(strings: savedStrings)
+            return false
+        }
 
         // 3. Trackpad haptics
         NSHapticFeedbackManager.defaultPerformer.perform(
@@ -79,8 +96,21 @@ public enum StandaloneAgentDispatcher {
             let isGui = isGuiAgent(name: cleanName)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
                 pasteAndReturn(isGui: isGui)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) {
+                    restoreClipboard(strings: savedStrings)
+                }
             }
+        } else {
+            restoreClipboard(strings: savedStrings)
         }
+        return true
+    }
+
+    /// Best-effort clipboard restore after a dispatch clobber.
+    private static func restoreClipboard(strings: [String]) {
+        guard let first = strings.first else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(first, forType: .string)
     }
 
     @MainActor

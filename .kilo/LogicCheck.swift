@@ -481,6 +481,53 @@ struct LogicCheckMain {
                 lastOwnWrite: Date(timeIntervalSinceNow: -10), now: Date()),
             "old own write lets sync through")
 
+        // -- Dispatch matching: prefix-aware pane links, source match only
+        // for pane-less tasks, no silent delivery without input synthesis.
+        check(
+            TaskDispatcher.paneMatches(
+                linked: "standalone:antigravity",
+                paneId: "standalone:antigravity:Portfolio"),
+            "standalone link matches slugged pane")
+        check(
+            TaskDispatcher.paneMatches(linked: "w3:p1", paneId: "w3:p1"),
+            "exact pane ids match")
+        check(
+            !TaskDispatcher.paneMatches(linked: "w3:p1", paneId: "w3:p2"),
+            "different panes never match")
+        check(
+            !TaskDispatcher.paneMatches(linked: "", paneId: "w3:p1"),
+            "empty links never match")
+        do {
+            let tmpDir =
+                NSTemporaryDirectory() + "bantay-dispatch-\(UUID().uuidString)"
+            try? FileManager.default.createDirectory(
+                atPath: tmpDir, withIntermediateDirectories: true)
+            let store = TaskStore(
+                fileURL: URL(fileURLWithPath: tmpDir + "/tasks.json"))
+            let linked = store.addTask("Linked job @claude", syncReminders: false)
+            store.overrideExecutionForTesting(
+                taskID: linked.id, state: .working, paneID: "w3:p1")
+            let loose = store.addTask("Loose job @claude", syncReminders: false)
+            store.overrideExecutionForTesting(
+                taskID: loose.id, state: .working, paneID: nil)
+            store.updateTaskState(paneId: "w3:p2", source: "claude", kind: .completed)
+            check(
+                store.tasks.first { $0.id == linked.id }?.executionState == .working,
+                "other-pane events never flip linked tasks")
+            check(
+                store.tasks.first { $0.id == loose.id }?.isCompleted == true,
+                "source events complete pane-less tasks")
+            store.updateTaskState(paneId: "w3:p1", source: "other", kind: .failed)
+            check(
+                store.tasks.first { $0.id == linked.id }?.executionState == .failed,
+                "own-pane events transition linked tasks")
+            try? FileManager.default.removeItem(atPath: tmpDir)
+        }
+        check(
+            StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: "claude", text: "probe", autoSend: false) == false,
+            "no input synthesis in harness means no silent delivery")
+
         let jsonQuotas = QuotaAxiTracker.parseQuotaJSON(
             "[{\"provider\":\"Anthropic\",\"remainingPercent\":85.0,\"reset\":\"12h\",\"tier\":\"Pro\"}]"
         )
@@ -5446,10 +5493,10 @@ struct LogicCheckMain {
 
         // L82 TaskDispatcher Execution Seam Test
         let task2 = BantayTask(title: "Run tests @antigravity", assignedAgent: "antigravity")
-        let targetID = TaskDispatcher.shared.dispatch(task: task2)
+        let target = TaskDispatcher.shared.dispatch(task: task2)
         check(
-            targetID != nil && targetID!.contains("antigravity"),
-            "L82 TaskDispatcher resolves target agent target ID")
+            target.paneID == nil,
+            "L82 headless dispatch fails closed, never silent success")
 
         // L83 TaskStore dispatchTask Execution State Update Test
         let tempTaskStoreL83URL = FileManager.default.temporaryDirectory
@@ -5459,11 +5506,11 @@ struct LogicCheckMain {
         taskStoreL83.dispatchTask(task3.id)
         let updated = taskStoreL83.tasks.first { $0.id == task3.id }
         check(
-            updated?.executionState == .dispatched,
-            "L83 dispatchTask updates task executionState to dispatched")
+            updated?.executionState == .blocked,
+            "L83 failed delivery marks task blocked, not dispatched")
         check(
-            updated?.dispatchedAt != nil,
-            "L83 dispatchTask records dispatchedAt timestamp")
+            updated?.linkedPaneID == nil,
+            "L83 failed delivery links no pane")
 
         // L84 TaskStore Event Auto-Completion Test
         let task4 = taskStoreL83.addTask("Build feature @codex")
@@ -5519,8 +5566,8 @@ struct LogicCheckMain {
         let task8 = taskStoreL88.addTask("Auto task @pi")
         let added = taskStoreL88.tasks.first { $0.id == task8.id }
         check(
-            added?.executionState == .dispatched,
-            "L88 addTask auto-dispatches when autoDispatchTasks is true")
+            added?.executionState == .blocked,
+            "L88 headless auto-dispatch marks blocked, never fake dispatched")
         NotchHUDConfig.shared.autoDispatchTasks = false
 
         // L89 HUD Text Sanitization Test (Markdown links, escaped newlines, file URLs)
@@ -8021,8 +8068,8 @@ struct LogicCheckMain {
             )
             let targetPane = TaskDispatcher.shared.dispatch(task: antigravityTask)
             check(
-                targetPane == "app:antigravity" || targetPane?.contains("antigravity") == true,
-                "L147 dispatch routes antigravity task to app:antigravity target"
+                targetPane.paneID == nil && targetPane.actualAgent == "antigravity",
+                "L147 headless dispatch resolves the agent but delivers nothing"
             )
             let claudeTask = BantayTask(
                 title: "Fix bug in terminal",
@@ -8030,8 +8077,8 @@ struct LogicCheckMain {
             )
             let claudeTarget = TaskDispatcher.shared.dispatch(task: claudeTask)
             check(
-                claudeTarget == "standalone:claude",
-                "L147 dispatch routes terminal agent to standalone:claude target"
+                claudeTarget.paneID == nil && claudeTarget.actualAgent == "claude",
+                "L147 headless terminal dispatch resolves but delivers nothing"
             )
 
             // L148: Multi-provider quotas, search paths, and GUI dispatch routing
@@ -8083,10 +8130,11 @@ struct LogicCheckMain {
                 task: BantayTask(title: "CloudCode build", assignedAgent: "cloudcode")
             )
             check(
-                cursorDispatch == "app:cursor"
-                    && codexDispatch == "app:codex"
-                    && cloudCodeDispatch == "app:cloudcode",
-                "L148 TaskDispatcher dispatches cursor, codex, and cloudcode to GUI app targets"
+                cursorDispatch.paneID == nil && cursorDispatch.actualAgent == "cursor"
+                    && codexDispatch.paneID == nil && codexDispatch.actualAgent == "codex"
+                    && cloudCodeDispatch.paneID == nil
+                    && cloudCodeDispatch.actualAgent == "cloudcode",
+                "L148 disabled synthesis resolves agents but delivers nothing"
             )
 
             // L148 Live quota probing emits rows only for reported quotas.

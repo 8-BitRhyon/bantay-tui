@@ -235,6 +235,8 @@ public final class TaskStore: ObservableObject {
     }
 
     /// Dispatches an agent task to its target process or multiplexer pane.
+    /// A failed delivery (no Accessibility, unreachable app, dead pane)
+    /// marks the task blocked instead of lying about dispatch.
     public func dispatchTask(_ taskID: UUID) {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
         var task = tasks[index]
@@ -252,22 +254,46 @@ public final class TaskStore: ObservableObject {
             return
         }
 
-        let linkedPane = TaskDispatcher.shared.dispatch(task: task)
+        let result = TaskDispatcher.shared.dispatch(task: task)
+        guard let linkedPane = result.paneID else {
+            task.executionState = .blocked
+            task.linkedPaneID = nil
+            tasks[index] = task
+            save()
+            return
+        }
         task.executionState = .dispatched
         task.linkedPaneID = linkedPane
+        if let actual = result.actualAgent,
+            let assigned = task.assignedAgent,
+            actual.lowercased() != assigned.lowercased()
+        {
+            task.routedAgent = actual
+        } else {
+            task.routedAgent = nil
+        }
         task.dispatchedAt = Date()
         tasks[index] = task
         save()
     }
 
-    /// Updates task states matching an incoming agent event.
+    /// Updates task states matching an incoming agent event. Pane-linked
+    /// tasks transition only on their own pane's events (prefix-aware, so
+    /// `standalone:antigravity` matches `standalone:antigravity:Portfolio`);
+    /// source-name matching applies only to pane-less tasks. One agent's
+    /// completion must never flip every task carrying its name.
     func updateTaskState(paneId: String?, source: String, kind: AgentEventKind) {
         var changed = false
         for index in 0..<tasks.count {
             var task = tasks[index]
             guard !task.isCompleted else { continue }
-            let matchesPane = paneId != nil && task.linkedPaneID == paneId
-            let matchesSource = task.assignedAgent?.lowercased() == source.lowercased()
+            let matchesPane =
+                paneId != nil && task.linkedPaneID != nil
+                && TaskDispatcher.paneMatches(
+                    linked: task.linkedPaneID!, paneId: paneId!)
+            let matchesSource =
+                task.linkedPaneID == nil
+                && task.assignedAgent?.lowercased() == source.lowercased()
             guard matchesPane || matchesSource else { continue }
 
             let newState: TaskExecutionState
