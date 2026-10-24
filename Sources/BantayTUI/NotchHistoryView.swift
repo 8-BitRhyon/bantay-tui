@@ -199,6 +199,23 @@ struct NotchHistoryView: View {
                 .background(Color.white.opacity(0.07), in: Capsule())
             }
             .menuStyle(.borderlessButton)
+            Menu {
+                Button("Clear older rows", role: .destructive) {
+                    historyStore.clearLegacy()
+                }
+                Button("Clear all sessions", role: .destructive) {
+                    historyStore.clearAll()
+                }
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.45))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+            }
+            .menuStyle(.borderlessButton)
+            .help("Clear older rows (lifetime totals, not real per-session data) or all sessions")
+            .accessibilityLabel("Clear sessions")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

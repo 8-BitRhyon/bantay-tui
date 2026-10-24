@@ -6783,6 +6783,26 @@ struct LogicCheckMain {
         check(
             totals.legacyExcluded == 2,
             "summary reports excluded legacy rows")
+        // -- Clearing: legacy wipe keeps true deltas, full wipe empties.
+        do {
+            let tag = "ClearProbe \(UUID().uuidString)"
+            SessionHistoryStore.shared.addSession(
+                AgentSessionRecord(agentName: "probe", title: tag))
+            SessionHistoryStore.shared.addSession(
+                AgentSessionRecord(
+                    agentName: "probe", title: tag, totalTokens: 5, isDelta: true))
+            SessionHistoryStore.shared.clearLegacy()
+            let kept = SessionHistoryStore.shared.sessions.filter {
+                $0.title == tag
+            }
+            check(
+                kept.count == 1 && kept.first?.isDelta == true,
+                "clear-legacy keeps true deltas")
+            SessionHistoryStore.shared.clearAll()
+            check(
+                SessionHistoryStore.shared.sessions.allSatisfy { $0.title != tag },
+                "clear-all removes probe rows")
+        }
 
         // 2. ApprovalNotificationController action and category constants
         check(

@@ -183,6 +183,20 @@ public final class SessionHistoryStore: ObservableObject {
         save()
     }
 
+    /// Drop rows recorded before per-session tracking. Their numbers are
+    /// lifetime totals, not their own spend; deleting them loses no real
+    /// per-session data.
+    public func clearLegacy() {
+        sessions.removeAll { !$0.isDelta }
+        save()
+    }
+
+    /// Drop every recorded session, including real deltas.
+    public func clearAll() {
+        sessions = []
+        save()
+    }
+
     private func save() {
         if let encoded = try? JSONEncoder().encode(sessions) {
             UserDefaults.standard.set(encoded, forKey: "bantay_session_history")
