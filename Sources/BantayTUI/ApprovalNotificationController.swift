@@ -10,12 +10,14 @@ final class ApprovalNotificationController: NSObject,
 
     static let categoryID = "BANTAY_APPROVAL"
     static let choiceCategoryID = "BANTAY_APPROVAL_CHOICE"
+    static let questionCategoryID = "BANTAY_QUESTION"
     static let reviewCategoryID = "BANTAY_REVIEW"
     static let completedCategoryID = "BANTAY_COMPLETED"
     static let failedCategoryID = "BANTAY_FAILED"
 
     static let approveActionID = "BANTAY_APPROVE"
     static let denyActionID = "BANTAY_DENY"
+    static let answerActionID = "BANTAY_ANSWER"
     static let choiceActionIDPrefix = "BANTAY_CHOICE_"
     static let viewSessionActionID = "BANTAY_VIEW_SESSION"
     static let focusActionID = "BANTAY_FOCUS"
@@ -60,6 +62,19 @@ final class ApprovalNotificationController: NSObject,
                     title: "Choice \(index + 1)",
                     options: [.authenticationRequired]))
         }
+        let answer = UNNotificationAction(
+            identifier: Self.answerActionID, title: "Answer",
+            options: [.foreground])
+        // Questions never offer Approve/Deny: answering directly is the only
+        // safe quick action, plus Answer to open the full question.
+        var questionActions = [answer]
+        for index in 0..<Self.maxChoiceActions {
+            questionActions.append(
+                UNNotificationAction(
+                    identifier: Self.choiceActionIDPrefix + String(index),
+                    title: "Choice \(index + 1)",
+                    options: [.authenticationRequired]))
+        }
         let viewSession = UNNotificationAction(
             identifier: Self.viewSessionActionID, title: "View in Browser",
             options: [.foreground])
@@ -78,6 +93,9 @@ final class ApprovalNotificationController: NSObject,
                 identifier: Self.choiceCategoryID, actions: choiceActions,
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
+                identifier: Self.questionCategoryID, actions: questionActions,
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
                 identifier: Self.reviewCategoryID, actions: [focus, dismiss],
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
@@ -93,7 +111,9 @@ final class ApprovalNotificationController: NSObject,
         }
     }
 
-    /// Post an approval notification for a blocked event.
+    /// Post an approval notification for a blocked event. Events carrying
+    /// two or more choices are questions, not permissions: they get an
+    /// Answer action and numbered choices, never Approve/Deny.
     func postApproval(
         source: String, paneId: String?, title: String?, choices: [String]?,
         cwd: String? = nil, sessionPath: String? = nil
@@ -102,17 +122,22 @@ final class ApprovalNotificationController: NSObject,
         install()
         let content = UNMutableNotificationContent()
         let hasChoices = choices?.isEmpty == false
+        let isQuestion = (choices?.count ?? 0) >= 2
         let concrete = isConcreteApprovalTitle(title)
         content.title =
-            concrete || hasChoices ? "\(source) needs approval" : "\(source) is waiting"
+            isQuestion
+            ? "\(source) has a question"
+            : (concrete || hasChoices ? "\(source) needs approval" : "\(source) is waiting")
         content.body =
             concrete || hasChoices
             ? approvalBody(title: title, choices: choices)
             : "Open Bantay to review the request before deciding."
         content.sound = .default
         content.categoryIdentifier =
-            hasChoices
-            ? Self.choiceCategoryID : (concrete ? Self.categoryID : Self.reviewCategoryID)
+            isQuestion
+            ? Self.questionCategoryID
+            : (hasChoices
+                ? Self.choiceCategoryID : (concrete ? Self.categoryID : Self.reviewCategoryID))
         var info: [String: String] = ["paneId": paneId, "source": source]
         if let cwd { info["cwd"] = cwd }
         if let sessionPath { info["sessionPath"] = sessionPath }
@@ -282,6 +307,17 @@ final class ApprovalNotificationController: NSObject,
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
                 manager.deny(paneId: paneId)
+            case Self.answerActionID:
+                // Questions open where they can be answered: focus the exact
+                // terminal pane and expand the inbox. Never resolves anything.
+                if let paneId, paneId.hasPrefix("standalone:") {
+                    let agent = AgentEventManager.shared.agents.first { $0.paneId == paneId }
+                    TerminalFocusser.focusStandalone(source: source, cwd: cwd ?? agent?.cwd)
+                } else if let paneId {
+                    let manager = AgentEventManager.shared
+                    manager.performAction(paneId: paneId) { $0.focusPane(paneId: paneId) }
+                }
+                NotificationCenter.default.post(name: .notchExpandRequested, object: nil)
             case Self.viewSessionActionID:
                 let slug = cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? source
                 RichSessionViewer.openInBrowser(

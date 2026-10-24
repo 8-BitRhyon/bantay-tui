@@ -654,6 +654,26 @@ public enum IslandMetrics: Sendable {
         }
     }
 
+    /// What a blocked event asks of the user. Options always win: when an
+    /// event carries two or more choices it is a question, even if the
+    /// underlying kind is an approval — answering directly beats blanket
+    /// approval, and approving a question answers nothing. `actionable`
+    /// means this surface would otherwise offer Allow/Deny (the existing
+    /// concreteness gate lives with the caller).
+    enum PromptSurfaceKind: Sendable, Equatable {
+        case permission
+        case question
+        case waiting
+    }
+
+    static func promptSurfaceKind(
+        eventKind: AgentEventKind, actionable: Bool, choiceCount: Int
+    ) -> PromptSurfaceKind {
+        if choiceCount >= 2 { return .question }
+        if eventKind == .accessRequest && actionable { return .permission }
+        return .waiting
+    }
+
     // MARK: - Peripheral-vision & speed snacks
 
     /// Pulsing approval edge-glow color (amber, blocked state).

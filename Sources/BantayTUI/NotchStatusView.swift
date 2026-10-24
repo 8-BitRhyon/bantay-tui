@@ -936,6 +936,11 @@ struct NotchStatusView: View {
         let resolving = paneId.map { eventManager.isResolving(paneId: $0) } ?? false
         let projectLabel = notificationProjectLabel(event: event, agent: agent)
         let hasTitle = !IslandMetrics.isGenericApprovalText(event.title)
+        let canApprove = canApproveNotification(event: event, agent: agent)
+        let surface = IslandMetrics.promptSurfaceKind(
+            eventKind: event.kind,
+            actionable: canApprove,
+            choiceCount: controls.choices.count)
         let detail: String = {
             if let title = event.title, hasTitle {
                 let cleaned = IslandMetrics.cleanApprovalDetail(title)
@@ -951,7 +956,7 @@ struct NotchStatusView: View {
                 let cleaned = IslandMetrics.cleanApprovalDetail(message)
                 if !cleaned.isEmpty { return cleaned }
             }
-            return "Agent requires input"
+            return surface == .question ? "Agent has a question" : "Agent requires input"
         }()
         let contextLine: String? = {
             var parts: [String] = []
@@ -976,9 +981,14 @@ struct NotchStatusView: View {
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 7) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Color(hex: event.kind.color))
+                Image(
+                    systemName: surface == .permission
+                        ? "exclamationmark.triangle.fill"
+                        : (surface == .question
+                            ? "questionmark.circle.fill" : "hourglass")
+                )
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Color(hex: event.kind.color))
                 Text(event.sourceKey.capitalized)
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
@@ -989,16 +999,22 @@ struct NotchStatusView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 2)
-                Text(fromLivePane ? "LIVE PANE" : "NEEDS INPUT")
-                    .font(.system(size: 8.5, weight: .bold))
-                    .textCase(.uppercase)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        Color(hex: event.kind.color).opacity(0.25), in: Capsule()
-                    )
-                    .foregroundColor(Color(hex: event.kind.color))
-                    .fixedSize()
+                Text(
+                    fromLivePane
+                        ? "LIVE PANE"
+                        : (surface == .permission
+                            ? "NEEDS INPUT"
+                            : (surface == .question ? "QUESTION" : "WAITING"))
+                )
+                .font(.system(size: 8.5, weight: .bold))
+                .textCase(.uppercase)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Color(hex: event.kind.color).opacity(0.25), in: Capsule()
+                )
+                .foregroundColor(Color(hex: event.kind.color))
+                .fixedSize()
             }
 
             Text(detail)
@@ -1031,15 +1047,16 @@ struct NotchStatusView: View {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
                 if let paneId {
-                    if canApproveNotification(event: event, agent: agent) {
+                    switch surface {
+                    case .permission:
                         notificationApprovalActions(
                             event: event, paneId: paneId, controls: controls,
                             resolving: resolving)
-                    } else if !controls.isYesNo {
+                    case .question where !controls.isYesNo:
                         notificationApprovalActions(
                             event: event, paneId: paneId, controls: controls,
                             resolving: resolving)
-                    } else {
+                    default:
                         notificationActionButton(
                             title: "Review", systemName: "doc.text.magnifyingglass",
                             color: Color.white.opacity(0.8),
@@ -1412,13 +1429,28 @@ struct NotchStatusView: View {
     }
 
     private func approvalPill(event: AgentEvent, paneId: String) -> some View {
-        let variance = event.effectiveVariance
-        let choices = event.choices ?? []
+        let agent = mergedRoster.first(where: {
+            ($0.paneId != nil && $0.paneId == paneId)
+                || $0.source == event.sourceKey
+        })
+        let effectiveVariance = agent?.approval.variance ?? event.effectiveVariance
+        let effectiveChoices = agent?.approval.choices ?? event.choices ?? []
+        let canApprove = canApprovePill(event: event, paneId: paneId)
+        let surface = IslandMetrics.promptSurfaceKind(
+            eventKind: event.kind,
+            actionable: canApprove,
+            choiceCount: effectiveChoices.count)
+        let variance = effectiveVariance
+        let choices = effectiveChoices
         let pill = HStack(spacing: 8) {
             Circle().fill(Color(hex: event.kind.color)).frame(width: 7, height: 7)
-            Text(event.kind.label)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white)
+            Text(
+                surface == .question
+                    ? "Question"
+                    : (surface == .waiting ? "Waiting" : event.kind.label)
+            )
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundColor(.white)
             // Item 5: variance badge — distinguish yes/no from choice/multi.
             if variance != .yesNo {
                 Text(variance.label)
@@ -1439,9 +1471,12 @@ struct NotchStatusView: View {
                 }
             }
             Spacer(minLength: 8)
-            if canApprovePill(event: event, paneId: paneId) {
+            switch surface {
+            case .permission:
                 approvalActions(variance: variance, choices: choices, paneId: paneId)
-            } else {
+            case .question where variance != .yesNo:
+                approvalActions(variance: variance, choices: choices, paneId: paneId)
+            default:
                 approvalActionButton(
                     systemName: "doc.text.magnifyingglass", color: .white.opacity(0.8),
                     help: "Review the full request before deciding"

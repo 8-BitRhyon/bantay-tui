@@ -692,6 +692,39 @@ struct LogicCheckMain {
             multiEvent.effectiveVariance == .multi && multiEvent.choices?.count == 2,
             "multi variance carries choices")
 
+        // -- Prompt surface classification: options always win over
+        // blanket approval so questions never wear Allow/Deny.
+        check(
+            IslandMetrics.promptSurfaceKind(
+                eventKind: .accessRequest, actionable: true, choiceCount: 0)
+                == .permission,
+            "actionable approval without choices is a permission")
+        check(
+            IslandMetrics.promptSurfaceKind(
+                eventKind: .accessRequest, actionable: true, choiceCount: 3)
+                == .question,
+            "choices beat approval even when actionable")
+        check(
+            IslandMetrics.promptSurfaceKind(
+                eventKind: .waiting, actionable: false, choiceCount: 2)
+                == .question,
+            "waiting with options is a question")
+        check(
+            IslandMetrics.promptSurfaceKind(
+                eventKind: .waiting, actionable: false, choiceCount: 0)
+                == .waiting,
+            "plain waiting is review-only")
+        check(
+            IslandMetrics.promptSurfaceKind(
+                eventKind: .waiting, actionable: true, choiceCount: 0)
+                == .waiting,
+            "waiting never becomes a permission")
+        check(
+            IslandMetrics.promptSurfaceKind(
+                eventKind: .accessRequest, actionable: false, choiceCount: 0)
+                == .waiting,
+            "non-actionable approval is review-only")
+
         // -- Hover state machine (invariant 10-11)
 
         check(
