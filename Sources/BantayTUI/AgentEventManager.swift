@@ -738,7 +738,8 @@ final class AgentEventManager: ObservableObject {
                         ?? snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
                     branch: snap?.projectContext?.branch,
                     sessionPath: snap?.sessionPath,
-                    cwd: snap?.cwd))
+                    cwd: snap?.cwd,
+                    isDelta: true))
             usageBaselineByKey.removeValue(forKey: key)
         }
         if (event.kind == .completed || event.kind == .failed) && !isActive {

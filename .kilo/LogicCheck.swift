@@ -6713,6 +6713,21 @@ struct LogicCheckMain {
                 for: Date(timeIntervalSinceNow: -86_400)) == "Yesterday",
             "day groups label yesterday")
 
+        // -- Session summary: legacy lifetime rows never join delta sums.
+        let legacy = AgentSessionRecord(
+            agentName: "opencode", title: "old", totalTokens: 152_000_000,
+            costUSD: 0.78, status: "Completed")
+        let fresh = AgentSessionRecord(
+            agentName: "opencode", title: "new", totalTokens: 2_000_000,
+            costUSD: 0.05, status: "Completed", isDelta: true)
+        let totals = SessionHistorySummary.summarize([legacy, legacy, fresh])
+        check(
+            totals.count == 3 && totals.tokens == 2_000_000,
+            "summary sums only delta rows")
+        check(
+            totals.legacyExcluded == 2,
+            "summary reports excluded legacy rows")
+
         // 2. ApprovalNotificationController action and category constants
         check(
             ApprovalNotificationController.approveActionID == "BANTAY_APPROVE",

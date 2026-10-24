@@ -205,30 +205,36 @@ struct NotchHistoryView: View {
     }
 
     private var sessionsSummary: some View {
-        let totalCost = filteredSessions.reduce(0) { $0 + $1.costUSD }
-        let totalTokens = filteredSessions.reduce(0) { $0 + $1.totalTokens }
-        let failures = filteredSessions.filter(\.isFailed).count
+        let totals = SessionHistorySummary.summarize(filteredSessions)
         return HStack(spacing: 6) {
-            Text("\(filteredSessions.count) sessions")
+            Text("\(totals.count) sessions")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundColor(.white.opacity(0.55))
-            Text("· \(IslandMetrics.compactTokenCount(totalTokens)) tok")
+            Text("· \(IslandMetrics.compactTokenCount(totals.tokens)) tok")
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.white.opacity(0.45))
-            Text("· $\(String(format: "%.2f", totalCost))")
+            Text("· $\(String(format: "%.2f", totals.cost))")
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundColor(.green.opacity(0.8))
-            if failures > 0 {
-                Text("· \(failures) failed")
+            if totals.failures > 0 {
+                Text("· \(totals.failures) failed")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(BantayTheme.statusFailed.opacity(0.9))
+            }
+            if totals.legacyExcluded > 0 {
+                Text("· excludes \(totals.legacyExcluded) older")
+                    .font(.system(size: 8.5))
+                    .foregroundColor(.white.opacity(0.35))
+                    .help(
+                        "Rows recorded before per-session tracking show lifetime totals, not their own spend."
+                    )
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
         .accessibilityLabel(
-            "\(filteredSessions.count) sessions, \(totalTokens) tokens, $\(String(format: "%.2f", totalCost))"
+            "\(totals.count) sessions, \(totals.tokens) tokens, $\(String(format: "%.2f", totals.cost))"
         )
     }
 
@@ -347,6 +353,12 @@ struct NotchHistoryView: View {
 
     private func sessionStatsLine(_ session: AgentSessionRecord) -> some View {
         HStack(spacing: 4) {
+            Text(sessionClockTime(session.startTime))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.white.opacity(0.45))
+            Text("·")
+                .font(.system(size: 8))
+                .foregroundColor(.white.opacity(0.3))
             if session.durationSeconds > 0 {
                 Text(
                     IslandMetrics.elapsedLabel(
@@ -359,9 +371,20 @@ struct NotchHistoryView: View {
                     .font(.system(size: 8))
                     .foregroundColor(.white.opacity(0.3))
             }
-            Text("\(IslandMetrics.compactTokenCount(session.totalTokens)) tok")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(.white.opacity(0.6))
+            Text(
+                session.isDelta
+                    ? "\(IslandMetrics.compactTokenCount(session.totalTokens)) tok"
+                    : "\(IslandMetrics.compactTokenCount(session.totalTokens)) lifetime"
+            )
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundColor(
+                session.isDelta ? .white.opacity(0.6) : .white.opacity(0.4)
+            )
+            .help(
+                session.isDelta
+                    ? "Tokens used by this session"
+                    : "Lifetime total at the time; recorded before per-session tracking."
+            )
             Text("·")
                 .font(.system(size: 8))
                 .foregroundColor(.white.opacity(0.3))
@@ -377,6 +400,12 @@ struct NotchHistoryView: View {
                     session.isFailed
                         ? BantayTheme.statusFailed : BantayTheme.statusCompleted)
         }
+    }
+
+    private func sessionClockTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     private func sessionActionButton(

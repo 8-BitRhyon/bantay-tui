@@ -58,6 +58,10 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
     public var branch: String?
     public var sessionPath: String?
     public var cwd: String?
+    /// True when tokens/cost are this session's own delta. Rows recorded
+    /// before the delta fix hold the lifetime cumulative total instead and
+    /// must be labeled and summed separately.
+    public var isDelta: Bool
 
     public init(
         id: String = UUID().uuidString,
@@ -71,7 +75,8 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         project: String? = nil,
         branch: String? = nil,
         sessionPath: String? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        isDelta: Bool = false
     ) {
         self.id = id
         self.agentName = agentName
@@ -85,9 +90,34 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         self.branch = branch
         self.sessionPath = sessionPath
         self.cwd = cwd
+        self.isDelta = isDelta
     }
 
     public var isFailed: Bool { status == "Failed" }
+}
+
+/// Summary math for the sessions tab. Legacy rows (pre-delta lifetime
+/// totals) are excluded from token/cost sums — adding them would multiply
+/// one lifetime total by the row count. Reported separately so the header
+/// can say what it left out.
+public enum SessionHistorySummary: Sendable {
+    public struct Totals: Equatable, Sendable {
+        public let count: Int
+        public let tokens: Int
+        public let cost: Double
+        public let failures: Int
+        public let legacyExcluded: Int
+    }
+
+    public static func summarize(_ sessions: [AgentSessionRecord]) -> Totals {
+        let delta = sessions.filter(\.isDelta)
+        return Totals(
+            count: sessions.count,
+            tokens: delta.reduce(0) { $0 + $1.totalTokens },
+            cost: delta.reduce(0) { $0 + $1.costUSD },
+            failures: sessions.filter(\.isFailed).count,
+            legacyExcluded: sessions.count - delta.count)
+    }
 }
 
 /// Per-session usage delta. The live usage snapshot is cumulative per
