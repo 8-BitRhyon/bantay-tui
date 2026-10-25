@@ -304,9 +304,13 @@
             let cloudCodeDispatch = TaskDispatcher.shared.dispatch(
                 task: BantayTask(title: "CloudCode build", assignedAgent: "cloudcode")
             )
-            #expect(cursorDispatch == "app:cursor")
-            #expect(codexDispatch == "app:codex")
-            #expect(cloudCodeDispatch == "app:cloudcode")
+            // Delivery requires Accessibility and a reachable app; disabled
+            // synthesis must fail closed rather than claim a target.
+            #expect(cursorDispatch.paneID == nil && cursorDispatch.actualAgent == "cursor")
+            #expect(codexDispatch.paneID == nil && codexDispatch.actualAgent == "codex")
+            #expect(
+                cloudCodeDispatch.paneID == nil
+                    && cloudCodeDispatch.actualAgent == "cloudcode")
         }
 
         @Test("TaskDispatcher budget policy enforcement")
