@@ -736,6 +736,16 @@ public enum IslandMetrics: Sendable {
         "git push", "deploy", "rm -rf", "sudo", "migrate", "force",
     ]
 
+    /// Normalizes the Settings pattern editor: one pattern per line,
+    /// trimmed, empty lines dropped, case-insensitive duplicates removed.
+    public static func normalizedRiskyPatterns(_ raw: String) -> [String] {
+        var seen = Set<String>()
+        return raw.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0.lowercased()).inserted }
+    }
+
     public static func requiresSecondaryConfirm(
         text: String, patterns: [String]
     ) -> Bool {

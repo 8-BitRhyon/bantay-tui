@@ -74,6 +74,8 @@ struct SettingsView: View {
     @State private var notifyOnBudgetThresholds = NotchHUDConfig.shared.notifyOnBudgetThresholds
     @State private var notifyOnHighBurnRate = NotchHUDConfig.shared.notifyOnHighBurnRate
     @State private var confirmRiskyPrompts = NotchHUDConfig.shared.confirmRiskyPrompts
+    @State private var riskyPatternsText = NotchHUDConfig.shared.riskyPromptPatterns
+        .joined(separator: "\n")
     @State private var highBurnThresholdTPM = NotchHUDConfig.shared.highBurnThresholdTPM
     @State private var enforceBudgetLimit = NotchHUDConfig.shared.enforceBudgetLimit
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
@@ -179,7 +181,7 @@ struct SettingsView: View {
         ],
         "Approval safety": [
             "approval", "approve", "deny", "risk", "policy", "allow once",
-            "permission prompt",
+            "permission prompt", "risky patterns", "second click", "confirm",
         ],
         "Desktop HUD": [
             "desktop hud", "pin desktop", "auto-hide", "bottom dock", "spatial",
@@ -244,6 +246,16 @@ struct SettingsView: View {
             return keywords.contains { $0.localizedCaseInsensitiveContains(searchText) }
         }
         return false
+    }
+
+    private var activeRiskyPatternCount: Int {
+        IslandMetrics.normalizedRiskyPatterns(riskyPatternsText).count
+    }
+
+    private func saveRiskyPatterns() {
+        let patterns = IslandMetrics.normalizedRiskyPatterns(riskyPatternsText)
+        guard patterns != NotchHUDConfig.shared.riskyPromptPatterns else { return }
+        NotchHUDConfig.shared.riskyPromptPatterns = patterns
     }
 
     /// Sidebar row: icon + label, styled with BantayTheme tokens.
@@ -516,16 +528,6 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.notifyOnBudgetThresholds = newValue
                     }
                     Toggle(
-                        "Ask twice for risky approvals",
-                        isOn: $confirmRiskyPrompts
-                    )
-                    .help(
-                        "Adds a second Confirm click for pushes, deploys, sudo, deletes, and migrations."
-                    )
-                    .onChange(of: confirmRiskyPrompts) { newValue in
-                        NotchHUDConfig.shared.confirmRiskyPrompts = newValue
-                    }
-                    Toggle(
                         "Alert on high token burn rate (⚡ > \(highBurnThresholdTPM) tpm)",
                         isOn: $notifyOnHighBurnRate
                     )
@@ -567,6 +569,48 @@ struct SettingsView: View {
                     Text("Medium (edits, pushes, permission changes). Low (reads, status checks).")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    Divider()
+                    Toggle("Ask twice for risky approvals", isOn: $confirmRiskyPrompts)
+                        .help(
+                            "Adds a second Confirm click when the request matches one of the patterns below."
+                        )
+                        .onChange(of: confirmRiskyPrompts) { newValue in
+                            NotchHUDConfig.shared.confirmRiskyPrompts = newValue
+                        }
+                    if confirmRiskyPrompts {
+                        Text("Patterns (one per line, case-insensitive substrings).")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextEditor(text: $riskyPatternsText)
+                            .font(.system(size: 11, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .foregroundColor(.primary)
+                            .frame(minHeight: 72, maxHeight: 110)
+                            .padding(4)
+                            .background(Color.black.opacity(0.16))
+                            .cornerRadius(6)
+                            .onChange(of: riskyPatternsText) { _ in
+                                saveRiskyPatterns()
+                            }
+                        HStack {
+                            Text("\(activeRiskyPatternCount) active")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Reset to defaults") {
+                                riskyPatternsText =
+                                    IslandMetrics.defaultRiskyPromptPatterns
+                                    .joined(separator: "\n")
+                                saveRiskyPatterns()
+                            }
+                            .controlSize(.small)
+                        }
+                        if activeRiskyPatternCount == 0 {
+                            Text("No patterns: risky approvals use one click.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
                     Button("Open Agents inbox") {
                         NotificationCenter.default.post(
                             name: .notchExpandRequested, object: nil)
@@ -1615,6 +1659,9 @@ struct SettingsView: View {
         isRefreshingConfig = true
         captureEnabled = NotchHUDConfig.shared.captureEnabled
         enableAlerts = NotchHUDConfig.shared.enableAgentAlerts
+        confirmRiskyPrompts = NotchHUDConfig.shared.confirmRiskyPrompts
+        riskyPatternsText = NotchHUDConfig.shared.riskyPromptPatterns
+            .joined(separator: "\n")
         notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
         quietHoursEnabled = NotchHUDConfig.shared.quietHoursEnabled
         mutedSources = NotchHUDConfig.shared.mutedSources
@@ -1861,6 +1908,7 @@ struct WelcomeView: View {
     @State private var launchAtLogin = false
     @State private var isRefreshingConfig = false
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
+    @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -1883,6 +1931,46 @@ struct WelcomeView: View {
                 .onChange(of: hideAtStartup) { newValue in
                     NotchHUDConfig.shared.hideAtStartup = newValue
                 }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(
+                        systemName: hasAccessibility
+                            ? "checkmark.circle.fill" : "circle.dashed"
+                    )
+                    .foregroundColor(hasAccessibility ? .green : .secondary)
+                    Text(
+                        hasAccessibility
+                            ? "Accessibility granted"
+                            : "Accessibility (optional)"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if !hasAccessibility {
+                        Button("Grant…") {
+                            StripWindowRegistry.promptAccessibilityPermission()
+                            StripWindowRegistry.openAccessibilitySettings()
+                            hasAccessibility =
+                                StripWindowRegistry.hasAccessibilityPermission()
+                        }
+                        Button("Check again") {
+                            hasAccessibility =
+                                StripWindowRegistry.hasAccessibilityPermission()
+                        }
+                        .buttonStyle(.link)
+                    }
+                }
+                Text(
+                    hasAccessibility
+                        ? "Bantay can focus terminals, type into apps, and move the Desktop strip."
+                        : "Lets Bantay focus terminals, type into apps, and move the Desktop strip. The notch inbox and pane approvals work without it."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .background(Color.white.opacity(0.05))
+            .cornerRadius(8)
             HStack {
                 Spacer()
                 Button("Done") {

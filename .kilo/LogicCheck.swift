@@ -8894,6 +8894,13 @@ struct LogicCheckMain {
                     text: "git push", patterns: []),
                 "L152 an empty pattern list never confirms")
             check(
+                IslandMetrics.normalizedRiskyPatterns(
+                    " git push \n\nDEPLOY\ndeploy\n") == ["git push", "DEPLOY"],
+                "L152 risky pattern editor trims and dedupes")
+            check(
+                IslandMetrics.normalizedRiskyPatterns("  \n\n") == [],
+                "L152 empty risky pattern text clears the list")
+            check(
                 AgentEventManager.ActionFailure.deadPane.message.contains("pane"),
                 "L152 dead-pane failure names the pane")
             check(
