@@ -27,12 +27,19 @@ public enum IslandHitTracker {
     }
 }
 
+/// Hosting view that takes the first mouse click even when its window is a
+/// non-activating panel. The hit-tested view, not its container, decides
+/// whether a click is delivered, so the override must live here.
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// AppKit drag destination hosting SwiftUI island content.
 final class FileDropContentView<Content: View>: NSView {
-    let hosting: NSHostingView<Content>
+    let hosting: FirstMouseHostingView<Content>
 
     init(rootView: Content) {
-        hosting = NSHostingView(rootView: rootView)
+        hosting = FirstMouseHostingView(rootView: rootView)
         super.init(frame: .zero)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hosting)
