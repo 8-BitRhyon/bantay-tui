@@ -120,15 +120,21 @@ brew install --cask bantay-tui
 
 ### Local Development Signing
 
-`scripts/setup.sh` creates a local self-signed certificate named `Bantay Local Dev` on first run and signs the installed app with it. This gives macOS a stable code requirement. Accessibility permission therefore survives rebuilds.
+`scripts/setup.sh` creates a local self-signed certificate named `Bantay Local Dev` on first run and signs the installed app with it. This gives macOS a stable code requirement. Accessibility and Reminders permissions therefore survive rebuilds.
 
-On the first install only, grant Bantay-TUI access in System Settings > Privacy & Security > Accessibility. If a stale entry remains, remove it with the minus button and drag the installed app back in:
+Run `bash scripts/doctor.sh` when a permission prompt keeps returning. It prints the stored code requirement and lists every certificate with the signing name. These two failures cause most repeats:
 
-```text
-~/Library/Application Support/Bantay-TUI/Bantay-TUI.app
+1. The requirement shows `cdhash`. The build is ad-hoc signed. Ad-hoc signatures change on every rebuild, so macOS sees a new app. Rerun `scripts/setup.sh` and check that it prints `signed-with: Bantay Local Dev`.
+2. Two certificates share the same name. `codesign` picks one unpredictably, so the requirement changes between installs. `scripts/doctor.sh` reports duplicates. Keep one identity, or let `scripts/setup.sh` recreate the keychain.
+
+If grants look stale after switching signatures, reset them once and grant again:
+
+```bash
+tccutil reset Accessibility com.bantay-tui
+tccutil reset Reminders com.bantay-tui
 ```
 
-Set `BANTAY_DISABLE_DEV_SIGNING=1` to keep ad-hoc signing. Ad-hoc builds get a new cdhash on every rebuild, which resets Accessibility. Distribution builds continue to use Developer ID signing and notarization.
+Set `BANTAY_ALLOW_ADHOC=1` to accept ad-hoc signing when no identity exists. Without it, `scripts/setup.sh` stops instead of silently switching signatures. Ad-hoc builds get a new cdhash on every rebuild, which resets permissions. Distribution builds continue to use Developer ID signing and notarization.
 
 ### System Requirements
 

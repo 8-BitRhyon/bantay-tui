@@ -60,6 +60,7 @@ All notable changes to this project are documented in this file. The format is b
 - **HUD Row Controls** (`AgentRowView.swift`, `NotchStatusView.swift`): Canonicalized agent names by stripping project path slugs before routing focus and prompt dispatching.
 - **Live Strip Status** (`ControlGateway.swift`, `StripStatusProvider.swift`): `bantay strip status` now returns live columns, window titles, agent metadata, Accessibility state, and full-screen state. It replaces the static config output.
 - **Audit Fixes** (`NotchHUDConfig.swift`, `SettingsView.swift`, `UsageTracker.swift`, `TaskStore.swift`, `RemindersProvider.swift`): Six settings now reload after relaunch: tab visibility, usage tracking, and hover sensitivity. Older session rows decode with safe defaults instead of wiping history. Dead duplicate config keys are gone. One Shelf toggle remains. The burn threshold has a stepper. The working sound has a picker. Roster grouping and token rate have controls. Token formatting uses one k/M/B formatter. Standalone tasks complete again, and un-completing reopens the reminder.
+- **Stable Signing** (`scripts/setup.sh`, `scripts/ensure-dev-signing-identity.sh`, `scripts/doctor.sh`): Signing now uses one certificate and stops when no identity exists. A stale keychain password recreates the identity instead of failing silently. Duplicate certificates no longer confuse the signer. `doctor.sh` explains why prompts return. The SIP-blocked TCC database edit is gone.
 
 ### Fixed
 

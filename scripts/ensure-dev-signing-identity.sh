@@ -33,12 +33,6 @@ CONFIG_DIR="$HOME/.config/bantay"
 KEYCHAIN="${BANTAY_DEV_KEYCHAIN:-$CONFIG_DIR/signing.keychain-db}"
 PW_FILE="$CONFIG_DIR/.signing-keychain-pass"
 
-if security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
-    | grep -Fq "\"$IDENTITY_NAME\""; then
-    echo "$IDENTITY_NAME"
-    exit 0
-fi
-
 if [[ "${BANTAY_DISABLE_DEV_SIGNING:-0}" == "1" ]]; then
     echo "bantay-tui: local signing disabled by BANTAY_DISABLE_DEV_SIGNING" >&2
     exit 1
@@ -53,13 +47,33 @@ if [[ ! -f "$PW_FILE" ]]; then
 fi
 PW="$(cat "$PW_FILE")"
 
+# Validate the keychain BEFORE trusting the identity listing. `find-identity`
+# lists certificates without unlocking the keychain, so a stale password file
+# looks healthy until codesign runs and fails — and a failed sign falls back
+# to ad-hoc, which changes the TCC requirement and re-prompts.
+if [[ -f "$KEYCHAIN" ]] && ! security unlock-keychain -p "$PW" "$KEYCHAIN" >/dev/null 2>&1; then
+    echo "bantay-tui: signing keychain password is stale; recreating it." >&2
+    rm -f "$KEYCHAIN" "$KEYCHAIN"-db "$KEYCHAIN"-shm "$CONFIG_DIR/dev-signing.crt"
+    openssl rand -hex 32 > "$PW_FILE"
+    chmod 600 "$PW_FILE"
+    PW="$(cat "$PW_FILE")"
+fi
+
+if IDENTITY_HASH="$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null \
+    | awk -v name="$IDENTITY_NAME" 'index($0, "\"" name "\"") && $1 ~ /^[0-9]+\)$/ {print $2; exit}')" \
+    && [[ -n "$IDENTITY_HASH" ]]; then
+    echo "$IDENTITY_HASH"
+    exit 0
+fi
+
 if [[ ! -f "$KEYCHAIN" ]]; then
     security create-keychain -p "$PW" "$KEYCHAIN" >/dev/null
 fi
 security unlock-keychain -p "$PW" "$KEYCHAIN" >/dev/null
 
-if ! security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
-    | grep -Fq "\"$IDENTITY_NAME\""; then
+if ! IDENTITY_HASH="$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null \
+    | awk -v name="$IDENTITY_NAME" 'index($0, "\"" name "\"") && $1 ~ /^[0-9]+\)$/ {print $2; exit}')" \
+    || [[ -z "$IDENTITY_HASH" ]]; then
     echo "bantay-tui: creating local code-signing identity \"$IDENTITY_NAME\"..." >&2
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/bantay-signing.XXXXXX")"
     trap 'rm -rf "$WORK"' EXIT
@@ -96,12 +110,14 @@ if ! security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
     cp "$WORK/cert.pem" "$HOME/.config/bantay/dev-signing.crt"
 fi
 
-if ! security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
-    | grep -Fq "\"$IDENTITY_NAME\""; then
+if ! IDENTITY_HASH="$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null \
+    | awk -v name="$IDENTITY_NAME" 'index($0, "\"" name "\"") && $1 ~ /^[0-9]+\)$/ {print $2; exit}')" \
+    || [[ -z "$IDENTITY_HASH" ]]; then
     echo "bantay-tui: identity created but not trusted yet." >&2
     echo "bantay-tui: open Keychain Access, select \"$IDENTITY_NAME\"," >&2
     echo "bantay-tui: then Trust > Code Signing > Always Trust." >&2
     exit 1
 fi
 
-echo "$IDENTITY_NAME"
+IDENTITY_HASH="$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null | awk -v name="$IDENTITY_NAME" 'index($0, "\"" name "\"") && $1 ~ /^[0-9]+\)$/ {print $2; exit}')"
+echo "$IDENTITY_HASH"

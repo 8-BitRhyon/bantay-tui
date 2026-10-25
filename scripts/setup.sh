@@ -212,38 +212,62 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 PLIST
 
 # Sign the bundle with a stable identity so macOS TCC grants survive rebuilds.
-# Ad-hoc signatures use a per-build cdhash as the designated requirement, so
-# Accessibility resets every time the binary changes. The local self-signed
-# identity keeps the requirement anchored to the certificate instead.
-SIGN_IDENTITY="-"
+# Ad-hoc signatures pin the designated requirement to a per-build cdhash, so
+# every rebuild looks like a new app and prompts again. The local self-signed
+# identity anchors the requirement to the certificate instead.
+#
+# Ad-hoc is opt-in: silently falling back to it is what makes grants flap, so
+# this script refuses unless BANTAY_ALLOW_ADHOC=1 is set.
+SIGN_IDENTITY=""
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   SIGN_IDENTITY="$CODESIGN_IDENTITY"
 elif DEV_IDENTITY="$(bash "$ROOT/scripts/ensure-dev-signing-identity.sh")"; then
   SIGN_IDENTITY="$DEV_IDENTITY"
 fi
-echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui (identity: $SIGN_IDENTITY)"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  if [[ "${BANTAY_ALLOW_ADHOC:-0}" == "1" ]]; then
+    SIGN_IDENTITY="-"
+    echo "bantay-tui: no signing identity; using ad-hoc (BANTAY_ALLOW_ADHOC=1)." >&2
+    echo "bantay-tui: permissions will reset on every rebuild." >&2
+  else
+    echo "bantay-tui: no stable signing identity available." >&2
+    echo "bantay-tui: run scripts/ensure-dev-signing-identity.sh, then retry." >&2
+    echo "bantay-tui: set BANTAY_ALLOW_ADHOC=1 to accept ad-hoc signing." >&2
+    exit 1
+  fi
+fi
+echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  echo "bantay-tui: signed-with: ad-hoc (permissions reset on rebuild)"
   codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
 else
   # Unlock the dedicated dev-signing keychain non-interactively so codesign
-  # never blocks on a GUI authorization dialog.
+  # never blocks on a GUI authorization dialog, and add it to the search list
+  # only for this call: codesign does not reliably resolve --keychain for
+  # identity lookup, and a same-named certificate elsewhere wins silently.
   DEV_KEYCHAIN="${BANTAY_DEV_KEYCHAIN:-$HOME/.config/bantay/signing.keychain-db}"
   DEV_PW_FILE="$HOME/.config/bantay/.signing-keychain-pass"
   if [[ -f "$DEV_KEYCHAIN" && -f "$DEV_PW_FILE" ]]; then
     security unlock-keychain -p "$(cat "$DEV_PW_FILE")" "$DEV_KEYCHAIN" >/dev/null 2>&1 || true
-    codesign --force --keychain "$DEV_KEYCHAIN" --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+    ORIGINAL_KEYCHAINS="$(security list-keychains -d user | sed 's/^ *//; s/"//g')"
+    # shellcheck disable=SC2086
+    restore_keychains() { security list-keychains -d user -s $ORIGINAL_KEYCHAINS; }
+    trap restore_keychains EXIT
+    security list-keychains -d user -s "$DEV_KEYCHAIN" $ORIGINAL_KEYCHAINS
+    codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+    restore_keychains
+    trap - EXIT
   else
     codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
   fi
+  echo "bantay-tui: signed-with: $SIGN_IDENTITY (permissions survive rebuilds)"
 fi
 
-# Ensure TCC uses the designated identifier requirement.
-if command -v sqlite3 >/dev/null 2>&1; then
-  TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
-  if [[ -w "$TCC_DB" ]]; then
-    sqlite3 "$TCC_DB" "UPDATE access SET csreq = X'fade0c000000002400000001000000020000000e636f6d2e62616e7461792d7475690000' WHERE client='com.bantay-tui' AND service='kTCCServiceReminders' AND hex(csreq) LIKE '%0000000800000014%';" 2>/dev/null || true
-  fi
-fi
+# TCC grants are keyed to the signed requirement, not the bundle ID. Writing
+# TCC.db directly is blocked by SIP, so this script never attempts it. If a
+# grant looks stale after switching signing identities, reset it once:
+#   tccutil reset Accessibility com.bantay-tui
+#   tccutil reset Reminders com.bantay-tui
 
 cat > "$AGENTS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
