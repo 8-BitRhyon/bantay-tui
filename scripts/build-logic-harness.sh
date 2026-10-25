@@ -37,6 +37,7 @@ UI_ONLY=(
   SpendHistoryView.swift
   StripGestureInterceptor.swift
   StripMiniMapHUD.swift
+  StripIndicatorController.swift
   StripOverlayRenderer.swift
   StripWindowManager.swift
   StripWindowRegistry.swift

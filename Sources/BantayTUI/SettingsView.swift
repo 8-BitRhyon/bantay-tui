@@ -135,6 +135,7 @@ struct SettingsView: View {
     @State private var stripSpringOmega = StripConfiguration.load().springOmega
     @State private var stripDimInactive = StripConfiguration.load().dimInactive
     @State private var stripChevrons = StripConfiguration.load().showNavigationChevrons
+    @State private var stripIndicator = StripConfiguration.load().showStripIndicator
     @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
     @State private var openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
@@ -819,6 +820,11 @@ struct SettingsView: View {
                 Section("Navigation & Shortcuts (hold ⌃⌥)") {
                     Toggle("Enable strip global hotkeys", isOn: $stripHotkeys)
                         .onChange(of: stripHotkeys) { _ in updateStripConfig() }
+                    Toggle("Show strip indicator while navigating", isOn: $stripIndicator)
+                        .help(
+                            "Hold Control-Option to keep it on screen. Click a tile to jump, drag to reorder."
+                        )
+                        .onChange(of: stripIndicator) { _ in updateStripConfig() }
                     Toggle("Show edge navigation chevrons", isOn: $stripChevrons)
                         .help("Show clickable left and right arrows at the screen edges.")
                         .onChange(of: stripChevrons) { _ in updateStripConfig() }
@@ -1577,6 +1583,7 @@ struct SettingsView: View {
         stripSpringOmega = stripCfg.springOmega
         stripDimInactive = stripCfg.dimInactive
         stripChevrons = stripCfg.showNavigationChevrons
+        stripIndicator = stripCfg.showStripIndicator
         desktopHUDPinned = DesktopHUDController.shared.isPinned
         openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
         hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
@@ -1616,6 +1623,7 @@ struct SettingsView: View {
         cfg.springOmega = stripSpringOmega
         cfg.dimInactive = stripDimInactive
         cfg.showNavigationChevrons = stripChevrons
+        cfg.showStripIndicator = stripIndicator
         cfg.save()
         StripWindowManager.shared.config = cfg
     }

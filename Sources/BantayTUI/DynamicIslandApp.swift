@@ -344,6 +344,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 StripWindowManager.shared.toggle()
             }
         }
+        // Instantiate the indicator so its navigation observers and the
+        // Control-Option hold monitor exist for the whole session.
+        _ = StripIndicatorController.shared
         NotificationCenter.default.addObserver(
             forName: .stripFocusRequested,
             object: nil,

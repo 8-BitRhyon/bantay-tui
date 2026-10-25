@@ -12,7 +12,12 @@ public struct StripConfiguration: Equatable, Sendable {
     public var springOmega: Double
     public var dimInactive: Bool
     public var showNavigationChevrons: Bool
+    /// Show the strip indicator while navigating (hold Control-Option to pin).
+    public var showStripIndicator: Bool
     public var ignoredBundleIDs: [String]
+
+    /// How long the navigation indicator stays before fading out.
+    public static let indicatorAutoHideSeconds: TimeInterval = 1.6
 
     public static let defaultIgnoredBundleIDs: [String] = [
         "com.apple.calculator",
@@ -37,6 +42,7 @@ public struct StripConfiguration: Equatable, Sendable {
         springOmega: Double = 13.0,
         dimInactive: Bool = true,
         showNavigationChevrons: Bool = true,
+        showStripIndicator: Bool = true,
         ignoredBundleIDs: [String] = defaultIgnoredBundleIDs
     ) {
         self.isEnabled = isEnabled
@@ -49,6 +55,7 @@ public struct StripConfiguration: Equatable, Sendable {
         self.springOmega = springOmega
         self.dimInactive = dimInactive
         self.showNavigationChevrons = showNavigationChevrons
+        self.showStripIndicator = showStripIndicator
         self.ignoredBundleIDs = ignoredBundleIDs
     }
 
@@ -64,6 +71,7 @@ public struct StripConfiguration: Equatable, Sendable {
         let omega = defaults.object(forKey: "bantay.strip.springOmega") as? Double ?? 13.0
         let dimInactive = defaults.object(forKey: "bantay.strip.dimInactive") as? Bool ?? true
         let chevrons = defaults.object(forKey: "bantay.strip.chevrons") as? Bool ?? true
+        let indicator = defaults.object(forKey: "bantay.strip.indicator") as? Bool ?? true
         let ignored =
             defaults.stringArray(forKey: "bantay.strip.ignored") ?? defaultIgnoredBundleIDs
 
@@ -78,6 +86,7 @@ public struct StripConfiguration: Equatable, Sendable {
             springOmega: omega,
             dimInactive: dimInactive,
             showNavigationChevrons: chevrons,
+            showStripIndicator: indicator,
             ignoredBundleIDs: ignored
         )
     }
@@ -94,6 +103,7 @@ public struct StripConfiguration: Equatable, Sendable {
         defaults.set(springOmega, forKey: "bantay.strip.springOmega")
         defaults.set(dimInactive, forKey: "bantay.strip.dimInactive")
         defaults.set(showNavigationChevrons, forKey: "bantay.strip.chevrons")
+        defaults.set(showStripIndicator, forKey: "bantay.strip.indicator")
         defaults.set(ignoredBundleIDs, forKey: "bantay.strip.ignored")
     }
 

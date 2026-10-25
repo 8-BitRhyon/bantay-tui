@@ -8605,6 +8605,38 @@ struct LogicCheckMain {
                 reordered,
                 "L152 reorder swaps column order"
             )
+            // Indicator reorder guards: out-of-range drags are no-ops, never
+            // crashes or silent data loss.
+            let countBeforeBadReorder = cols.count
+            check(
+                !StripLayoutEngine.reorder(fromIndex: -1, toIndex: 0, columns: &cols)
+                    && !StripLayoutEngine.reorder(fromIndex: 0, toIndex: 99, columns: &cols)
+                    && cols.count == countBeforeBadReorder,
+                "L152 reorder rejects out-of-range tile drags"
+            )
+
+            // Strip indicator config: on by default, persists, and the
+            // auto-hide window stays short enough not to nag.
+            let stripDefaults = UserDefaults(
+                suiteName: "bantay.harness.strip.\(UUID().uuidString)")!
+            let stripCfgDefault = StripConfiguration.load(from: stripDefaults)
+            check(
+                stripCfgDefault.showStripIndicator,
+                "L152 strip indicator is on by default"
+            )
+            var stripCfgOff = stripCfgDefault
+            stripCfgOff.showStripIndicator = false
+            stripCfgOff.save(to: stripDefaults)
+            check(
+                !StripConfiguration.load(from: stripDefaults).showStripIndicator,
+                "L152 strip indicator setting persists"
+            )
+            stripDefaults.removePersistentDomain(
+                forName: stripDefaults.volatileDomainNames.first ?? "")
+            check(
+                StripConfiguration.indicatorAutoHideSeconds <= 2.0,
+                "L152 indicator auto-hides without nagging"
+            )
 
             // Layer 153: Overview Zoom Mode, Auto-Chaining, GUI Dispatcher & Ghostty Bundle
             let overview = StripLayoutEngine.computeOverviewLayout(
