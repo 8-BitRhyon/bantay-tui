@@ -43,7 +43,7 @@ public final class MediaController: ObservableObject {
     public func startPolling() {
         guard ApprovalNotificationController.hasBundleProxy else { return }
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.pollMediaState()
             }
@@ -57,8 +57,14 @@ public final class MediaController: ObservableObject {
             let spotifyTrack = musicTrack == nil ? Self.fetchSpotifyState() : nil
             let track = musicTrack ?? spotifyTrack
             await MainActor.run { [weak self] in
-                self?.currentTrack = track
-                self?.isPlaying = track?.isPlaying ?? false
+                guard let self else { return }
+                if self.currentTrack != track {
+                    self.currentTrack = track
+                }
+                let playing = track?.isPlaying ?? false
+                if self.isPlaying != playing {
+                    self.isPlaying = playing
+                }
             }
         }
     }

@@ -133,6 +133,9 @@ final class AwayDigestStore: ObservableObject {
     func recordCompletion(_ completion: RecentCompletion) {
         guard isAway else { return }
         awayCompletions.append(completion)
+        if awayCompletions.count > 200 {
+            awayCompletions.removeFirst(awayCompletions.count - 200)
+        }
     }
 
     /// Records that an agent failed or hit an error while away.
@@ -140,6 +143,9 @@ final class AwayDigestStore: ObservableObject {
         guard isAway else { return }
         let entry = reason != nil ? "\(agent): \(reason!)" : agent
         awayFailures.append(entry)
+        if awayFailures.count > 100 {
+            awayFailures.removeFirst(awayFailures.count - 100)
+        }
     }
 
     /// Records an approval resolved while away (e.g. phone approval via ntfy).

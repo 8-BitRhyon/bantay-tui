@@ -335,8 +335,11 @@ final class AgentEventManager: ObservableObject {
     private var isRefreshingRoster = false
     /// PERF-2: minimum interval between standalone `ps` scans.
     /// Standalone transcripts have no push channel, but their status does
-    /// not need sub-5s resolution. Each scan is a `ps` spawn plus tail parse.
-    static let minScanInterval: TimeInterval = 5.0
+    /// not need sub-10s resolution. Each scan is a `ps` spawn plus tail parse.
+    static let minScanInterval: TimeInterval = 10.0
+    /// Standalone discovery can idle slower while no detected agent is
+    /// working; herdr panes still arrive over the push stream.
+    static let idleScanInterval: TimeInterval = 20.0
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
     /// expensive enumeration + read on each poll.
     private var transcriptMtimes: [String: Date] = [:]
@@ -362,9 +365,9 @@ final class AgentEventManager: ObservableObject {
     /// ledger refreshes on file change.
     private var lifetimeAccrual = UsageTracker.LifetimeAccrualState()
     private var lifetimeOpencodeRevision: UInt64 = 0
-    /// Full transcript sweeps are expensive; 10s is enough for session
+    /// Full transcript sweeps are expensive; 30s is enough for session
     /// deltas without burning a core every poll.
-    private let lifetimeAccrualInterval: TimeInterval = 10
+    private let lifetimeAccrualInterval: TimeInterval = 30
     private var lastLifetimeAccrualAt = Date.distantPast
     private var lastUsagePollAt = Date.distantPast
     /// Whether the baseline came from a covered source (true delta) or a
@@ -1091,7 +1094,7 @@ extension AgentEventManager {
         captureTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, !self.displayAsleep else {
-                    try? await Task.sleep(for: .milliseconds(500))
+                    try? await Task.sleep(for: .seconds(5))
                     continue
                 }
                 // The push event stream keeps status live; the poll loop now
@@ -1123,11 +1126,14 @@ extension AgentEventManager {
         // the island never beachballs while polling. PERF-2: throttle the ps
         // spawn to `minScanInterval` — the roster is fine updating every few
         // seconds without re-scanning the process table each time.
+        let scanInterval: TimeInterval =
+            lastDetectedAgents.contains(where: { $0.isWorking })
+            ? Self.minScanInterval : Self.idleScanInterval
         let rescan =
             scanStandalone
             && StandaloneAgentScanner.shouldRescan(
                 lastScan: lastStandaloneScan, now: Date(),
-                minInterval: Self.minScanInterval)
+                minInterval: scanInterval)
         if rescan {
             lastStandaloneScan = Date()
             if let existing = activeScanTask {
@@ -1179,10 +1185,10 @@ extension AgentEventManager {
         }.value
         // Transcript token/cost enumeration is gated behind `usageTrackingEnabled`.
         // Usage sweeps read transcripts. Run them on a calmer cadence than
-        // the roster poll: 5s while agents are live, 60s when idle. The
+        // the roster poll: 15s while agents are live, 120s when idle. The
         // header is the only consumer, so a slower gauge is not felt.
         let usageNow = Date()
-        let usageInterval: TimeInterval = agents.isEmpty ? 60 : 5
+        let usageInterval: TimeInterval = agents.isEmpty ? 120 : 15
         if NotchHUDConfig.shared.usageTrackingEnabled,
             usageNow.timeIntervalSince(lastUsagePollAt) >= usageInterval
         {
@@ -1192,7 +1198,6 @@ extension AgentEventManager {
             if hasKilo, KiloUsageAdapter.detect() {
                 // Read Kilo usage from SQLite off-main.
                 let pollInterval = NotchHUDConfig.shared.captureInterval
-                let currentUsage = self.usage
                 let currentRate = self.usageRate
                 let lastKilo = self.lastKiloSnapshot
                 let result = await Task.detached(priority: .utility) {
@@ -1209,12 +1214,11 @@ extension AgentEventManager {
                         } else {
                             currentRate
                         }
-                    return (usage, rate)
+                    return (usage, rate, window)
                 }.value
                 if self.usage != result.0 { self.usage = result.0 }
                 if self.usageRate != result.1 { self.usageRate = result.1 }
-                self.lastKiloSnapshot = KiloUsageAdapter.snapshot(since: 60, now: now)
-                _ = currentUsage
+                self.lastKiloSnapshot = result.2
             } else {
                 // Non-kilo agents: fall back to transcript parsing (codex/
                 // claude/opencode) with the mtime memo.
@@ -1251,18 +1255,24 @@ extension AgentEventManager {
                     >= self.lifetimeAccrualInterval
                 {
                     self.lastLifetimeAccrualAt = nowLifetime
-                    self.lifetimeAccrual = UsageTracker.accrueLifetime(
-                        home: NSHomeDirectory(),
-                        names: agents.map { $0.agent },
-                        state: self.lifetimeAccrual)
+                    let prior = self.lifetimeAccrual
+                    let names = agents.map { $0.agent }
+                    self.lifetimeAccrual = await Task.detached(priority: .utility) {
+                        UsageTracker.accrueLifetime(
+                            home: NSHomeDirectory(), names: names, state: prior)
+                    }.value
                 }
                 let revision = OpenCodeUsageAdapter.ledgerRevision(
                     home: NSHomeDirectory())
                 if revision != self.lifetimeOpencodeRevision {
                     self.lifetimeOpencodeRevision = revision
-                    if let life = OpenCodeUsageAdapter.snapshot(
-                        since: 30 * 365 * 86400, now: now, home: NSHomeDirectory())
-                    {
+                    let lifetimeNow = now
+                    let life = await Task.detached(priority: .utility) {
+                        OpenCodeUsageAdapter.snapshot(
+                            since: 30 * 365 * 86400, now: lifetimeNow,
+                            home: NSHomeDirectory())
+                    }.value
+                    if let life {
                         self.lifetimeAccrual.tokensBySource["opencode"] =
                             life.tokensBySource["opencode"] ?? 0
                         self.lifetimeAccrual.costBySource["opencode"] =

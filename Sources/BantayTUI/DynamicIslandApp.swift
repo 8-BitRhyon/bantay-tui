@@ -904,7 +904,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         }
         badgeTimer = Timer.scheduledTimer(
-            withTimeInterval: 3.0, repeats: true, block: handler)
+            withTimeInterval: 5.0, repeats: true, block: handler)
     }
 
     @MainActor
@@ -914,7 +914,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let needsInput = IslandMetrics.agentCounts(
             kinds: AgentEventManager.shared.agents.map(\.kind)
         ).needsInput
-        if config.menuBarBadge && needsInput > 0 {
+        let title =
+            config.menuBarBadge && needsInput > 0 ? " •\(needsInput)" : ""
+        // The timer fires while the count is unchanged; reassigning the
+        // attributed title forces a status-item redraw every tick.
+        guard button.attributedTitle.string != title else { return }
+        if !title.isEmpty {
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = .center
             let attrs: [NSAttributedString.Key: Any] = [
@@ -923,7 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 .paragraphStyle: paragraph,
             ]
             button.attributedTitle = NSAttributedString(
-                string: " •\(needsInput)", attributes: attrs)
+                string: title, attributes: attrs)
         } else {
             button.attributedTitle = NSAttributedString(string: "")
         }

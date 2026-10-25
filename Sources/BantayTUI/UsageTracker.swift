@@ -398,13 +398,14 @@ enum UsageParser {
         return parseISODate(raw)
     }
 
+    /// ISO-8601 with fractional seconds also accepts whole-second strings,
+    /// and FormatStyle is a thread-safe value type, so no formatter is
+    /// allocated per timestamp.
+    private static let isoStyle = Date.ISO8601FormatStyle(
+        includingFractionalSeconds: true)
+
     private static func parseISODate(_ raw: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: raw) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
+        try? Self.isoStyle.parse(raw)
     }
 
     private static func int(_ value: Any?) -> Int {
@@ -510,7 +511,10 @@ enum UsageTracker {
                 continue
             }
             let usage = UsageParser.parseAll(lines: lines)
-            if usage.totalTokens > 0 || usage.costUSD > 0 {
+            // Ledger-covered sources are already counted by their SQLite
+            // snapshot. Tail their log for burn-rate timestamps only.
+            let ledgerOnly = owners.allSatisfy { ledgerCoveredSources.contains($0) }
+            if !ledgerOnly, usage.totalTokens > 0 || usage.costUSD > 0 {
                 combined = aggregate([combined, usage])
                 for owner in owners {
                     combined.tokensBySource[owner, default: 0] += usage.totalTokens
@@ -551,6 +555,10 @@ enum UsageTracker {
         }
         var best: (url: URL, date: Date)?
         for case let url as URL in enumerator {
+            if AgentDetector.isNonTranscriptTree(url.path) {
+                enumerator.skipDescendants()
+                continue
+            }
             guard isTranscriptFile(url),
                 let values = try? url.resourceValues(
                     forKeys: [.contentModificationDateKey, .isRegularFileKey]),
@@ -715,6 +723,12 @@ enum UsageTracker {
                     next.covered.insert(owner)
                 }
             }
+        }
+        // `seen` only protects a re-read after rotation or truncation; normal
+        // reads are already bounded by `sizes`. Keep the dedupe set from
+        // growing without limit across days of transcripts.
+        if next.seen.count > 50_000 {
+            next.seen = Set(next.seen.prefix(25_000))
         }
         return next
     }

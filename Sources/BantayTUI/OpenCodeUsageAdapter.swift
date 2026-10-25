@@ -49,23 +49,75 @@ enum OpenCodeUsageAdapter {
         }
     }
 
+    /// Quota rows change on a human cadence, not a poll cadence. Cache the
+    /// expensive ledger queries and the `opencode stats` subprocesses so a
+    /// 60-second probe does not repeat multi-second work every minute.
+    private final class ProbeCache: @unchecked Sendable {
+        struct QuotaEntry {
+            let computedAt: Date
+            let state: QuotaState?
+        }
+
+        struct BundledEntry {
+            let computedAt: Date
+            let value: GoBundledSpend
+        }
+
+        static let shared = ProbeCache()
+        private let lock = NSLock()
+        private var quota: [String: QuotaEntry] = [:]
+        private var bundled: [String: BundledEntry] = [:]
+
+        func quotaEntry(home: String) -> QuotaEntry? {
+            lock.lock()
+            defer { lock.unlock() }
+            return quota[home]
+        }
+
+        func storeQuota(_ entry: QuotaEntry, home: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            quota[home] = entry
+        }
+
+        func bundledEntry(home: String) -> BundledEntry? {
+            lock.lock()
+            defer { lock.unlock() }
+            return bundled[home]
+        }
+
+        func storeBundled(_ entry: BundledEntry, home: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            bundled[home] = entry
+        }
+    }
+
+    private static let quotaStateCacheTTL: TimeInterval = 180
+    private static let bundledSpendCacheTTL: TimeInterval = 300
+
     /// Aggregate usage over the last `window` seconds, keyed by message
     /// creation time (epoch ms). Returns nil when the DB is missing or empty.
     static func snapshot(
         since window: TimeInterval,
         now: Date = Date(),
         home: String = NSHomeDirectory(),
-        maxAge: TimeInterval = 15
+        maxAge: TimeInterval = 60
     ) -> UsageSnapshot? {
         let url = databaseURL(home: home)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let cacheKey = "\(Int(window)):\(home)"
         let revision = ledgerRevision(home: home)
-        if let cached = SnapshotCache.shared.value(for: cacheKey),
-            cached.revision == revision
-                || (maxAge > 0 && now.timeIntervalSince(cached.computedAt) < maxAge)
-        {
-            return cached.snapshot
+        if let cached = SnapshotCache.shared.value(for: cacheKey) {
+            // A live ledger changes on nearly every poll, so revision equality
+            // alone defeats the cache. Treat maxAge as a hard refresh floor;
+            // completion paths pass 0 to force an exact read.
+            if maxAge > 0, now.timeIntervalSince(cached.computedAt) < maxAge {
+                return cached.snapshot
+            }
+            if cached.revision == revision {
+                return cached.snapshot
+            }
         }
         func cacheNil() {
             SnapshotCache.shared.store(
@@ -136,6 +188,21 @@ enum OpenCodeUsageAdapter {
     static func quotaState(
         now: Date = Date(),
         home: String = NSHomeDirectory()
+    ) -> QuotaState? {
+        if let cached = ProbeCache.shared.quotaEntry(home: home),
+            now.timeIntervalSince(cached.computedAt) < quotaStateCacheTTL
+        {
+            return cached.state
+        }
+        let state = computeQuotaState(now: now, home: home)
+        ProbeCache.shared.storeQuota(
+            ProbeCache.QuotaEntry(computedAt: now, state: state), home: home)
+        return state
+    }
+
+    private static func computeQuotaState(
+        now: Date,
+        home: String
     ) -> QuotaState? {
         let url = databaseURL(home: home)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
@@ -273,6 +340,23 @@ enum OpenCodeUsageAdapter {
         now: Date = Date(),
         home: String = NSHomeDirectory(),
         opencodeBinary: String? = nil
+    ) -> GoBundledSpend {
+        if let cached = ProbeCache.shared.bundledEntry(home: home),
+            now.timeIntervalSince(cached.computedAt) < bundledSpendCacheTTL
+        {
+            return cached.value
+        }
+        let value = computeGoBundledSpend(
+            now: now, home: home, opencodeBinary: opencodeBinary)
+        ProbeCache.shared.storeBundled(
+            ProbeCache.BundledEntry(computedAt: now, value: value), home: home)
+        return value
+    }
+
+    private static func computeGoBundledSpend(
+        now: Date,
+        home: String,
+        opencodeBinary: String?
     ) -> GoBundledSpend {
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
         return GoBundledSpend(

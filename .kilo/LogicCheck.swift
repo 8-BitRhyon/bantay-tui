@@ -9525,6 +9525,31 @@ struct LogicCheckMain {
             IslandMetrics.shortcutKey(for: "R") == .reply,
             "P5 reply shortcut is case-insensitive")
 
+        // PERF-3: process classification cache and opencode tree scoping.
+        let firstClass = AgentDetector.classifyProcess(
+            name: "claude", command: "claude --resume")
+        let secondClass = AgentDetector.classifyProcess(
+            name: "claude", command: "claude --resume")
+        check(
+            firstClass == "claude" && secondClass == "claude",
+            "PERF classifyProcess accepts and caches an agent CLI")
+        check(
+            AgentDetector.classifyProcess(
+                name: "claude-searchd", command: "claude-searchd") == nil,
+            "PERF classifyProcess rejects a lookalike suffix")
+        check(
+            AgentDetector.classifyProcess(
+                name: "Google Chrome Helper", command: "Google Chrome Helper") == nil,
+            "PERF classifyProcess rejects helper subprocesses")
+        check(
+            AgentDetector.isNonTranscriptTree(
+                "/Users/me/.local/share/opencode/snapshot/abc"),
+            "PERF opencode snapshot tree is skipped")
+        check(
+            !AgentDetector.isNonTranscriptTree(
+                "/Users/me/projects/opencode/shell-tool/main.swift"),
+            "PERF unrelated opencode-named project is not skipped")
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 

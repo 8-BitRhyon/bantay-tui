@@ -852,9 +852,8 @@ public enum IslandMetrics: Sendable {
         {
             return "Yesterday"
         }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMM d"
-        return formatter.string(from: date)
+        return date.formatted(
+            .dateTime.weekday(.wide).month(.abbreviated).day())
     }
 
     /// Contribution-streak math over active day-starts. Current counts
@@ -900,10 +899,104 @@ public enum IslandMetrics: Sendable {
         return (current, longest)
     }
 
+    /// Bounded, thread-safe memo for pure string cleanup. Transcript tails and
+    /// SwiftUI renders ask for the same headlines repeatedly, and the cleaner
+    /// runs roughly eighteen regex passes per call.
+    private final class HUDCleanCache: @unchecked Sendable {
+        static let shared = HUDCleanCache()
+        private struct Key: Hashable {
+            let limit: Int
+            let text: String
+        }
+
+        private let lock = NSLock()
+        private var values: [Key: String] = [:]
+        private var order: [Key] = []
+
+        func value(limit: Int, text: String) -> String? {
+            let key = Key(limit: limit, text: text)
+            lock.lock()
+            defer { lock.unlock() }
+            return values[key]
+        }
+
+        func store(_ value: String, limit: Int, text: String) {
+            let key = Key(limit: limit, text: text)
+            lock.lock()
+            defer { lock.unlock() }
+            if values.updateValue(value, forKey: key) == nil {
+                order.append(key)
+            }
+            while order.count > 768 {
+                values.removeValue(forKey: order.removeFirst())
+            }
+        }
+    }
+
+    /// Bounded memo for the garbage/suppression predicate, which is queried
+    /// both directly and at the end of every clean pass.
+    private final class HUDSuppressionCache: @unchecked Sendable {
+        static let shared = HUDSuppressionCache()
+        private let lock = NSLock()
+        private var values: [String: Bool] = [:]
+        private var order: [String] = []
+
+        func value(for text: String) -> Bool? {
+            lock.lock()
+            defer { lock.unlock() }
+            return values[text]
+        }
+
+        func store(_ value: Bool, for text: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if values.updateValue(value, forKey: text) == nil {
+                order.append(text)
+            }
+            while order.count > 768 {
+                values.removeValue(forKey: order.removeFirst())
+            }
+        }
+    }
+
+    /// Precompiled expressions for the cleaner. NSRegularExpression matching is
+    /// thread-safe; compiling the same pattern on every call is not free.
+    private final class HUDRegexes: @unchecked Sendable {
+        static let shared = HUDRegexes()
+        let bareSyslog = try? NSRegularExpression(
+            pattern:
+                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+$",
+            options: [])
+        let leadingDate = try? NSRegularExpression(
+            pattern: "^\\d{4}-\\d{2}-\\d{2}", options: [])
+        let markdownLink = try? NSRegularExpression(
+            pattern: "\\[([^\\]]+)\\]\\([^\\)]+\\)", options: [])
+        let pathWithExtension = try? NSRegularExpression(
+            pattern: "/(?:[^\\s/]+/)+([^\\s/]+\\.[a-zA-Z0-9_]+)", options: [])
+    }
+
+    private static let maxCachedTextBytes = 2048
+
     /// Strips ANSI escape sequences, control characters, braille spinners, log envelopes,
     /// markdown links, and paths to format clean single-line HUD strings.
     /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.
     public static func cleanHUDText(_ text: String, maxCharacters: Int = 60) -> String {
+        let cacheable = text.utf8.count <= maxCachedTextBytes
+        if cacheable,
+            let hit = HUDCleanCache.shared.value(limit: maxCharacters, text: text)
+        {
+            return hit
+        }
+        let result = cleanHUDTextUncached(text, maxCharacters: maxCharacters)
+        if cacheable {
+            HUDCleanCache.shared.store(result, limit: maxCharacters, text: text)
+        }
+        return result
+    }
+
+    private static func cleanHUDTextUncached(
+        _ text: String, maxCharacters: Int
+    ) -> String {
         if isBareSyslog(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
             return ""
         }
@@ -990,8 +1083,7 @@ public enum IslandMetrics: Sendable {
             options: .regularExpression)
 
         // 6. Strip markdown links: [text](url) -> text
-        let mdLinkPattern = "\\[([^\\]]+)\\]\\([^\\)]+\\)"
-        if let regex = try? NSRegularExpression(pattern: mdLinkPattern, options: []) {
+        if let regex = HUDRegexes.shared.markdownLink {
             let range = NSRange(location: 0, length: s.utf16.count)
             s = regex.stringByReplacingMatches(
                 in: s, options: [], range: range, withTemplate: "$1")
@@ -1001,8 +1093,7 @@ public enum IslandMetrics: Sendable {
         s = s.replacingOccurrences(of: "file:///[^\\s)]+", with: "", options: .regularExpression)
 
         // 8. Replace absolute filesystem paths with their last component (basename)
-        let pathWithExtPattern = "/(?:[^\\s/]+/)+([^\\s/]+\\.[a-zA-Z0-9_]+)"
-        if let regex = try? NSRegularExpression(pattern: pathWithExtPattern, options: []) {
+        if let regex = HUDRegexes.shared.pathWithExtension {
             let range = NSRange(location: 0, length: s.utf16.count)
             s = regex.stringByReplacingMatches(
                 in: s, options: [], range: range, withTemplate: "$1")
@@ -1034,16 +1125,27 @@ public enum IslandMetrics: Sendable {
     /// True for a syslog timestamp followed by a lone process name:
     /// `2026-10-16 09:12:48.169514-0500 bantay`. Such a line has no status.
     private static func isBareSyslog(_ text: String) -> Bool {
-        text.range(
-            of:
-                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+$",
-            options: .regularExpression
+        guard let regex = HUDRegexes.shared.bareSyslog else { return false }
+        return regex.firstMatch(
+            in: text, options: [], range: NSRange(location: 0, length: text.utf16.count)
         ) != nil
     }
 
     /// True if the string is raw unparsed JSON, a diff chunk, internal daemon noise,
     /// or a multiplexer hostname/shell fallback.
     public static func isSuppressedGarbage(_ text: String) -> Bool {
+        let cacheable = text.utf8.count <= maxCachedTextBytes
+        if cacheable, let hit = HUDSuppressionCache.shared.value(for: text) {
+            return hit
+        }
+        let result = isSuppressedGarbageUncached(text)
+        if cacheable {
+            HUDSuppressionCache.shared.store(result, for: text)
+        }
+        return result
+    }
+
+    private static func isSuppressedGarbageUncached(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return true }
         if isBareSyslog(trimmed) { return true }
@@ -1063,7 +1165,7 @@ public enum IslandMetrics: Sendable {
             || trimmed.hasPrefix("[diff_block") || trimmed.hasPrefix("::error")
             || trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:")
             || trimmed.hasPrefix("Completed At:")
-            || trimmed.range(of: "^\\d{4}-\\d{2}-\\d{2}", options: .regularExpression) != nil
+            || hasLeadingISODate(trimmed)
         {
             return true
         }
@@ -1108,6 +1210,13 @@ public enum IslandMetrics: Sendable {
         }
 
         return false
+    }
+
+    private static func hasLeadingISODate(_ text: String) -> Bool {
+        guard let regex = HUDRegexes.shared.leadingDate else { return false }
+        return regex.firstMatch(
+            in: text, options: [], range: NSRange(location: 0, length: text.utf16.count)
+        ) != nil
     }
 
     /// Whether the roster should react to single-key shortcuts (Y/N/digits).

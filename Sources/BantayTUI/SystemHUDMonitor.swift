@@ -46,7 +46,7 @@ public final class SystemHUDMonitor: ObservableObject {
     public func startMonitoring() {
         guard ApprovalNotificationController.hasBundleProxy else { return }
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.checkBatteryState()
             }
