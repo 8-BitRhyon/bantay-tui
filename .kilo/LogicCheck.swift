@@ -3796,7 +3796,10 @@ struct LogicCheckMain {
             {"type":"assistant","message":{"usage":{"input_tokens":\(input),"output_tokens":\(output),"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"timestamp":"\(timestamp)"}
             """
         }
-        let now = UsageParser.parseTimestamp(usageLine("2026-08-04T12:01:00Z", input: 0))!
+        let parsedFixtureTimestamp = UsageParser.parseTimestamp(
+            usageLine("2026-08-04T12:01:00Z", input: 0))
+        check(parsedFixtureTimestamp != nil, "L46 fixture timestamp parsed")
+        let now = parsedFixtureTimestamp ?? Date(timeIntervalSince1970: 1_785_844_860)
         let threeLines = [
             usageLine("2026-08-04T12:00:00Z", input: 100),
             usageLine("2026-08-04T12:00:30Z", input: 100),

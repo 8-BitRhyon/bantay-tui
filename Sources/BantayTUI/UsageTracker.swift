@@ -398,14 +398,16 @@ enum UsageParser {
         return parseISODate(raw)
     }
 
-    /// ISO-8601 with fractional seconds also accepts whole-second strings,
-    /// and FormatStyle is a thread-safe value type, so no formatter is
-    /// allocated per timestamp.
-    private static let isoStyle = Date.ISO8601FormatStyle(
+    /// ISO-8601 with and without fractional seconds. Some Foundation
+    /// versions require the fractional style to actually see a fraction,
+    /// so keep both as value-type parsers (no per-call formatter).
+    private static let isoStyleFractional = Date.ISO8601FormatStyle(
         includingFractionalSeconds: true)
+    private static let isoStylePlain = Date.ISO8601FormatStyle()
 
     private static func parseISODate(_ raw: String) -> Date? {
-        try? Self.isoStyle.parse(raw)
+        (try? Self.isoStyleFractional.parse(raw))
+            ?? (try? Self.isoStylePlain.parse(raw))
     }
 
     private static func int(_ value: Any?) -> Int {
