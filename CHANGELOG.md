@@ -66,7 +66,7 @@ All notable changes to this project are documented in this file. The format is b
 - **Strip Session Restore** (`StripSessionRestore.swift`, `StripWindowManager.swift`, `StripWindowRegistry.swift`): Column order, widths, stacks, tabs, and pins return after a restart. Layouts are stored per display. Windows rebind by bundle and title, closed windows drop out, and new ones append. Sleep, screen lock, and session switches trigger a fresh scan and layout.
 - **Display-Aware Strip** (`StripDisplayPlanner.swift`, `StripWindowManager.swift`, `StripConfiguration.swift`, `SettingsView.swift`): The strip tiles only the active display and leaves other screens' windows alone. A per-display switch turns tiling off for one screen. A column can move to the next display. Status reports the active display.
 - **Automation and Conflicts** (`StripAutomationRouter.swift`, `StripConflictDetector.swift`, `DynamicIslandApp.swift`, `setup.sh`): A `bantay://` URL scheme drives strip actions, the HUD, the inbox, and Settings. Settings warns when Rectangle, Magnet, yabai, or a similar tool is running.
-- **Notch Interaction** (`FileDropContentView.swift`, `NotchStatusView.swift`): The island accepts the first mouse click, so notification buttons work while another app is frontmost. The compose box reports delivery. A failed send keeps the draft and states the reason; a successful one confirms the target.
+- **Notch Interaction** (`FileDropContentView.swift`, `NotchStatusView.swift`): The island accepts the first mouse click, so notification buttons work while another app is frontmost. The compose box reports delivery. A failed send keeps the draft and states the reason. A successful one confirms the target.
 
 ### Fixed
 
