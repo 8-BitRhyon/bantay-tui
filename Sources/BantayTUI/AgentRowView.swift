@@ -161,6 +161,15 @@ struct AgentRowView: View {
                         .foregroundColor(.white)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                    Text(agent.source)
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.55))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule().fill(Color.white.opacity(0.08))
+                        )
+                        .lineLimit(1)
                     if let branch = ctx.branch {
                         Text(branch)
                             .font(.system(size: 9.5, weight: .medium, design: .monospaced))

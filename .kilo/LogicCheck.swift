@@ -591,6 +591,17 @@ struct LogicCheckMain {
         let workingMascotState = MascotEvaluator.evaluate(agents: [workingAgent])
         check(workingMascotState == .working, "Working agent evaluates to working mascot state")
 
+        // Row headlines strip syslog noise so the inbox reads as prose.
+        let noisyAgent = AgentSnapshot(
+            id: "noisy", source: "herdr", kind: .progress,
+            title: "INFO herdr::logging: api request completed", message: nil,
+            paneId: nil, workspaceId: nil, cwd: nil, variance: nil, choices: nil,
+            startedAt: Date(), projectContext: nil)
+        let noisyHeadline = AgentPresentation.status(for: noisyAgent).headline
+        check(
+            noisyHeadline == "api request completed",
+            "L1 inbox headline drops level and subsystem prefixes (got \(noisyHeadline))")
+
         let blockedAgent = AgentSnapshot(
             id: "2",
             source: "codex",

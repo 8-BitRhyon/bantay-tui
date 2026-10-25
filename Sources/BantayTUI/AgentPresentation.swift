@@ -185,6 +185,8 @@ enum AgentPresentation {
         value = value.replacingOccurrences(
             of: "\\s+", with: " ", options: .regularExpression)
         for pattern in [
+            "^\\[?(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|NOTICE)\\]?\\s*",
+            "^[A-Za-z0-9_.-]+::[A-Za-z0-9_.-]+:\\s*",
             "timestamp=[^ ]+",
             "level=[^ ]+",
             "paneId=[^ ]+",

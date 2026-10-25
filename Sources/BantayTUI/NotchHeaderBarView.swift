@@ -25,18 +25,16 @@ struct NotchHeaderBarView: View {
                 mascotButton
             }
             if counts.needsInput > 0 {
-                Text("\(counts.needsInput) need you")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .lineLimit(1)
-                    .monospacedDigit()
-                    .foregroundColor(BantayTheme.statusAttention)
+                countBadge(
+                    icon: "bell.fill", count: counts.needsInput,
+                    color: BantayTheme.statusAttention,
+                    help: "\(counts.needsInput) agent\(counts.needsInput == 1 ? "" : "s") need you")
             }
             if counts.working > 0 {
-                Text("\(counts.working) working")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .lineLimit(1)
-                    .monospacedDigit()
-                    .foregroundColor(BantayTheme.statusWorking)
+                countBadge(
+                    icon: "bolt.fill", count: counts.working,
+                    color: BantayTheme.statusWorking,
+                    help: "\(counts.working) agent\(counts.working == 1 ? "" : "s") working")
             }
             if counts.needsInput == 0 && counts.working == 0 {
                 Text("Agents")
@@ -208,6 +206,25 @@ struct NotchHeaderBarView: View {
         .accessibilityLabel("Token rate \(tpm) tokens per minute")
     }
 
+    /// Compact count: icon plus number. Long labels were clipping to
+    /// "3 wor..." in the notch header.
+    private func countBadge(
+        icon: String, count: Int, color: Color, help: String
+    ) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 8, weight: .bold))
+            Text("\(count)")
+                .font(.system(size: 10.5, weight: .bold))
+                .monospacedDigit()
+        }
+        .foregroundColor(color)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: true)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
     private var quotaAxiBadge: some View {
         let percentInt = quotaMonitor.minRemainingPercent
         let color: Color =
@@ -222,7 +239,7 @@ struct NotchHeaderBarView: View {
         } label: {
             HStack(spacing: BantayTheme.space4) {
                 Circle().fill(color).frame(width: 4, height: 4)
-                Text("Q:\(percentInt)%")
+                Text("\(percentInt)% left")
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .lineLimit(1)
                     .monospacedDigit()
