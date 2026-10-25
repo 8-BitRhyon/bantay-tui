@@ -51,11 +51,17 @@
                 id: String, model: String, provider: String, wall: Bool, cost: Double
             ) {
                 let text = wall ? "QuotaExceeded: Free usage limit" : "done"
+                let finish = wall ? "error" : "stop"
+                let errorField =
+                    wall
+                    ? ",\"error\":{\"message\":\"QuotaExceeded: Free usage limit\"}"
+                    : ""
                 let payload =
                     "{\"model\":{\"id\":\"\(model)\",\"providerID\":\"\(provider)\"},"
                     + "\"tokens\":{\"input\":100,\"output\":10,\"reasoning\":0,"
                     + "\"cache\":{\"read\":0,\"write\":0}},\"cost\":\(cost),"
-                    + "\"content\":[{\"type\":\"text\",\"text\":\"\(text)\"}]}"
+                    + "\"content\":[{\"type\":\"text\",\"text\":\"\(text)\"}],"
+                    + "\"finish\":\"\(finish)\"\(errorField)}"
                 var stmt: OpaquePointer?
                 sqlite3_prepare_v2(
                     dbHandle,
