@@ -57,6 +57,8 @@ public struct StripWindowInfo: Equatable, Sendable, Identifiable {
     public var agentName: String?
     public var agentCwd: String?
     public var agentStatus: StripAgentStatus
+    /// Window height when first discovered. Zero means unknown.
+    public var originalHeight: Double
 
     public init(
         id: String,
@@ -65,7 +67,8 @@ public struct StripWindowInfo: Equatable, Sendable, Identifiable {
         title: String = "",
         agentName: String? = nil,
         agentCwd: String? = nil,
-        agentStatus: StripAgentStatus = .idle
+        agentStatus: StripAgentStatus = .idle,
+        originalHeight: Double = 0
     ) {
         self.id = id
         self.pid = pid
@@ -74,6 +77,7 @@ public struct StripWindowInfo: Equatable, Sendable, Identifiable {
         self.agentName = agentName
         self.agentCwd = agentCwd
         self.agentStatus = agentStatus
+        self.originalHeight = originalHeight
     }
 }
 
@@ -237,7 +241,8 @@ public enum StripLayoutEngine {
     /// Computes exact screen coordinates for all columns and windows.
     public static func computeLayout(
         columns: [StripColumn],
-        viewport: StripViewport
+        viewport: StripViewport,
+        keepOriginalHeight: Bool = false
     ) -> StripLayoutResult {
         guard !columns.isEmpty else {
             return StripLayoutResult()
@@ -292,7 +297,8 @@ public enum StripLayoutEngine {
                 let winCount = col.windows.count
                 if winCount == 1 {
                     let win = col.windows[0]
-                    winFrames[win.id] = colFrame
+                    winFrames[win.id] = singleWindowFrame(
+                        colFrame, window: win, keepOriginalHeight: keepOriginalHeight)
                     visibleIDs.insert(win.id)
                 } else if winCount > 1 {
                     if col.isTabbed {
@@ -341,9 +347,11 @@ public enum StripLayoutEngine {
                 let winCount = col.windows.count
                 if winCount == 1 {
                     let win = col.windows[0]
-                    winFrames[win.id] = colFrame
+                    let frame = singleWindowFrame(
+                        colFrame, window: win, keepOriginalHeight: keepOriginalHeight)
+                    winFrames[win.id] = frame
                     classifyVisibility(
-                        frame: colFrame,
+                        frame: frame,
                         id: win.id,
                         viewport: scrollViewport,
                         visibleIDs: &visibleIDs,
@@ -422,6 +430,38 @@ public enum StripLayoutEngine {
             offscreenLeftIDs: leftIDs,
             offscreenRightIDs: rightIDs
         )
+    }
+
+    /// Native window tabs share one geometry and expose AXTabs. Keeping all
+    /// of them would put one column on the strip per tab. Returns the ids to
+    /// drop: for each shared geometry group that has tabs, all but the first.
+    public static func collapsedNativeTabIDs(
+        _ windows: [(id: String, frameKey: String, hasTabs: Bool)]
+    ) -> Set<String> {
+        let groups = Dictionary(grouping: windows, by: \.frameKey)
+        var dropped = Set<String>()
+        for (_, group) in groups where group.count > 1 {
+            guard group.contains(where: \.hasTabs) else { continue }
+            for window in group.dropFirst() { dropped.insert(window.id) }
+        }
+        return dropped
+    }
+
+    /// A single window fills its column by default. With keep-original-height
+    /// it keeps the height it opened with, clamped to the column, aligned to
+    /// the top.
+    static func singleWindowFrame(
+        _ columnFrame: StripRect,
+        window: StripWindowInfo,
+        keepOriginalHeight: Bool
+    ) -> StripRect {
+        guard keepOriginalHeight, window.originalHeight > 0 else { return columnFrame }
+        let height = min(max(window.originalHeight, 120.0), columnFrame.height)
+        return StripRect(
+            x: columnFrame.x,
+            y: columnFrame.y,
+            width: columnFrame.width,
+            height: height)
     }
 
     private static func classifyVisibility(

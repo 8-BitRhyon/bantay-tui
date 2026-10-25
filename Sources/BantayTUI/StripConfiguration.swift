@@ -14,6 +14,12 @@ public struct StripConfiguration: Equatable, Sendable {
     public var showNavigationChevrons: Bool
     /// Show the strip indicator while navigating (hold Control-Option to pin).
     public var showStripIndicator: Bool
+    /// Keep each window's opening height instead of stretching to full height.
+    public var keepOriginalHeight: Bool
+    /// Leave fixed-size windows (Calculator, palettes) where they are.
+    public var floatFixedSizeWindows: Bool
+    /// Stop tiling a window that refuses resizes instead of fighting it.
+    public var floatStubbornWindows: Bool
     public var ignoredBundleIDs: [String]
 
     /// How long the navigation indicator stays before fading out.
@@ -43,6 +49,9 @@ public struct StripConfiguration: Equatable, Sendable {
         dimInactive: Bool = true,
         showNavigationChevrons: Bool = true,
         showStripIndicator: Bool = true,
+        keepOriginalHeight: Bool = false,
+        floatFixedSizeWindows: Bool = true,
+        floatStubbornWindows: Bool = true,
         ignoredBundleIDs: [String] = defaultIgnoredBundleIDs
     ) {
         self.isEnabled = isEnabled
@@ -56,6 +65,9 @@ public struct StripConfiguration: Equatable, Sendable {
         self.dimInactive = dimInactive
         self.showNavigationChevrons = showNavigationChevrons
         self.showStripIndicator = showStripIndicator
+        self.keepOriginalHeight = keepOriginalHeight
+        self.floatFixedSizeWindows = floatFixedSizeWindows
+        self.floatStubbornWindows = floatStubbornWindows
         self.ignoredBundleIDs = ignoredBundleIDs
     }
 
@@ -72,6 +84,9 @@ public struct StripConfiguration: Equatable, Sendable {
         let dimInactive = defaults.object(forKey: "bantay.strip.dimInactive") as? Bool ?? true
         let chevrons = defaults.object(forKey: "bantay.strip.chevrons") as? Bool ?? true
         let indicator = defaults.object(forKey: "bantay.strip.indicator") as? Bool ?? true
+        let keepHeight = defaults.object(forKey: "bantay.strip.keepHeight") as? Bool ?? false
+        let floatFixed = defaults.object(forKey: "bantay.strip.floatFixed") as? Bool ?? true
+        let floatStubborn = defaults.object(forKey: "bantay.strip.floatStubborn") as? Bool ?? true
         let ignored =
             defaults.stringArray(forKey: "bantay.strip.ignored") ?? defaultIgnoredBundleIDs
 
@@ -87,6 +102,9 @@ public struct StripConfiguration: Equatable, Sendable {
             dimInactive: dimInactive,
             showNavigationChevrons: chevrons,
             showStripIndicator: indicator,
+            keepOriginalHeight: keepHeight,
+            floatFixedSizeWindows: floatFixed,
+            floatStubbornWindows: floatStubborn,
             ignoredBundleIDs: ignored
         )
     }
@@ -104,6 +122,9 @@ public struct StripConfiguration: Equatable, Sendable {
         defaults.set(dimInactive, forKey: "bantay.strip.dimInactive")
         defaults.set(showNavigationChevrons, forKey: "bantay.strip.chevrons")
         defaults.set(showStripIndicator, forKey: "bantay.strip.indicator")
+        defaults.set(keepOriginalHeight, forKey: "bantay.strip.keepHeight")
+        defaults.set(floatFixedSizeWindows, forKey: "bantay.strip.floatFixed")
+        defaults.set(floatStubbornWindows, forKey: "bantay.strip.floatStubborn")
         defaults.set(ignoredBundleIDs, forKey: "bantay.strip.ignored")
     }
 

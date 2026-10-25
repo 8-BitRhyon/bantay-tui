@@ -136,6 +136,9 @@ struct SettingsView: View {
     @State private var stripDimInactive = StripConfiguration.load().dimInactive
     @State private var stripChevrons = StripConfiguration.load().showNavigationChevrons
     @State private var stripIndicator = StripConfiguration.load().showStripIndicator
+    @State private var stripKeepHeight = StripConfiguration.load().keepOriginalHeight
+    @State private var stripFloatFixed = StripConfiguration.load().floatFixedSizeWindows
+    @State private var stripFloatStubborn = StripConfiguration.load().floatStubbornWindows
     @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
     @State private var openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
@@ -820,6 +823,15 @@ struct SettingsView: View {
                 Section("Navigation & Shortcuts (hold ⌃⌥)") {
                     Toggle("Enable strip global hotkeys", isOn: $stripHotkeys)
                         .onChange(of: stripHotkeys) { _ in updateStripConfig() }
+                    Toggle("Keep each window's original height", isOn: $stripKeepHeight)
+                        .help("Windows keep the height they opened with, aligned to the top.")
+                        .onChange(of: stripKeepHeight) { _ in updateStripConfig() }
+                    Toggle("Float fixed-size windows", isOn: $stripFloatFixed)
+                        .help("Calculator, palettes, and dialogs stay where the app puts them.")
+                        .onChange(of: stripFloatFixed) { _ in updateStripConfig() }
+                    Toggle("Float windows that refuse resizing", isOn: $stripFloatStubborn)
+                        .help("Stops fighting an app that keeps snapping its window back.")
+                        .onChange(of: stripFloatStubborn) { _ in updateStripConfig() }
                     Toggle("Show strip indicator while navigating", isOn: $stripIndicator)
                         .help(
                             "Hold Control-Option to keep it on screen. Click a tile to jump, drag to reorder."
@@ -1584,6 +1596,9 @@ struct SettingsView: View {
         stripDimInactive = stripCfg.dimInactive
         stripChevrons = stripCfg.showNavigationChevrons
         stripIndicator = stripCfg.showStripIndicator
+        stripKeepHeight = stripCfg.keepOriginalHeight
+        stripFloatFixed = stripCfg.floatFixedSizeWindows
+        stripFloatStubborn = stripCfg.floatStubbornWindows
         desktopHUDPinned = DesktopHUDController.shared.isPinned
         openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
         hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
@@ -1624,6 +1639,9 @@ struct SettingsView: View {
         cfg.dimInactive = stripDimInactive
         cfg.showNavigationChevrons = stripChevrons
         cfg.showStripIndicator = stripIndicator
+        cfg.keepOriginalHeight = stripKeepHeight
+        cfg.floatFixedSizeWindows = stripFloatFixed
+        cfg.floatStubbornWindows = stripFloatStubborn
         cfg.save()
         StripWindowManager.shared.config = cfg
     }

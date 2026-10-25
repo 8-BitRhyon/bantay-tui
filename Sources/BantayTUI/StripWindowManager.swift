@@ -36,6 +36,10 @@ public final class StripWindowManager: ObservableObject {
     private var eventCancellable: AnyCancellable?
     private var fullScreenCancellable: AnyCancellable?
     private var viewportScreen: NSScreen?
+    /// Windows that refused the strip geometry twice. They float (the app
+    /// keeps its size) instead of being fought on every layout pass.
+    private var floatingWindowIDs: Set<String> = []
+    private var frameRefusals: [String: Int] = [:]
 
     private init() {
         let loadedConfig = StripConfiguration.load()
@@ -205,7 +209,11 @@ public final class StripWindowManager: ObservableObject {
     /// Discovers system windows and reconciles them into strip columns.
     public func syncWindows() {
         guard config.isEnabled, !isFullScreen else { return }
-        let discovered = registry.scanWindows(ignoredBundleIDs: config.ignoredBundleIDs)
+        let scanned = registry.scanWindows(
+            ignoredBundleIDs: config.ignoredBundleIDs,
+            floatFixedSizeWindows: config.floatFixedSizeWindows)
+        floatingWindowIDs.formIntersection(Set(scanned.map(\.id)))
+        let discovered = scanned.filter { !floatingWindowIDs.contains($0.id) }
         guard !discovered.isEmpty else { return }
 
         // Track the exact focused window, not just the frontmost PID. This
@@ -220,7 +228,12 @@ public final class StripWindowManager: ObservableObject {
         for var col in columns {
             var updatedWins: [StripWindowInfo] = []
             for win in col.windows {
-                if let fresh = discoveredMap[win.id] {
+                if var fresh = discoveredMap[win.id] {
+                    // Keep the height the window first opened with. Re-reading
+                    // it after tiling would make "original" mean "current".
+                    if win.originalHeight > 0 {
+                        fresh.originalHeight = win.originalHeight
+                    }
                     updatedWins.append(fresh)
                 }
             }
@@ -337,7 +350,9 @@ public final class StripWindowManager: ObservableObject {
             layoutResult = StripLayoutEngine.computeOverviewLayout(
                 columns: columns, viewport: viewport)
         } else {
-            layoutResult = StripLayoutEngine.computeLayout(columns: columns, viewport: viewport)
+            layoutResult = StripLayoutEngine.computeLayout(
+                columns: columns, viewport: viewport,
+                keepOriginalHeight: config.keepOriginalHeight)
         }
 
         // Full screen suspends the strip. Computing the layout keeps status
@@ -354,6 +369,7 @@ public final class StripWindowManager: ObservableObject {
         for (winID, frame) in layoutResult.windowFrames
         where !registry.isWindowFullScreen(windowID: winID) {
             registry.applyFrame(windowID: winID, frame: frame)
+            checkFrameCompliance(windowID: winID, target: frame)
         }
 
         // Update floating status halos
@@ -379,6 +395,36 @@ public final class StripWindowManager: ObservableObject {
             canFocusRight: activeColumnIndex < columns.count - 1,
             screenBounds: screenRect
         )
+    }
+
+    /// An app that refuses the strip's size can never be tiled. Count the
+    /// refusal and float the window after the second one, so the strip stops
+    /// twitching and the app keeps the size it insists on.
+    private func checkFrameCompliance(windowID: String, target: StripRect) {
+        guard config.floatStubbornWindows else { return }
+        guard let actual = registry.actualFrame(windowID: windowID) else { return }
+        let tolerance = 2.0
+        let mismatch =
+            abs(actual.width - target.width) > tolerance
+            || abs(actual.height - target.height) > tolerance
+            || abs(actual.x - target.x) > tolerance
+            || abs(actual.y - target.y) > tolerance
+        guard mismatch else {
+            frameRefusals[windowID] = 0
+            return
+        }
+        let count = (frameRefusals[windowID] ?? 0) + 1
+        frameRefusals[windowID] = count
+        guard count >= 2, !floatingWindowIDs.contains(windowID) else { return }
+        floatingWindowIDs.insert(windowID)
+        frameRefusals.removeValue(forKey: windowID)
+        columns = columns.compactMap { column in
+            var next = column
+            next.windows.removeAll { $0.id == windowID }
+            return next.windows.isEmpty ? nil : next
+        }
+        activeColumnIndex = min(activeColumnIndex, max(0, columns.count - 1))
+        NSLog("strip: floated stubborn window %@", windowID)
     }
 
     /// Toggles bird's-eye zoom overview mode where all columns fit on a single screen without scrolling.

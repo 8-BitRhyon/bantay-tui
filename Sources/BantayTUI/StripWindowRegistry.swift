@@ -6,6 +6,14 @@ import Foundation
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: inout CGWindowID)
     -> AXError
 
+/// A discovered window before native-tab collapsing.
+private struct PendingWindow {
+    let info: StripWindowInfo
+    let element: AXUIElement
+    let frameKey: String
+    let hasTabs: Bool
+}
+
 /// Reference to a native macOS window tracked on the infinite strip.
 @MainActor
 public final class StripWindowRegistry {
@@ -48,7 +56,8 @@ public final class StripWindowRegistry {
 
     /// Scans the system for movable, regular application windows.
     public func scanWindows(
-        ignoredBundleIDs: [String] = StripConfiguration.defaultIgnoredBundleIDs
+        ignoredBundleIDs: [String] = StripConfiguration.defaultIgnoredBundleIDs,
+        floatFixedSizeWindows: Bool = true
     ) -> [StripWindowInfo] {
         guard Self.hasAccessibilityPermission() else { return [] }
 
@@ -116,6 +125,7 @@ public final class StripWindowRegistry {
 
             guard !axWindows.isEmpty else { continue }
 
+            var pending: [PendingWindow] = []
             for (index, windowRef) in axWindows.enumerated() {
                 // Verify window role and subrole
                 var roleRef: CFTypeRef?
@@ -132,6 +142,7 @@ public final class StripWindowRegistry {
                     if subrole == (kAXDialogSubrole as String)
                         || subrole == (kAXSystemDialogSubrole as String)
                         || subrole == (kAXFloatingWindowSubrole as String)
+                        || subrole == "AXSheet"
                     {
                         continue
                     }
@@ -157,6 +168,42 @@ public final class StripWindowRegistry {
                         continue
                     }
                 }
+
+                // Fixed-size windows (Calculator, palettes) refuse resizes.
+                // Floating them is honest: leave the window where the app put it.
+                var sizeSettable = DarwinBoolean(false)
+                _ = AXUIElementIsAttributeSettable(
+                    windowRef, kAXSizeAttribute as CFString, &sizeSettable)
+                // Some apps report kAXSize as not settable while still
+                // resizing normally. Only small windows are certainly fixed
+                // (Calculator, palettes), so large ones stay tiled.
+                let looksFixed =
+                    !sizeSettable.boolValue
+                    && (size.width < 600 || size.height < 500)
+                if floatFixedSizeWindows, looksFixed {
+                    continue
+                }
+
+                var positionRef: CFTypeRef?
+                var origin = CGPoint.zero
+                if AXUIElementCopyAttributeValue(
+                    windowRef, kAXPositionAttribute as CFString, &positionRef) == .success,
+                    let val = positionRef
+                {
+                    AXValueGetValue(val as! AXValue, .cgPoint, &origin)
+                }
+
+                // Native window tabs expose AXTabs. Windows that share one
+                // geometry and belong to one app are tabs of a single window.
+                var tabsRef: CFTypeRef?
+                let hasTabs: Bool = {
+                    guard
+                        AXUIElementCopyAttributeValue(
+                            windowRef, "AXTabs" as CFString, &tabsRef) == .success,
+                        let tabs = tabsRef as? [AXUIElement]
+                    else { return false }
+                    return tabs.count > 1
+                }()
 
                 // Window Title
                 var titleRef: CFTypeRef?
@@ -189,9 +236,27 @@ public final class StripWindowRegistry {
                     title: title,
                     agentName: agentName,
                     agentCwd: agentCwd,
-                    agentStatus: agentStatus
+                    agentStatus: agentStatus,
+                    originalHeight: Double(size.height)
                 )
-                results.append(info)
+                let frameKey =
+                    "\(pid):\(Int(origin.x.rounded())):\(Int(origin.y.rounded()))"
+                    + ":\(Int(size.width.rounded())):\(Int(size.height.rounded()))"
+                pending.append(
+                    PendingWindow(
+                        info: info, element: windowRef, frameKey: frameKey, hasTabs: hasTabs))
+            }
+
+            // Collapse native tab groups: same app, same geometry, tabs
+            // exposed. Keeping every tab would create one column per tab.
+            let dropped = StripLayoutEngine.collapsedNativeTabIDs(
+                pending.map {
+                    (id: $0.info.id, frameKey: $0.frameKey, hasTabs: $0.hasTabs)
+                })
+            for item in pending where !dropped.contains(item.info.id) {
+                activeIDs.insert(item.info.id)
+                axElements[item.info.id] = item.element
+                results.append(item.info)
             }
         }
 
@@ -239,6 +304,29 @@ public final class StripWindowRegistry {
             CFGetTypeID(value) == CFBooleanGetTypeID()
         else { return false }
         return value as? Bool ?? false
+    }
+
+    /// Current on-screen frame, read back after a resize. Used to detect
+    /// apps that refuse the strip's geometry.
+    public func actualFrame(windowID: String) -> StripRect? {
+        guard let windowRef = axElements[windowID] else { return nil }
+        var positionRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        guard
+            AXUIElementCopyAttributeValue(
+                windowRef, kAXPositionAttribute as CFString, &positionRef) == .success,
+            let posVal = positionRef,
+            AXUIElementCopyAttributeValue(
+                windowRef, kAXSizeAttribute as CFString, &sizeRef) == .success,
+            let sizeVal = sizeRef
+        else { return nil }
+        AXValueGetValue(posVal as! AXValue, .cgPoint, &origin)
+        AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
+        return StripRect(
+            x: Double(origin.x), y: Double(origin.y),
+            width: Double(size.width), height: Double(size.height))
     }
 
     /// Positions and resizes a native macOS window.

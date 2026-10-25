@@ -8638,6 +8638,67 @@ struct LogicCheckMain {
                 "L152 indicator auto-hides without nagging"
             )
 
+            // Native tabs share one geometry: collapse them to one column.
+            let tabIDs = StripLayoutEngine.collapsedNativeTabIDs([
+                (id: "a", frameKey: "1:0:0:800:600", hasTabs: true),
+                (id: "b", frameKey: "1:0:0:800:600", hasTabs: true),
+                (id: "c", frameKey: "1:900:0:800:600", hasTabs: false),
+            ])
+            check(
+                tabIDs == ["b"],
+                "L152 native tabs collapse to one column")
+            check(
+                StripLayoutEngine.collapsedNativeTabIDs([
+                    (id: "a", frameKey: "1:0:0:800:600", hasTabs: false),
+                    (id: "b", frameKey: "1:0:0:800:600", hasTabs: false),
+                ]).isEmpty,
+                "L152 overlapping non-tab windows are kept")
+
+            // Keep-original-height clamps to the column and aligns to top.
+            let columnFrame = StripRect(x: 10, y: 20, width: 500, height: 900)
+            let tallWindow = StripWindowInfo(
+                id: "tall", pid: 1, appBundleID: "app", title: "tall",
+                agentName: nil, agentCwd: nil, agentStatus: .idle,
+                originalHeight: 400)
+            let kept = StripLayoutEngine.singleWindowFrame(
+                columnFrame, window: tallWindow, keepOriginalHeight: true)
+            check(
+                kept.y == 20 && kept.height == 400,
+                "L152 original height is kept and top-aligned")
+            let clampedWindow = StripWindowInfo(
+                id: "huge", pid: 1, appBundleID: "app", title: "huge",
+                agentName: nil, agentCwd: nil, agentStatus: .idle,
+                originalHeight: 5000)
+            check(
+                StripLayoutEngine.singleWindowFrame(
+                    columnFrame, window: clampedWindow, keepOriginalHeight: true
+                ).height == 900,
+                "L152 original height clamps to the column")
+            check(
+                StripLayoutEngine.singleWindowFrame(
+                    columnFrame, window: tallWindow, keepOriginalHeight: false
+                ).height == 900,
+                "L152 disabled keep-height fills the column")
+
+            // Phase C settings persist.
+            let semanticsDefaults = UserDefaults(
+                suiteName: "bantay.harness.semantics.\(UUID().uuidString)")!
+            var semantics = StripConfiguration.load(from: semanticsDefaults)
+            check(
+                !semantics.keepOriginalHeight
+                    && semantics.floatFixedSizeWindows
+                    && semantics.floatStubbornWindows,
+                "L152 window semantics have sane defaults"
+            )
+            semantics.keepOriginalHeight = true
+            semantics.floatStubbornWindows = false
+            semantics.save(to: semanticsDefaults)
+            let reloadedSemantics = StripConfiguration.load(from: semanticsDefaults)
+            check(
+                reloadedSemantics.keepOriginalHeight
+                    && !reloadedSemantics.floatStubbornWindows,
+                "L152 window semantics persist")
+
             // Layer 153: Overview Zoom Mode, Auto-Chaining, GUI Dispatcher & Ghostty Bundle
             let overview = StripLayoutEngine.computeOverviewLayout(
                 columns: cols, viewport: viewport)
