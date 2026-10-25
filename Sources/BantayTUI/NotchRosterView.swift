@@ -39,9 +39,24 @@ struct NotchRosterView: View {
                     flatAgentRows
                 }
             }
+            // Clearance so the final row can scroll fully above the fade
+            // instead of being sliced by the panel's bottom edge.
+            .padding(.bottom, IslandMetrics.rosterBottomClearance)
         }
         .frame(height: rosterScrollHeight)
         .scrollIndicators(.hidden)
+        .overlay(alignment: .bottom) {
+            LinearGradient(
+                colors: [
+                    Color(hex: "08090F").opacity(0),
+                    Color(hex: "08090F").opacity(0.92),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 16)
+            .allowsHitTesting(false)
+        }
     }
 
     private var emptyStateView: some View {
