@@ -290,7 +290,6 @@ public enum IslandMetrics: Sendable {
     ) -> CGSize {
         let chrome =
             tabBarHeight
-            + (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
             + CGFloat(max(overflowCount, 0)) * overflowRowHeight
 
         let contentH: CGFloat = {
@@ -363,7 +362,6 @@ public enum IslandMetrics: Sendable {
     ) -> CGSize {
         let chrome =
             tabBarHeight
-            + (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
             + CGFloat(max(overflowCount, 0)) * overflowRowHeight
         let contentH =
             headerHeight + chrome + rosterHeight(roster)

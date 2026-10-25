@@ -2523,16 +2523,15 @@ struct LogicCheckMain {
         check(fit4 >= 1 && fit4 <= 3, "L23 long names shrink fit (got \(fit4))")
         check(fit4 <= fit1, "L23 longer names never fit more than short ones")
 
-        // L24. Expanded height accounts for the shelf tab bar, divider, and
-        // +N overflow rows — otherwise the bottom roster rows clip.
+        // L24. Expanded height reserves the single tab row and +N overflow
+        // rows. Shelf, notes, and media are icons in that same row, so they
+        // add no height.
         let baseSize = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
         let withTab = IslandMetrics.expandedSize(
             topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true)
         check(
-            abs(
-                withTab.height - baseSize.height
-                    - (IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight)) < 0.01,
-            "L24 shelf tab adds tab+divider height (got \(withTab.height) vs \(baseSize.height))")
+            abs(withTab.height - baseSize.height) < 0.01,
+            "L24 shelf tab shares the tab row (got \(withTab.height) vs \(baseSize.height))")
         let withOverflow = IslandMetrics.expandedSize(
             topInset: 47, agentCount: 3, queueCount: 0, overflowCount: 2)
         check(
@@ -2543,9 +2542,7 @@ struct LogicCheckMain {
         let both = IslandMetrics.expandedSize(
             topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true,
             overflowCount: 1)
-        let expected =
-            baseSize.height + IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight
-            + IslandMetrics.overflowRowHeight
+        let expected = baseSize.height + IslandMetrics.overflowRowHeight
         check(abs(both.height - expected) < 0.01, "L24 tab + overflow stack correctly")
         check(
             IslandMetrics.contentHeight(
