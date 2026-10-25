@@ -22,6 +22,7 @@ enum ControlGateway {
         case stripReorder
         case stripAutochain
         case stripPin
+        case stripSendDisplay
         case stripStack
         case stripUnstack
         case stripTabbed
@@ -83,7 +84,7 @@ enum ControlGateway {
             "strip.toggle", "strip.focus", "strip.center",
             "strip.width", "strip.approval", "strip.status",
             "strip.overview", "strip.reorder", "strip.autochain",
-            "strip.pin", "strip.stack", "strip.unstack", "strip.tabbed",
+            "strip.pin", "strip.sendDisplay", "strip.stack", "strip.unstack", "strip.tabbed",
             "strip.hud",
         ]
 
@@ -136,6 +137,7 @@ enum ControlGateway {
         case "strip.reorder": return .stripReorder
         case "strip.autochain": return .stripAutochain
         case "strip.pin": return .stripPin
+        case "strip.sendDisplay": return .stripSendDisplay
         case "strip.stack": return .stripStack
         case "strip.unstack": return .stripUnstack
         case "strip.tabbed": return .stripTabbed
@@ -376,6 +378,15 @@ final class ControlGatewayServer: @unchecked Sendable {
             return ControlGateway.GatewayResponse.ok(
                 id: request.id,
                 result: ["autochained": true])
+        case .stripSendDisplay:
+            // The manager is UI-only; the app target owns the call.
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripSendDisplayRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["queued": true])
         case .stripPin:
             let col = optionalIntParam(request.params, "columnIndex")
             DispatchQueue.main.async {

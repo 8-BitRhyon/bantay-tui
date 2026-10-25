@@ -8760,6 +8760,91 @@ struct LogicCheckMain {
                 StripSessionStore.displayKey(42) == "display-42",
                 "L152 display keys are stable and explicit")
 
+            // Phase D: display assignment, eligibility, multi-display send.
+            let screens: [(key: String, frame: NSRect)] = [
+                (key: "display-1", frame: NSRect(x: 0, y: 0, width: 1440, height: 900)),
+                (key: "display-2", frame: NSRect(x: 1440, y: 0, width: 1920, height: 1080)),
+            ]
+            check(
+                StripDisplayPlanner.displayKey(
+                    origin: StripRect(x: 100, y: 100, width: 400, height: 300),
+                    screens: screens) == "display-1",
+                "L152 window center picks its display")
+            check(
+                StripDisplayPlanner.displayKey(
+                    origin: StripRect(x: 1500, y: 300, width: 600, height: 400),
+                    screens: screens) == "display-2",
+                "L152 second display wins by center")
+            // A gap between displays forces the overlap fallback.
+            let gappedScreens: [(key: String, frame: NSRect)] = [
+                (key: "display-1", frame: NSRect(x: 0, y: 0, width: 1440, height: 900)),
+                (key: "display-2", frame: NSRect(x: 1500, y: 0, width: 860, height: 900)),
+            ]
+            check(
+                StripDisplayPlanner.displayKey(
+                    origin: StripRect(x: 1400, y: 100, width: 160, height: 200),
+                    screens: gappedScreens) == "display-2",
+                "L152 straddling window falls back to the larger overlap")
+            let displayWindows = [
+                StripWindowInfo(id: "d1", appBundleID: "a", displayKey: "display-1"),
+                StripWindowInfo(id: "d2", appBundleID: "b", displayKey: "display-2"),
+                StripWindowInfo(id: "d3", appBundleID: "c", displayKey: ""),
+            ]
+            let eligible = StripDisplayPlanner.eligible(
+                windows: displayWindows, displayKey: "display-1",
+                disabledDisplayKeys: [])
+            check(
+                eligible.map(\.id) == ["d1", "d3"],
+                "L152 only the active display's windows are tiled")
+            check(
+                StripDisplayPlanner.eligible(
+                    windows: displayWindows, displayKey: "display-1",
+                    disabledDisplayKeys: ["display-1"]
+                ).isEmpty,
+                "L152 a disabled display tiles nothing")
+            check(
+                StripDisplayPlanner.activeDisplayKey(
+                    focusedWindowOrigin: StripRect(
+                        x: 1600, y: 100, width: 200, height: 200),
+                    mouse: CGPoint(x: 10, y: 10), screens: screens) == "display-2",
+                "L152 focus decides the active display")
+
+            // Per-display disable persists with the rest of the strip config.
+            var displayCfg = StripConfiguration.load(from: semanticsDefaults)
+            displayCfg.disabledDisplayKeys = ["display-2"]
+            displayCfg.save(to: semanticsDefaults)
+            check(
+                StripConfiguration.load(from: semanticsDefaults)
+                    .disabledDisplayKeys == ["display-2"],
+                "L152 disabled displays persist")
+
+            // Phase E: automation URLs and conflict detection.
+            check(
+                AutomationURL.parse(URL(string: "bantay://strip/toggle")!) == .stripToggle,
+                "L152 bantay://strip/toggle parses")
+            check(
+                AutomationURL.parse(
+                    URL(string: "bantay://strip/focus?direction=left")!)
+                    == .stripFocus(direction: "left"),
+                "L152 focus direction comes from the query")
+            check(
+                AutomationURL.parse(URL(string: "bantay://focus")!)
+                    == .stripFocus(direction: "right"),
+                "L152 focus shorthand defaults to the right")
+            check(
+                AutomationURL.parse(URL(string: "bantay://strip/send")!)
+                    == .stripSendDisplay,
+                "L152 send-to-display URL parses")
+            check(
+                AutomationURL.parse(URL(string: "https://example.com")!) == nil,
+                "L152 foreign schemes are ignored")
+            check(
+                AutomationURL.parse(URL(string: "bantay://nonsense")!) == nil,
+                "L152 unknown actions are ignored")
+            check(
+                StripConflictDetector.running(applications: []).isEmpty,
+                "L152 no conflict is reported when nothing runs")
+
             // Layer 153: Overview Zoom Mode, Auto-Chaining, GUI Dispatcher & Ghostty Bundle
             let overview = StripLayoutEngine.computeOverviewLayout(
                 columns: cols, viewport: viewport)

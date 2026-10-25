@@ -237,7 +237,12 @@ public final class StripWindowRegistry {
                     agentName: agentName,
                     agentCwd: agentCwd,
                     agentStatus: agentStatus,
-                    originalHeight: Double(size.height)
+                    originalHeight: Double(size.height),
+                    displayKey: StripDisplayPlanner.displayKey(
+                        origin: StripRect(
+                            x: Double(origin.x), y: Double(origin.y),
+                            width: Double(size.width), height: Double(size.height)),
+                        screens: StripDisplayPlanner.currentScreens()) ?? ""
                 )
                 let frameKey =
                     "\(pid):\(Int(origin.x.rounded())):\(Int(origin.y.rounded()))"

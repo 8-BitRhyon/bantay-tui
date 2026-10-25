@@ -237,6 +237,53 @@ public final class StripWindowManager: ObservableObject {
         return StripSessionStore.displayKey(number.uint32Value)
     }
 
+    /// Display the strip is currently tiling.
+    private var activeDisplayKey: String {
+        guard let screen = viewportScreen ?? NSScreen.main ?? NSScreen.screens.first else {
+            return ""
+        }
+        return StripDisplayPlanner.displayKey(for: screen)
+    }
+
+    /// Moves the focused column to the next strip-enabled display. The
+    /// windows are placed on that display and dropped from this strip; they
+    /// belong to its strip from then on.
+    @discardableResult
+    public func sendActiveColumnToNextDisplay() -> Bool {
+        let enabled = NSScreen.screens.filter {
+            !config.disabledDisplayKeys.contains(StripDisplayPlanner.displayKey(for: $0))
+        }
+        guard enabled.count > 1,
+            let current = viewportScreen ?? NSScreen.main,
+            let index = enabled.firstIndex(where: {
+                StripDisplayPlanner.displayKey(for: $0)
+                    == StripDisplayPlanner.displayKey(for: current)
+            }),
+            columns.indices.contains(activeColumnIndex)
+        else { return false }
+        let target = enabled[(index + 1) % enabled.count]
+        let visible = target.visibleFrame
+        // AX positions use a top-left origin; NSScreen frames use bottom-left.
+        // Convert with the primary screen height so windows land on the target.
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? visible.height
+        let width = visible.width * 0.6
+        let height = visible.height * 0.8
+        let axY = primaryHeight - (visible.midY + height / 2)
+        let frame = StripRect(
+            x: Double(visible.midX - width / 2),
+            y: Double(axY),
+            width: Double(width),
+            height: Double(height))
+        for window in columns[activeColumnIndex].windows {
+            registry.applyFrame(windowID: window.id, frame: frame)
+        }
+        columns.remove(at: activeColumnIndex)
+        activeColumnIndex = min(activeColumnIndex, max(0, columns.count - 1))
+        updateLayout(animate: true)
+        NSLog("strip: sent column to display %@", StripDisplayPlanner.displayKey(for: target))
+        return true
+    }
+
     private var currentDisplayKey: String {
         Self.displayKey(for: viewportScreen ?? NSScreen.main ?? NSScreen.screens.first)
     }
@@ -310,8 +357,14 @@ public final class StripWindowManager: ObservableObject {
         let scanned = registry.scanWindows(
             ignoredBundleIDs: config.ignoredBundleIDs,
             floatFixedSizeWindows: config.floatFixedSizeWindows)
-        floatingWindowIDs.formIntersection(Set(scanned.map(\.id)))
-        let discovered = scanned.filter { !floatingWindowIDs.contains($0.id) }
+        // Tiles one display at a time. Windows that live on another display
+        // are left exactly where the user put them, never dragged across.
+        let eligible = StripDisplayPlanner.eligible(
+            windows: scanned,
+            displayKey: activeDisplayKey,
+            disabledDisplayKeys: config.disabledDisplayKeys)
+        floatingWindowIDs.formIntersection(Set(eligible.map(\.id)))
+        let discovered = eligible.filter { !floatingWindowIDs.contains($0.id) }
         guard !discovered.isEmpty else { return }
 
         // First successful scan of the session: adopt the saved layout for
@@ -599,6 +652,8 @@ public final class StripWindowManager: ObservableObject {
             isFullScreen: isFullScreen,
             activeColumnIndex: activeColumnIndex,
             accessibility: StripWindowRegistry.hasAccessibilityPermission(),
+            display: activeDisplayKey,
+            disabledDisplays: config.disabledDisplayKeys,
             desktopHUDVisible: DesktopHUDController.shared.isVisible,
             columns: columns.enumerated().map { index, column in
                 StripStatusSnapshot.Column(

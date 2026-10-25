@@ -59,6 +59,8 @@ public struct StripWindowInfo: Equatable, Sendable, Identifiable {
     public var agentStatus: StripAgentStatus
     /// Window height when first discovered. Zero means unknown.
     public var originalHeight: Double
+    /// Display that owns this window. Empty means unknown.
+    public var displayKey: String
 
     public init(
         id: String,
@@ -68,7 +70,8 @@ public struct StripWindowInfo: Equatable, Sendable, Identifiable {
         agentName: String? = nil,
         agentCwd: String? = nil,
         agentStatus: StripAgentStatus = .idle,
-        originalHeight: Double = 0
+        originalHeight: Double = 0,
+        displayKey: String = ""
     ) {
         self.id = id
         self.pid = pid
@@ -78,6 +81,7 @@ public struct StripWindowInfo: Equatable, Sendable, Identifiable {
         self.agentCwd = agentCwd
         self.agentStatus = agentStatus
         self.originalHeight = originalHeight
+        self.displayKey = displayKey
     }
 }
 

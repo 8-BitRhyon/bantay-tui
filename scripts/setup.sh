@@ -66,6 +66,17 @@ if [[ "$PACKAGE" == "yes" ]]; then
     <true/>
     <key>NSRemindersUsageDescription</key>
     <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>com.bantay-tui.automation</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>bantay</string>
+        </array>
+      </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -207,6 +218,17 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSRemindersUsageDescription</key>
     <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>com.bantay-tui.automation</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>bantay</string>
+        </array>
+      </dict>
+    </array>
 </dict>
 </plist>
 PLIST

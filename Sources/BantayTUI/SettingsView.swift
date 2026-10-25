@@ -139,6 +139,7 @@ struct SettingsView: View {
     @State private var stripKeepHeight = StripConfiguration.load().keepOriginalHeight
     @State private var stripFloatFixed = StripConfiguration.load().floatFixedSizeWindows
     @State private var stripFloatStubborn = StripConfiguration.load().floatStubbornWindows
+    @State private var stripDisabledDisplays = StripConfiguration.load().disabledDisplayKeys
     @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
     @State private var openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
@@ -823,6 +824,31 @@ struct SettingsView: View {
                 Section("Navigation & Shortcuts (hold ⌃⌥)") {
                     Toggle("Enable strip global hotkeys", isOn: $stripHotkeys)
                         .onChange(of: stripHotkeys) { _ in updateStripConfig() }
+                    let conflicts = StripConflictDetector.running()
+                    if !conflicts.isEmpty {
+                        Text(
+                            "Also running: \(conflicts.joined(separator: ", ")). "
+                                + "Two window managers can fight over the same window."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                    ForEach(displayOptions, id: \.key) { display in
+                        Toggle(
+                            "Tile windows on \(display.name)",
+                            isOn: Binding(
+                                get: { !stripDisabledDisplays.contains(display.key) },
+                                set: { enabled in
+                                    if enabled {
+                                        stripDisabledDisplays.removeAll { $0 == display.key }
+                                    } else if !stripDisabledDisplays.contains(display.key) {
+                                        stripDisabledDisplays.append(display.key)
+                                    }
+                                    updateStripConfig()
+                                })
+                        )
+                        .help("Turning this off leaves every window on that display alone.")
+                    }
                     Toggle("Keep each window's original height", isOn: $stripKeepHeight)
                         .help("Windows keep the height they opened with, aligned to the top.")
                         .onChange(of: stripKeepHeight) { _ in updateStripConfig() }
@@ -1599,6 +1625,7 @@ struct SettingsView: View {
         stripKeepHeight = stripCfg.keepOriginalHeight
         stripFloatFixed = stripCfg.floatFixedSizeWindows
         stripFloatStubborn = stripCfg.floatStubbornWindows
+        stripDisabledDisplays = stripCfg.disabledDisplayKeys
         desktopHUDPinned = DesktopHUDController.shared.isPinned
         openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
         hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
@@ -1626,6 +1653,13 @@ struct SettingsView: View {
         }
     }
 
+    /// One row per display, keyed by the stable display id.
+    private var displayOptions: [(key: String, name: String)] {
+        NSScreen.screens.map {
+            (key: StripDisplayPlanner.displayKey(for: $0), name: $0.localizedName)
+        }
+    }
+
     private func updateStripConfig() {
         var cfg = StripConfiguration.load()
         cfg.isEnabled = stripEnabled
@@ -1642,6 +1676,7 @@ struct SettingsView: View {
         cfg.keepOriginalHeight = stripKeepHeight
         cfg.floatFixedSizeWindows = stripFloatFixed
         cfg.floatStubbornWindows = stripFloatStubborn
+        cfg.disabledDisplayKeys = stripDisabledDisplays
         cfg.save()
         StripWindowManager.shared.config = cfg
     }

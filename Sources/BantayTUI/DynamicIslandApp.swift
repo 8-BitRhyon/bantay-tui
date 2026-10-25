@@ -303,6 +303,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             ?? NSScreen.main ?? NSScreen.screens.first
     }
 
+    @MainActor
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let command = AutomationURL.parse(url) else { continue }
+            handleAutomation(command)
+        }
+    }
+
+    @MainActor
+    private func handleAutomation(_ command: AutomationCommand) {
+        switch command {
+        case .stripToggle:
+            StripWindowManager.shared.toggle()
+        case .stripFocus(let direction):
+            if direction == "left" {
+                StripWindowManager.shared.focusLeft()
+            } else {
+                StripWindowManager.shared.focusRight()
+            }
+        case .stripSendDisplay:
+            _ = StripWindowManager.shared.sendActiveColumnToNextDisplay()
+        case .stripOverview:
+            StripWindowManager.shared.toggleOverviewMode()
+        case .stripPin:
+            StripWindowManager.shared.togglePin()
+        case .hudToggle:
+            DesktopHUDController.shared.toggle()
+        case .inbox:
+            NotificationCenter.default.post(name: .notchExpandRequested, object: nil)
+        case .settings:
+            Self.showSettings(route: .general)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         Self.shared = self
@@ -342,6 +376,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         ) { _ in
             MainActor.assumeIsolated {
                 StripWindowManager.shared.toggle()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .stripSendDisplayRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                _ = StripWindowManager.shared.sendActiveColumnToNextDisplay()
             }
         }
         // Instantiate the indicator so its navigation observers and the

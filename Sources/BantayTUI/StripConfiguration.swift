@@ -20,6 +20,8 @@ public struct StripConfiguration: Equatable, Sendable {
     public var floatFixedSizeWindows: Bool
     /// Stop tiling a window that refuses resizes instead of fighting it.
     public var floatStubbornWindows: Bool
+    /// Displays the strip leaves alone entirely.
+    public var disabledDisplayKeys: [String]
     public var ignoredBundleIDs: [String]
 
     /// How long the navigation indicator stays before fading out.
@@ -52,6 +54,7 @@ public struct StripConfiguration: Equatable, Sendable {
         keepOriginalHeight: Bool = false,
         floatFixedSizeWindows: Bool = true,
         floatStubbornWindows: Bool = true,
+        disabledDisplayKeys: [String] = [],
         ignoredBundleIDs: [String] = defaultIgnoredBundleIDs
     ) {
         self.isEnabled = isEnabled
@@ -68,6 +71,7 @@ public struct StripConfiguration: Equatable, Sendable {
         self.keepOriginalHeight = keepOriginalHeight
         self.floatFixedSizeWindows = floatFixedSizeWindows
         self.floatStubbornWindows = floatStubbornWindows
+        self.disabledDisplayKeys = disabledDisplayKeys
         self.ignoredBundleIDs = ignoredBundleIDs
     }
 
@@ -87,6 +91,7 @@ public struct StripConfiguration: Equatable, Sendable {
         let keepHeight = defaults.object(forKey: "bantay.strip.keepHeight") as? Bool ?? false
         let floatFixed = defaults.object(forKey: "bantay.strip.floatFixed") as? Bool ?? true
         let floatStubborn = defaults.object(forKey: "bantay.strip.floatStubborn") as? Bool ?? true
+        let disabledDisplays = defaults.stringArray(forKey: "bantay.strip.disabledDisplays") ?? []
         let ignored =
             defaults.stringArray(forKey: "bantay.strip.ignored") ?? defaultIgnoredBundleIDs
 
@@ -105,6 +110,7 @@ public struct StripConfiguration: Equatable, Sendable {
             keepOriginalHeight: keepHeight,
             floatFixedSizeWindows: floatFixed,
             floatStubbornWindows: floatStubborn,
+            disabledDisplayKeys: disabledDisplays,
             ignoredBundleIDs: ignored
         )
     }
@@ -125,6 +131,7 @@ public struct StripConfiguration: Equatable, Sendable {
         defaults.set(keepOriginalHeight, forKey: "bantay.strip.keepHeight")
         defaults.set(floatFixedSizeWindows, forKey: "bantay.strip.floatFixed")
         defaults.set(floatStubbornWindows, forKey: "bantay.strip.floatStubborn")
+        defaults.set(disabledDisplayKeys, forKey: "bantay.strip.disabledDisplays")
         defaults.set(ignoredBundleIDs, forKey: "bantay.strip.ignored")
     }
 

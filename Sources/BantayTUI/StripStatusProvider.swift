@@ -29,6 +29,8 @@ public struct StripStatusSnapshot: Sendable {
     public let overview: Bool
     public let isFullScreen: Bool
     public let activeColumnIndex: Int
+    public let display: String
+    public let disabledDisplays: [String]
     public let accessibility: Bool
     public let desktopHUDVisible: Bool
     public let columns: [Column]
@@ -42,6 +44,8 @@ public struct StripStatusSnapshot: Sendable {
         isFullScreen: Bool,
         activeColumnIndex: Int,
         accessibility: Bool,
+        display: String = "",
+        disabledDisplays: [String] = [],
         desktopHUDVisible: Bool = false,
         columns: [Column]
     ) {
@@ -53,6 +57,8 @@ public struct StripStatusSnapshot: Sendable {
         self.isFullScreen = isFullScreen
         self.activeColumnIndex = activeColumnIndex
         self.accessibility = accessibility
+        self.display = display
+        self.disabledDisplays = disabledDisplays
         self.desktopHUDVisible = desktopHUDVisible
         self.columns = columns
     }
@@ -68,6 +74,8 @@ public struct StripStatusSnapshot: Sendable {
             "isFullScreen": isFullScreen,
             "activeColumnIndex": activeColumnIndex,
             "accessibility": accessibility,
+            "display": display,
+            "disabledDisplays": disabledDisplays,
             "desktopHUDVisible": desktopHUDVisible,
             "columns": columns.map { column -> [String: Any] in
                 [
