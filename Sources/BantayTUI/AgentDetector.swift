@@ -389,24 +389,61 @@ enum AgentDetector {
         let date: Date
     }
 
+    /// Parsed tail of one session file. Transcript tails are re-read on every
+    /// poll; caching by file stamp keeps idle sessions off the CPU while the
+    /// one live file still refreshes.
+    private final class SessionTailCache: @unchecked Sendable {
+        struct Entry {
+            let date: Date
+            let size: Int
+            let maxBytes: Int
+            let activity: String?
+            let cwd: String?
+        }
+
+        static let shared = SessionTailCache()
+        private let lock = NSLock()
+        private var entries: [String: Entry] = [:]
+        private var order: [String] = []
+
+        func entry(for path: String) -> Entry? {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries[path]
+        }
+
+        func store(_ entry: Entry, for path: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if entries[path] == nil { order.append(path) }
+            entries[path] = entry
+            while order.count > 512 {
+                let evicted = order.removeFirst()
+                entries.removeValue(forKey: evicted)
+            }
+        }
+    }
+
     /// Discovers all active agent sessions under `root` modified recently.
     /// Groups transcripts by their top-level conversation directory (e.g. Antigravity brain UUID,
     /// Claude project hash, or Goose session folder) so multi-window sessions are not collapsed.
     static func activeSessionsInfo(
-        root: String, maxBytes: Int = 32768, recentThreshold: TimeInterval = 600
+        root: String, maxBytes: Int = 16384, recentThreshold: TimeInterval = 600
     ) -> [ActiveSession] {
         let canonicalRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath()
         let rootComps = canonicalRoot.pathComponents
         guard
             let enumerator = FileManager.default.enumerator(
                 at: canonicalRoot,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                includingPropertiesForKeys: [
+                    .contentModificationDateKey, .isRegularFileKey, .fileSizeKey,
+                ],
                 options: []
             )
         else {
             return []
         }
-        var sessionFiles: [String: (url: URL, date: Date)] = [:]
+        var sessionFiles: [String: (url: URL, date: Date, size: Int)] = [:]
         for case let url as URL in enumerator {
             let path = url.path
             if path.contains("/.git/") || path.contains("/node_modules/")
@@ -430,7 +467,7 @@ enum AgentDetector {
             let name = url.lastPathComponent.lowercased()
             guard
                 let values = try? url.resourceValues(
-                    forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                    forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]),
                 values.isRegularFile == true,
                 ext == "jsonl" || ext == "log" || ext == "json" || ext == "txt"
                     || name.contains("log")
@@ -438,6 +475,7 @@ enum AgentDetector {
                 continue
             }
             let date = values.contentModificationDate ?? .distantPast
+            let size = values.fileSize ?? 0
             let sessionKey: String
             if relComponents.count > 1, let firstComp = relComponents.first {
                 sessionKey = canonicalRoot.appendingPathComponent(firstComp).path
@@ -447,10 +485,10 @@ enum AgentDetector {
 
             if let existing = sessionFiles[sessionKey] {
                 if date > existing.date {
-                    sessionFiles[sessionKey] = (url, date)
+                    sessionFiles[sessionKey] = (url, date, size)
                 }
             } else {
-                sessionFiles[sessionKey] = (url, date)
+                sessionFiles[sessionKey] = (url, date, size)
             }
         }
 
@@ -467,37 +505,63 @@ enum AgentDetector {
 
         var results: [ActiveSession] = []
         for (sessionPath, fileInfo) in activeEntries {
-            guard let handle = try? FileHandle(forReadingFrom: fileInfo.url) else { continue }
-            defer { try? handle.close() }
-            let end = (try? handle.seekToEnd()) ?? 0
-            let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
-            try? handle.seek(toOffset: start)
-            let data = handle.readDataToEndOfFile()
-            let text = String(decoding: data, as: UTF8.self)
-            let lines = text.split(whereSeparator: \.isNewline)
             let isRecent = now.timeIntervalSince(fileInfo.date) <= recentThreshold
-            var foundActivity: String? = nil
-            var fallbackActivity: String? = nil
-            var foundCwd: String? = nil
-            for line in lines.reversed() {
-                let lineStr = String(line)
-                if foundCwd == nil {
-                    foundCwd = Self.extractCwd(lineStr)
-                }
-                if let readable = Self.readableLine(lineStr) {
-                    if !readable.hasPrefix("{") {
-                        if foundActivity == nil {
-                            foundActivity = readable
+            let stamp = SessionTailCache.Entry(
+                date: fileInfo.date, size: fileInfo.size, maxBytes: maxBytes,
+                activity: nil, cwd: nil)
+            var activity: String?
+            var foundCwd: String?
+            if let cached = SessionTailCache.shared.entry(for: fileInfo.url.path),
+                cached.date == stamp.date, cached.size == stamp.size,
+                cached.maxBytes == maxBytes
+            {
+                activity = cached.activity
+                foundCwd = cached.cwd
+            } else {
+                guard let handle = try? FileHandle(forReadingFrom: fileInfo.url) else { continue }
+                defer { try? handle.close() }
+                let end = (try? handle.seekToEnd()) ?? 0
+                let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
+                try? handle.seek(toOffset: start)
+                let data = handle.readDataToEndOfFile()
+                let text = String(decoding: data, as: UTF8.self)
+                let lines = text.split(whereSeparator: \.isNewline)
+                var foundActivity: String? = nil
+                var fallbackActivity: String? = nil
+                var scanned = 0
+                for line in lines.reversed() {
+                    scanned += 1
+                    if scanned > 80 { break }
+                    let lineStr = String(line)
+                    if foundCwd == nil {
+                        foundCwd = Self.extractCwd(lineStr)
+                    }
+                    if let readable = Self.readableLine(lineStr) {
+                        if !readable.hasPrefix("{") {
+                            if foundActivity == nil {
+                                foundActivity = readable
+                            }
+                        } else if fallbackActivity == nil {
+                            fallbackActivity = readable
                         }
-                    } else if fallbackActivity == nil {
-                        fallbackActivity = readable
+                    }
+                    if foundActivity != nil && foundCwd != nil {
+                        break
                     }
                 }
-                if foundActivity != nil && foundCwd != nil {
-                    break
+                activity = foundActivity ?? fallbackActivity
+                if foundCwd == nil {
+                    // Older lines may carry the cwd even when the newest tail
+                    // does not. Reuse the last answer instead of rescanning.
+                    foundCwd = SessionTailCache.shared.entry(for: fileInfo.url.path)?.cwd
                 }
+                SessionTailCache.shared.store(
+                    SessionTailCache.Entry(
+                        date: fileInfo.date, size: fileInfo.size, maxBytes: maxBytes,
+                        activity: activity, cwd: foundCwd),
+                    for: fileInfo.url.path)
             }
-            guard let activity = foundActivity ?? fallbackActivity else { continue }
+            guard let activity else { continue }
             results.append(
                 ActiveSession(
                     sessionPath: sessionPath,
@@ -1021,6 +1085,8 @@ enum StandaloneAgentScanner {
     /// processes that are not known agent CLIs.
     static func detect(samples: [ProcessSample], home: String) -> [DetectedAgent] {
         var raw: [DetectedAgent] = []
+        // Several processes can share one agent transcript root; scan it once.
+        var sessionsByRoot: [String: [AgentDetector.ActiveSession]] = [:]
         for sample in samples {
             let procLower = sample.name.lowercased()
             let cmdLower = sample.command.lowercased()
@@ -1052,7 +1118,14 @@ enum StandaloneAgentScanner {
             let roots = AgentDetector.transcriptSearchPaths(home: home, name: name)
             var sessions: [AgentDetector.ActiveSession] = []
             for root in roots {
-                let found = AgentDetector.activeSessionsInfo(root: root)
+                let found: [AgentDetector.ActiveSession]
+                if let memo = sessionsByRoot[root] {
+                    found = memo
+                } else {
+                    let scan = AgentDetector.activeSessionsInfo(root: root)
+                    sessionsByRoot[root] = scan
+                    found = scan
+                }
                 if !found.isEmpty {
                     sessions.append(contentsOf: found)
                 }

@@ -17,15 +17,61 @@ enum OpenCodeUsageAdapter {
         FileManager.default.fileExists(atPath: databaseURL(home: home).path)
     }
 
+    /// The SUM over every assistant message is the expensive part. The
+    /// ledger revision (db + wal + shm mtime) is a cheap sentinel: reuse the
+    /// last answer until the ledger actually moves.
+    private final class SnapshotCache: @unchecked Sendable {
+        struct Entry {
+            let revision: UInt64
+            let computedAt: Date
+            let snapshot: UsageSnapshot?
+        }
+
+        static let shared = SnapshotCache()
+        private let lock = NSLock()
+        private var entries: [String: Entry] = [:]
+        private var order: [String] = []
+
+        func value(for key: String) -> Entry? {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries[key]
+        }
+
+        func store(_ entry: Entry, for key: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if entries[key] == nil { order.append(key) }
+            entries[key] = entry
+            while order.count > 16 {
+                entries.removeValue(forKey: order.removeFirst())
+            }
+        }
+    }
+
     /// Aggregate usage over the last `window` seconds, keyed by message
     /// creation time (epoch ms). Returns nil when the DB is missing or empty.
     static func snapshot(
         since window: TimeInterval,
         now: Date = Date(),
-        home: String = NSHomeDirectory()
+        home: String = NSHomeDirectory(),
+        maxAge: TimeInterval = 15
     ) -> UsageSnapshot? {
         let url = databaseURL(home: home)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let cacheKey = "\(Int(window)):\(home)"
+        let revision = ledgerRevision(home: home)
+        if let cached = SnapshotCache.shared.value(for: cacheKey),
+            cached.revision == revision
+                || (maxAge > 0 && now.timeIntervalSince(cached.computedAt) < maxAge)
+        {
+            return cached.snapshot
+        }
+        func cacheNil() {
+            SnapshotCache.shared.store(
+                SnapshotCache.Entry(revision: revision, computedAt: now, snapshot: nil),
+                for: cacheKey)
+        }
         let sinceMs = Int64((now.timeIntervalSince1970 - window) * 1000)
         let sql =
             "SELECT COALESCE(SUM(CAST(json_extract(data,'$.tokens.input') AS INTEGER)),0),"
@@ -44,8 +90,12 @@ enum OpenCodeUsageAdapter {
             let cacheRead = Int(row[3]),
             let cacheWrite = Int(row[4]),
             let cost = Double(row[5])
-        else { return nil }
+        else {
+            cacheNil()
+            return nil
+        }
         guard input + output + reasoning + cacheRead + cacheWrite > 0 || cost > 0 else {
+            cacheNil()
             return nil
         }
         var snapshot = UsageSnapshot()
@@ -59,6 +109,9 @@ enum OpenCodeUsageAdapter {
         snapshot.tokensBySource[sourceName] =
             input + output + reasoning + cacheRead
             + cacheWrite
+        SnapshotCache.shared.store(
+            SnapshotCache.Entry(revision: revision, computedAt: now, snapshot: snapshot),
+            for: cacheKey)
         return snapshot
     }
 

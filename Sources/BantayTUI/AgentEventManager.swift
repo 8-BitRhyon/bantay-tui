@@ -333,9 +333,10 @@ final class AgentEventManager: ObservableObject {
     private var lastDetectedAgents: [DetectedAgent] = []
     private var activeScanTask: Task<[DetectedAgent], Never>?
     private var isRefreshingRoster = false
-    private var hasPendingRosterRefresh = false
     /// PERF-2: minimum interval between standalone `ps` scans.
-    static let minScanInterval: TimeInterval = 2.0
+    /// Standalone transcripts have no push channel, but their status does
+    /// not need sub-5s resolution. Each scan is a `ps` spawn plus tail parse.
+    static let minScanInterval: TimeInterval = 5.0
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
     /// expensive enumeration + read on each poll.
     private var transcriptMtimes: [String: Date] = [:]
@@ -361,6 +362,11 @@ final class AgentEventManager: ObservableObject {
     /// ledger refreshes on file change.
     private var lifetimeAccrual = UsageTracker.LifetimeAccrualState()
     private var lifetimeOpencodeRevision: UInt64 = 0
+    /// Full transcript sweeps are expensive; 10s is enough for session
+    /// deltas without burning a core every poll.
+    private let lifetimeAccrualInterval: TimeInterval = 10
+    private var lastLifetimeAccrualAt = Date.distantPast
+    private var lastUsagePollAt = Date.distantPast
     /// Whether the baseline came from a covered source (true delta) or a
     /// rolling window (honest estimate). Pruned with the other per-pane maps.
     private var baselineCoveredByKey: [String: Bool] = [:]
@@ -744,6 +750,15 @@ final class AgentEventManager: ObservableObject {
             if completedFingerprintByKey[key] != fingerprint {
                 completedFingerprintByKey[key] = fingerprint
                 recordedFreshFinish = true
+                // The periodic lifetime sweep may be up to 10s behind. A
+                // finish is the one moment the final tokens must land, so
+                // accrue transcript sources once more before metering.
+                if !UsageTracker.ledgerCoveredSources.contains(event.sourceKey) {
+                    lifetimeAccrual = UsageTracker.accrueLifetime(
+                        home: NSHomeDirectory(),
+                        names: self.agents.map { $0.source },
+                        state: lifetimeAccrual)
+                }
                 // Ledger-metered sources skip in-memory baselines entirely:
                 // the ledger answers "as of session start" exactly, so short
                 // sessions cannot meter ~0.
@@ -756,7 +771,7 @@ final class AgentEventManager: ObservableObject {
                 let ledgerCurrent: UsageSnapshot? =
                     ledgerBaseline == nil
                     ? nil
-                    : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400)
+                    : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400, maxAge: 0)
                 var baseline = usageBaselineByKey[key]
                 var covered =
                     baselineCoveredByKey[key]
@@ -1095,20 +1110,12 @@ extension AgentEventManager {
     }
 
     private func refreshRosterAndArmWaits() async {
-        if isRefreshingRoster {
-            hasPendingRosterRefresh = true
-            return
-        }
+        if isRefreshingRoster { return }
         isRefreshingRoster = true
-        defer {
-            isRefreshingRoster = false
-            if hasPendingRosterRefresh {
-                hasPendingRosterRefresh = false
-                Task { @MainActor [weak self] in
-                    await self?.refreshRosterAndArmWaits()
-                }
-            }
-        }
+        // Do not chain a queued refresh here. If a scan outlasts the poll
+        // interval, chaining keeps the scan loop back-to-back forever. The
+        // capture loop's next tick picks the work up instead.
+        defer { isRefreshingRoster = false }
         ensureFileWatcher()
         let herdrAgents: [HerdrAgentInfo] = await herdrAdapter.listAgents()
         let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
@@ -1171,9 +1178,17 @@ extension AgentEventManager {
                 }
         }.value
         // Transcript token/cost enumeration is gated behind `usageTrackingEnabled`.
-        if NotchHUDConfig.shared.usageTrackingEnabled {
+        // Usage sweeps read transcripts. Run them on a calmer cadence than
+        // the roster poll: 5s while agents are live, 60s when idle. The
+        // header is the only consumer, so a slower gauge is not felt.
+        let usageNow = Date()
+        let usageInterval: TimeInterval = agents.isEmpty ? 60 : 5
+        if NotchHUDConfig.shared.usageTrackingEnabled,
+            usageNow.timeIntervalSince(lastUsagePollAt) >= usageInterval
+        {
+            lastUsagePollAt = usageNow
             let hasKilo = agents.contains { $0.agent == "kilo" }
-            let now = Date()
+            let now = usageNow
             if hasKilo, KiloUsageAdapter.detect() {
                 // Read Kilo usage from SQLite off-main.
                 let pollInterval = NotchHUDConfig.shared.captureInterval
@@ -1196,8 +1211,8 @@ extension AgentEventManager {
                         }
                     return (usage, rate)
                 }.value
-                self.usage = result.0
-                self.usageRate = result.1
+                if self.usage != result.0 { self.usage = result.0 }
+                if self.usageRate != result.1 { self.usageRate = result.1 }
                 self.lastKiloSnapshot = KiloUsageAdapter.snapshot(since: 60, now: now)
                 _ = currentUsage
             } else {
@@ -1226,15 +1241,21 @@ extension AgentEventManager {
                         now: Date(),
                         window: 60)
                 }.value
-                self.usage = usageAndRate.0
-                self.usageRate = usageAndRate.1
+                if self.usage != usageAndRate.0 { self.usage = usageAndRate.0 }
+                if self.usageRate != usageAndRate.1 { self.usageRate = usageAndRate.1 }
                 // Lifetime counters for session deltas. Transcript files
                 // accrue incrementally (appended bytes only); the opencode
                 // ledger refreshes from its monotonic sums on file change.
-                self.lifetimeAccrual = UsageTracker.accrueLifetime(
-                    home: NSHomeDirectory(),
-                    names: agents.map { $0.agent },
-                    state: self.lifetimeAccrual)
+                let nowLifetime = Date()
+                if nowLifetime.timeIntervalSince(self.lastLifetimeAccrualAt)
+                    >= self.lifetimeAccrualInterval
+                {
+                    self.lastLifetimeAccrualAt = nowLifetime
+                    self.lifetimeAccrual = UsageTracker.accrueLifetime(
+                        home: NSHomeDirectory(),
+                        names: agents.map { $0.agent },
+                        state: self.lifetimeAccrual)
+                }
                 let revision = OpenCodeUsageAdapter.ledgerRevision(
                     home: NSHomeDirectory())
                 if revision != self.lifetimeOpencodeRevision {
@@ -1299,7 +1320,10 @@ extension AgentEventManager {
         // Reset them to pending while the live roster is in hand.
         TaskStore.shared.resetOrphanedTasks(
             livePaneIDs: Set(agents.compactMap { $0.paneId }))
-        self.agents = mergeApprovals(into: result.roster)
+        let mergedRoster = mergeApprovals(into: result.roster)
+        if self.agents != mergedRoster {
+            self.agents = mergedRoster
+        }
         for event in result.events {
             showEvent(event)
         }
@@ -1340,7 +1364,10 @@ extension AgentEventManager {
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
-        self.agents = mergeApprovals(into: result.roster)
+        let mergedRoster = mergeApprovals(into: result.roster)
+        if self.agents != mergedRoster {
+            self.agents = mergedRoster
+        }
         for event in result.events {
             showEvent(event)
         }

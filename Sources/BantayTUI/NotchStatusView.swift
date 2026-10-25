@@ -30,6 +30,7 @@ struct NotchStatusView: View {
     @State private var queueSelections: [String: Set<Int>] = [:]
     @State private var showWelcome = false
     @State private var now = Date()
+    @State private var clockTick = 0
     @State private var selectedTab: ShelfTab = .agents
 
     private var showTasks: Bool { selectedTab == .tasks }
@@ -491,10 +492,13 @@ struct NotchStatusView: View {
             // Only advance the clock while something on screen shows it
             // (expanded + elapsed time, or a live peek open) — otherwise the
             // 1s tick would recompute the whole body every second while idle.
-            if (isExpanded && NotchHUDConfig.shared.showElapsedTime)
-                || peekingPaneId != nil
-            {
+            if peekingPaneId != nil {
                 now = date
+            } else if isExpanded && NotchHUDConfig.shared.showElapsedTime {
+                // Elapsed labels render minutes, not seconds. Advancing the
+                // whole view five times less often keeps a parked panel cheap.
+                clockTick += 1
+                if clockTick % 5 == 0 { now = date }
             }
             pollClipboard(at: date)
         }

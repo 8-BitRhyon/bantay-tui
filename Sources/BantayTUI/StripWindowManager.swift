@@ -419,7 +419,9 @@ public final class StripWindowManager: ObservableObject {
                 updatedColumns.insert(newCol, at: insertionIndex)
                 insertionIndex += 1
             }
-            self.columns = updatedColumns
+            if self.columns != updatedColumns {
+                self.columns = updatedColumns
+            }
             activeColumnIndex = targetIdx
             let oldActive = activeColumnIndex
             reconcileFocusedWindow(focusedWindowID)
@@ -427,7 +429,9 @@ public final class StripWindowManager: ObservableObject {
             return
         }
 
-        self.columns = updatedColumns
+        if self.columns != updatedColumns {
+            self.columns = updatedColumns
+        }
         if activeColumnIndex >= columns.count {
             activeColumnIndex = max(0, columns.count - 1)
         }
