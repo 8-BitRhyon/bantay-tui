@@ -73,6 +73,7 @@ struct SettingsView: View {
     @State private var dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
     @State private var notifyOnBudgetThresholds = NotchHUDConfig.shared.notifyOnBudgetThresholds
     @State private var notifyOnHighBurnRate = NotchHUDConfig.shared.notifyOnHighBurnRate
+    @State private var confirmRiskyPrompts = NotchHUDConfig.shared.confirmRiskyPrompts
     @State private var highBurnThresholdTPM = NotchHUDConfig.shared.highBurnThresholdTPM
     @State private var enforceBudgetLimit = NotchHUDConfig.shared.enforceBudgetLimit
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
@@ -513,6 +514,16 @@ struct SettingsView: View {
                     )
                     .onChange(of: notifyOnBudgetThresholds) { newValue in
                         NotchHUDConfig.shared.notifyOnBudgetThresholds = newValue
+                    }
+                    Toggle(
+                        "Ask twice for risky approvals",
+                        isOn: $confirmRiskyPrompts
+                    )
+                    .help(
+                        "Adds a second Confirm click for pushes, deploys, sudo, deletes, and migrations."
+                    )
+                    .onChange(of: confirmRiskyPrompts) { newValue in
+                        NotchHUDConfig.shared.confirmRiskyPrompts = newValue
                     }
                     Toggle(
                         "Alert on high token burn rate (⚡ > \(highBurnThresholdTPM) tpm)",

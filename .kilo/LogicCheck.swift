@@ -8845,6 +8845,38 @@ struct LogicCheckMain {
                 StripConflictDetector.running(applications: []).isEmpty,
                 "L152 no conflict is reported when nothing runs")
 
+            // Notch card contract: free text, confirm policy, failure copy.
+            check(
+                IslandMetrics.promptAcceptsFreeText(surface: .question),
+                "L152 questions accept free text")
+            check(
+                !IslandMetrics.promptAcceptsFreeText(surface: .permission),
+                "L152 permissions do not show an answer field")
+            check(
+                IslandMetrics.requiresSecondaryConfirm(
+                    text: "git push origin main",
+                    patterns: IslandMetrics.defaultRiskyPromptPatterns),
+                "L152 push matches the risky patterns")
+            check(
+                !IslandMetrics.requiresSecondaryConfirm(
+                    text: "list the files",
+                    patterns: IslandMetrics.defaultRiskyPromptPatterns),
+                "L152 safe commands skip the confirm")
+            check(
+                !IslandMetrics.requiresSecondaryConfirm(
+                    text: "git push", patterns: []),
+                "L152 an empty pattern list never confirms")
+            check(
+                AgentEventManager.ActionFailure.deadPane.message.contains("pane"),
+                "L152 dead-pane failure names the pane")
+            check(
+                AgentEventManager.ActionFailure.accessibility.message.contains("Accessibility"),
+                "L152 accessibility failure names the grant")
+            check(
+                AgentEventManager.ActionFailure.targetUnavailable.message
+                    != AgentEventManager.ActionFailure.transport.message,
+                "L152 failure copy is specific")
+
             // Layer 153: Overview Zoom Mode, Auto-Chaining, GUI Dispatcher & Ghostty Bundle
             let overview = StripLayoutEngine.computeOverviewLayout(
                 columns: cols, viewport: viewport)

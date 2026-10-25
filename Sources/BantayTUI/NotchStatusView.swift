@@ -17,6 +17,14 @@ struct NotchStatusView: View {
     /// Delivery feedback for the compose box. Kept visible after a failed
     /// send so the draft is never silently discarded.
     @State private var composeNotice: String?
+    /// Free-text answer for the closed card. Choices never trap an answer.
+    @State private var cardAnswer = ""
+    /// Inline failure from the last card action, with a retry closure.
+    @State private var cardFailure: String?
+    @State private var cardRetry: (() -> Void)?
+    /// Second-click arming for risky prompts (opt-in).
+    @State private var confirmArmed = false
+    @State private var confirmTask: Task<Void, Never>?
     @State private var composeNoticeTask: Task<Void, Never>?
     @State private var pulse = false
     @State private var queueSelections: [String: Set<Int>] = [:]
@@ -489,6 +497,12 @@ struct NotchStatusView: View {
                 now = date
             }
             pollClipboard(at: date)
+        }
+        .onChange(of: activeNotification?.id) { _ in
+            cardAnswer = ""
+            cardFailure = nil
+            cardRetry = nil
+            confirmArmed = false
         }
         .onChange(of: hasSeenOnboarding) { seen in
             if !seen { showWelcome = true }
@@ -1055,6 +1069,9 @@ struct NotchStatusView: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(morphAnimation) { expandTo(true) } }
+                .help("Open the full request")
 
             if let contextLine {
                 Text(contextLine)
@@ -1079,6 +1096,54 @@ struct NotchStatusView: View {
                 notificationMultiOptions(
                     event: event, paneId: paneId, controls: controls,
                     resolving: resolving)
+            }
+
+            if IslandMetrics.promptAcceptsFreeText(surface: surface), let paneId {
+                HStack(spacing: 6) {
+                    TextField("Type an answer…", text: $cardAnswer)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.white)
+                        .onSubmit { sendCardAnswer(paneId: paneId) }
+                    Button {
+                        sendCardAnswer(paneId: paneId)
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundColor(
+                                cardAnswer.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                ).isEmpty ? .white.opacity(0.25) : .cyan)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Send this answer to the agent")
+                    .disabled(
+                        cardAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.horizontal, 7)
+                .frame(height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(0.07)))
+            }
+
+            if let cardFailure {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                    Text(cardFailure)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    if cardRetry != nil {
+                        Button("Retry") { cardRetry?() }
+                            .font(.system(size: 8.5, weight: .bold))
+                            .buttonStyle(.plain)
+                            .foregroundColor(.orange)
+                    }
+                }
             }
 
             Spacer(minLength: 0)
@@ -1124,8 +1189,9 @@ struct NotchStatusView: View {
                     ) {
                         withAnimation(morphAnimation) { expandTo(true) }
                     }
+                    notificationDismissButton(event.id, paneId: paneId)
                 } else {
-                    notificationDismissButton(event.id)
+                    notificationDismissButton(event.id, paneId: nil)
                 }
             }
         }
@@ -1137,6 +1203,8 @@ struct NotchStatusView: View {
                 + ((surface == .question && controls.isMulti)
                     ? IslandMetrics.multiOptionsExtraHeight(
                         optionCount: controls.choices.count) : 0)
+                + (IslandMetrics.promptAcceptsFreeText(surface: surface) ? 26 : 0)
+                + (cardFailure == nil ? 0 : 30)
         )
         .contentShape(Rectangle())
     }
@@ -1234,7 +1302,7 @@ struct NotchStatusView: View {
                         focusAgentPane(paneId)
                     }
                 }
-                notificationDismissButton(event.id)
+                notificationDismissButton(event.id, paneId: paneId)
             }
         }
         .padding(.horizontal, 14)
@@ -1258,12 +1326,17 @@ struct NotchStatusView: View {
         return project
     }
 
-    private func notificationDismissButton(_ id: UUID) -> some View {
+    private func notificationDismissButton(_ id: UUID, paneId: String?) -> some View {
         TactileRowButton(
             systemName: "xmark",
             color: Color.white.opacity(0.5),
-            helpText: "Dismiss notification"
+            helpText: paneId == nil
+                ? "Dismiss notification"
+                : "Acknowledge until the request changes"
         ) {
+            if let paneId {
+                eventManager.acknowledgeApproval(paneId: paneId)
+            }
             dismissNotification(id)
         }
     }
@@ -1448,15 +1521,23 @@ struct NotchStatusView: View {
                 title: "Approve", systemName: "checkmark", color: .green,
                 helpText: "Approve request (Y)", disabled: resolving
             ) {
-                eventManager.approve(paneId: paneId)
-                dismissNotification(event.id)
+                performCardAction(
+                    paneId: paneId, prompt: event.title ?? event.message ?? "",
+                    onDelivered: { dismissNotification(event.id) }
+                ) {
+                    eventManager.approveResult(paneId: paneId)
+                }
             }
             notificationActionButton(
                 title: "Deny", systemName: "xmark", color: .red,
                 helpText: "Deny request (N)", disabled: resolving
             ) {
-                eventManager.deny(paneId: paneId)
-                dismissNotification(event.id)
+                performCardAction(
+                    paneId: paneId, prompt: event.title ?? event.message ?? "",
+                    onDelivered: { dismissNotification(event.id) }
+                ) {
+                    eventManager.denyResult(paneId: paneId)
+                }
             }
         } else {
             notificationChoiceActions(
@@ -1476,8 +1557,12 @@ struct NotchStatusView: View {
                 title: "Approve", systemName: "checkmark", color: .green,
                 helpText: "Approve request (Y)", disabled: resolving
             ) {
-                eventManager.approve(paneId: paneId)
-                dismissNotification(event.id)
+                performCardAction(
+                    paneId: paneId, prompt: event.title ?? event.message ?? "",
+                    onDelivered: { dismissNotification(event.id) }
+                ) {
+                    eventManager.approveResult(paneId: paneId)
+                }
             }
         } else {
             ForEach(Array(options.enumerated()), id: \.offset) { index, label in
@@ -1488,8 +1573,13 @@ struct NotchStatusView: View {
                     disabled: resolving,
                     accessibilityLabel: label
                 ) {
-                    eventManager.approveChoice(paneId: paneId, choice: index + 1)
-                    dismissNotification(event.id)
+                    performCardAction(
+                        paneId: paneId, prompt: event.title ?? event.message ?? "",
+                        onDelivered: { dismissNotification(event.id) }
+                    ) {
+                        eventManager.approveChoiceResult(
+                            paneId: paneId, choice: index + 1)
+                    }
                 }
             }
             if controls.choices.count > cap {
@@ -1603,9 +1693,15 @@ struct NotchStatusView: View {
                 : "Pick at least one option first",
             disabled: resolving || !canSubmit
         ) {
-            eventManager.approveMulti(paneId: paneId, selections: numbers)
-            queueSelections.removeValue(forKey: paneId)
-            dismissNotification(event.id)
+            performCardAction(
+                paneId: paneId, prompt: event.title ?? event.message ?? "",
+                onDelivered: {
+                    queueSelections.removeValue(forKey: paneId)
+                    dismissNotification(event.id)
+                }
+            ) {
+                eventManager.approveMultiResult(paneId: paneId, selections: numbers)
+            }
         }
     }
 
@@ -2337,6 +2433,55 @@ struct NotchStatusView: View {
         AppDelegate.composingPaneId = paneId
         promptText = ""
         DispatchQueue.main.async { promptFocused = true }
+    }
+
+    // MARK: - Closed-card actions
+
+    /// Runs a card action and surfaces its transport result. A failure keeps
+    /// the card open, names the reason, and offers Retry.
+    private func performCardAction(
+        paneId: String, prompt: String,
+        onDelivered: (() -> Void)? = nil,
+        action: @escaping () -> AgentEventManager.ActionResult
+    ) {
+        let config = NotchHUDConfig.shared
+        let needsConfirm =
+            config.confirmRiskyPrompts
+            && IslandMetrics.requiresSecondaryConfirm(
+                text: prompt, patterns: config.riskyPromptPatterns)
+        if needsConfirm && !confirmArmed {
+            confirmArmed = true
+            confirmTask?.cancel()
+            confirmTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                confirmArmed = false
+            }
+            return
+        }
+        confirmTask?.cancel()
+        confirmArmed = false
+        let result = action()
+        switch result {
+        case .delivered:
+            cardFailure = nil
+            cardRetry = nil
+            onDelivered?()
+        case .failed(let failure):
+            cardFailure = failure.message
+            cardRetry = { [self] in
+                performCardAction(
+                    paneId: paneId, prompt: prompt, onDelivered: onDelivered,
+                    action: action)
+            }
+        }
+    }
+
+    private func sendCardAnswer(paneId: String) {
+        let text = cardAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        performCardAction(paneId: paneId, prompt: text) {
+            eventManager.sendText(paneId: paneId, text: text)
+        }
     }
 
     private func submitPrompt() {

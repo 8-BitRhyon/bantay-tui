@@ -181,6 +181,14 @@ final class NotchHUDConfig {
     var showAgentsTab: Bool = true {
         didSet { defaults.set(showAgentsTab, forKey: "showAgentsTab") }
     }
+    /// Opt-in second click for risky approvals. Off by default: one click
+    /// plus the risk badge is the norm.
+    var confirmRiskyPrompts = false {
+        didSet { defaults.set(confirmRiskyPrompts, forKey: "confirmRiskyPrompts") }
+    }
+    var riskyPromptPatterns: [String] = IslandMetrics.defaultRiskyPromptPatterns {
+        didSet { defaults.set(riskyPromptPatterns, forKey: "riskyPromptPatterns") }
+    }
     var showTasksTab: Bool = true {
         didSet { defaults.set(showTasksTab, forKey: "showTasksTab") }
     }
@@ -720,6 +728,12 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "ingestPort") as? NSNumber {
             ingestPort = Int(IngestHTTP.clampedPort(v.intValue))
+        }
+        if let v = defaults.object(forKey: "confirmRiskyPrompts") as? Bool {
+            confirmRiskyPrompts = v
+        }
+        if let v = defaults.stringArray(forKey: "riskyPromptPatterns") {
+            riskyPromptPatterns = v
         }
         if let v = defaults.object(forKey: "showShelfTab") as? Bool {
             showShelfTab = v

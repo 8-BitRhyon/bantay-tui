@@ -27,6 +27,10 @@ final class ApprovalNotificationController: NSObject,
     /// Fixed number of numbered choice actions registered up front so action
     /// sets never go stale across posts (the category is global).
     private static let maxChoiceActions = 4
+    /// Banner ceiling: a category may register four actions total. Question
+    /// banners spend one on Answer, permission banners two on Approve/Deny.
+    private static let questionChoiceCount = 3
+    private static let permissionChoiceCount = 2
 
     private override init() {
         super.init()
@@ -56,7 +60,7 @@ final class ApprovalNotificationController: NSObject,
             identifier: Self.denyActionID, title: "Deny",
             options: [.destructive, .authenticationRequired])
         var choiceActions = [approve, deny]
-        for index in 0..<Self.maxChoiceActions {
+        for index in 0..<Self.permissionChoiceCount {
             choiceActions.append(
                 UNNotificationAction(
                     identifier: Self.choiceActionIDPrefix + String(index),
@@ -69,7 +73,7 @@ final class ApprovalNotificationController: NSObject,
         // Questions never offer Approve/Deny: answering directly is the only
         // safe quick action, plus Answer to open the full question.
         var questionActions = [answer]
-        for index in 0..<Self.maxChoiceActions {
+        for index in 0..<Self.questionChoiceCount {
             questionActions.append(
                 UNNotificationAction(
                     identifier: Self.choiceActionIDPrefix + String(index),

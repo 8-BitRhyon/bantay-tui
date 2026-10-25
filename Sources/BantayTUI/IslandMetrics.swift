@@ -727,6 +727,27 @@ public enum IslandMetrics: Sendable {
         return .waiting
     }
 
+    /// Risky prompts that may require a second click when the user opts in.
+    /// Patterns are case-insensitive substrings.
+    public static let defaultRiskyPromptPatterns = [
+        "git push", "deploy", "rm -rf", "sudo", "migrate", "force",
+    ]
+
+    public static func requiresSecondaryConfirm(
+        text: String, patterns: [String]
+    ) -> Bool {
+        guard !patterns.isEmpty else { return false }
+        let lower = text.lowercased()
+        return patterns.contains {
+            !$0.isEmpty && lower.contains($0.lowercased())
+        }
+    }
+
+    /// Questions always accept free text: choices must never trap an answer.
+    static func promptAcceptsFreeText(surface: PromptSurfaceKind) -> Bool {
+        surface == .question
+    }
+
     /// Maximum stacked closed-notification cards. New events never silently
     /// replace older ones; overflow drops the lowest-priority oldest first.
     static let maxNotificationQueueCount = 5

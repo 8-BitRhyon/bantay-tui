@@ -1493,6 +1493,98 @@ extension AgentEventManager {
     }
 
     /// Approves an agent request via the active adapter, routing OpenCode panes to the decision file.
+    /// Why an approval action could not reach its agent. The card shows the
+    /// exact reason and a Retry; a failed send is never reported as success.
+    enum ActionFailure: String, Equatable, Sendable {
+        case deadPane
+        case accessibility
+        case targetUnavailable
+        case emptyText
+        case transport
+
+        var message: String {
+            switch self {
+            case .deadPane: return "That pane is gone. Open the agent's terminal."
+            case .accessibility: return "Accessibility is not granted. Grant it in Settings."
+            case .targetUnavailable: return "The target app is not running."
+            case .emptyText: return "Type an answer first."
+            case .transport: return "The input could not be written to the agent."
+            }
+        }
+
+        var needsAccessibility: Bool { self == .accessibility }
+    }
+
+    enum ActionResult: Equatable, Sendable {
+        case delivered
+        case failed(ActionFailure)
+
+        var isDelivered: Bool { self == .delivered }
+    }
+
+    /// True when a real multiplexer pane is still in the roster.
+    func paneIsAlive(_ paneId: String) -> Bool {
+        if paneId.hasPrefix("standalone:") || paneId.hasPrefix("app:") { return true }
+        return agents.contains { $0.paneId == paneId }
+    }
+
+    /// Sends free text into an agent and reports whether it was written.
+    @discardableResult
+    func sendText(paneId: String, text: String) -> ActionResult {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .failed(.emptyText) }
+        if paneId.hasPrefix("standalone:") || OpenCodeActionWriter.isOpenCodePane(paneId) {
+            let agentName =
+                paneId.hasPrefix("standalone:")
+                ? StandaloneAgentDispatcher.cleanAgentName(from: paneId) : "opencode"
+            let ok = StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: agentName, text: trimmed, cwd: nil, autoSend: true)
+            if ok { return .delivered }
+            return .failed(
+                StandaloneAgentDispatcher.accessibilityGranted()
+                    ? .targetUnavailable : .accessibility)
+        }
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        let adapter = activeAdapter
+        adapter.sendLine(paneId: paneId, text: trimmed)
+        adapter.focusPane(paneId: paneId)
+        return .delivered
+    }
+
+    /// Approve with a transport result so the card can show failures.
+    @discardableResult
+    func approveResult(paneId: String) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        if paneId.hasPrefix("standalone:"),
+            !StandaloneAgentDispatcher.accessibilityGranted()
+        {
+            return .failed(.accessibility)
+        }
+        approve(paneId: paneId)
+        return .delivered
+    }
+
+    @discardableResult
+    func denyResult(paneId: String) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        deny(paneId: paneId)
+        return .delivered
+    }
+
+    @discardableResult
+    func approveChoiceResult(paneId: String, choice: Int) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        approveChoice(paneId: paneId, choice: choice)
+        return .delivered
+    }
+
+    @discardableResult
+    func approveMultiResult(paneId: String, selections: [Int]) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        approveMulti(paneId: paneId, selections: selections)
+        return .delivered
+    }
+
     func approve(paneId: String) {
         AwayDigestStore.shared.recordApprovalAnswered()
         acknowledgeApproval(paneId: paneId)
