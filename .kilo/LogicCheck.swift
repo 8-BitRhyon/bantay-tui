@@ -8699,6 +8699,67 @@ struct LogicCheckMain {
                     && !reloadedSemantics.floatStubbornWindows,
                 "L152 window semantics persist")
 
+            // Phase B: session restore re-binds columns to fresh window ids.
+            let restoreInfo: (String, String, String?) -> StripWindowInfo = { id, title, cwd in
+                StripWindowInfo(
+                    id: id, pid: 7, appBundleID: "com.example.app",
+                    title: title, agentName: nil, agentCwd: cwd, agentStatus: .idle)
+            }
+            let savedColumns = [
+                StripColumn(
+                    windows: [restoreInfo("old-1", "Alpha", "/p/a")],
+                    widthFraction: 0.25, isTabbed: false, focusedRow: 0,
+                    isPinned: true),
+                StripColumn(
+                    windows: [
+                        restoreInfo("old-2", "Beta", nil),
+                        restoreInfo("old-3", "Gamma", nil),
+                    ],
+                    widthFraction: 0.66, isTabbed: true, focusedRow: 1),
+            ]
+            let snapshot = StripLayoutSnapshot.capture(
+                columns: savedColumns, activeColumnIndex: 1)
+            check(
+                snapshot.columns.count == 2 && snapshot.columns[1].windows.count == 2,
+                "L152 snapshot captures stacks and flags")
+            // Discovery order differs from saved order; ids are new.
+            let restored = snapshot.restore(discovered: [
+                restoreInfo("new-3", "Gamma", nil),
+                restoreInfo("new-1", "Alpha", "/p/a"),
+                restoreInfo("new-2", "Beta", nil),
+                restoreInfo("new-9", "Delta", nil),
+            ])
+            check(
+                restored.columns.count == 3,
+                "L152 restore keeps saved columns and appends new windows")
+            check(
+                restored.columns[0].isPinned
+                    && abs(restored.columns[0].widthFraction - 0.25) < 0.001
+                    && restored.columns[0].windows.first?.title == "Alpha",
+                "L152 restore keeps pin, width, and window binding")
+            check(
+                restored.columns[1].isTabbed
+                    && restored.columns[1].focusedRow == 1
+                    && restored.columns[1].windows.map(\.title) == ["Beta", "Gamma"],
+                "L152 restore keeps tab state, focus, and stack order")
+            check(
+                restored.activeColumnIndex == 1,
+                "L152 restore keeps the active column")
+            check(
+                restored.columns.last?.windows.first?.title == "Delta",
+                "L152 unmatched windows append at the end")
+            // A closed window drops out without disturbing the others.
+            let partial = snapshot.restore(discovered: [
+                restoreInfo("n1", "Alpha", nil)
+            ])
+            check(
+                partial.columns.count == 1
+                    && partial.columns[0].windows.map(\.title) == ["Alpha"],
+                "L152 closed windows drop out of the restore")
+            check(
+                StripSessionStore.displayKey(42) == "display-42",
+                "L152 display keys are stable and explicit")
+
             // Layer 153: Overview Zoom Mode, Auto-Chaining, GUI Dispatcher & Ghostty Bundle
             let overview = StripLayoutEngine.computeOverviewLayout(
                 columns: cols, viewport: viewport)

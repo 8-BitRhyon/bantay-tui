@@ -40,6 +40,11 @@ public final class StripWindowManager: ObservableObject {
     /// keeps its size) instead of being fought on every layout pass.
     private var floatingWindowIDs: Set<String> = []
     private var frameRefusals: [String: Int] = [:]
+    /// Layout restore runs once per launch, on the first successful scan.
+    private var didRestoreLayout = false
+    private var layoutSaveTask: Task<Void, Never>?
+    private var wakeObserver: Any?
+    private var sessionActiveObserver: Any?
 
     private init() {
         let loadedConfig = StripConfiguration.load()
@@ -111,7 +116,25 @@ public final class StripWindowManager: ObservableObject {
             }
         }
 
-        // 3. Periodic synchronization for window lifecycle (open/close/move)
+        // 3. Recover after sleep, screen lock, and user session switches.
+        // AX references go stale across sleep and app windows may have moved;
+        // re-scan and re-apply instead of waiting for the next timer tick.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.recoverAfterWake() }
+        }
+        sessionActiveObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.recoverAfterWake() }
+        }
+
+        // 4. Periodic synchronization for window lifecycle (open/close/move)
         syncTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.syncWindows()
@@ -149,6 +172,17 @@ public final class StripWindowManager: ObservableObject {
             NotificationCenter.default.removeObserver(screenChangeObserver)
             self.screenChangeObserver = nil
         }
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+        if let sessionActiveObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sessionActiveObserver)
+            self.sessionActiveObserver = nil
+        }
+        layoutSaveTask?.cancel()
+        layoutSaveTask = nil
+        saveLayoutNow()
         syncTimer?.invalidate()
         syncTimer = nil
         eventCancellable?.cancel()
@@ -190,6 +224,70 @@ public final class StripWindowManager: ObservableObject {
     }
 
     /// Re-anchors viewport dimensions to current active display visible frame.
+    // MARK: - Session restore and wake recovery
+
+    /// Stable per-display key: CGDirectDisplayID survives launches, screen
+    /// indexes do not.
+    static func displayKey(for screen: NSScreen?) -> String {
+        guard let screen,
+            let number = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? NSNumber
+        else { return "display-unknown" }
+        return StripSessionStore.displayKey(number.uint32Value)
+    }
+
+    private var currentDisplayKey: String {
+        Self.displayKey(for: viewportScreen ?? NSScreen.main ?? NSScreen.screens.first)
+    }
+
+    /// Adopt the saved layout once per launch. Windows are re-bound by
+    /// bundle id and title; closed windows drop out and new ones append.
+    private func restoreLayoutIfNeeded(discovered: [StripWindowInfo]) -> Bool {
+        guard !didRestoreLayout else { return false }
+        didRestoreLayout = true
+        guard let snapshot = StripSessionStore.load(displayKey: currentDisplayKey) else {
+            return false
+        }
+        let restored = snapshot.restore(discovered: discovered)
+        guard !restored.columns.isEmpty else { return false }
+        columns = restored.columns
+        activeColumnIndex = restored.activeColumnIndex
+        NSLog("strip: restored layout with %d columns", columns.count)
+        return true
+    }
+
+    /// Debounced write: layout changes arrive in bursts during navigation.
+    private func scheduleLayoutSave() {
+        guard didRestoreLayout else { return }
+        layoutSaveTask?.cancel()
+        layoutSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard let self, !Task.isCancelled else { return }
+            self.saveLayoutNow()
+        }
+    }
+
+    func saveLayoutNow() {
+        guard !columns.isEmpty else { return }
+        let snapshot = StripLayoutSnapshot.capture(
+            columns: columns, activeColumnIndex: activeColumnIndex)
+        StripSessionStore.save(snapshot, displayKey: currentDisplayKey)
+    }
+
+    /// Sleep and screen lock invalidate AX references and can move windows.
+    /// Re-scan from scratch, forget refusals, and re-apply the layout.
+    private func recoverAfterWake() {
+        guard config.isEnabled else { return }
+        registry.invalidateAXCache()
+        frameRefusals.removeAll()
+        floatingWindowIDs.removeAll()
+        updateViewportBounds()
+        syncWindows()
+        updateLayout(animate: false)
+        NSLog("strip: recovered after wake")
+    }
+
     public func updateViewportBounds() {
         let mouseLoc = NSEvent.mouseLocation
         let screen =
@@ -215,6 +313,13 @@ public final class StripWindowManager: ObservableObject {
         floatingWindowIDs.formIntersection(Set(scanned.map(\.id)))
         let discovered = scanned.filter { !floatingWindowIDs.contains($0.id) }
         guard !discovered.isEmpty else { return }
+
+        // First successful scan of the session: adopt the saved layout for
+        // this display, then hand control back to normal reconciliation.
+        if restoreLayoutIfNeeded(discovered: discovered) {
+            updateLayout(animate: false)
+            return
+        }
 
         // Track the exact focused window, not just the frontmost PID. This
         // keeps the active column and focused tab correct when one app owns
@@ -325,7 +430,9 @@ public final class StripWindowManager: ObservableObject {
             return
         }
 
-        layoutResult = StripLayoutEngine.computeLayout(columns: columns, viewport: viewport)
+        layoutResult = StripLayoutEngine.computeLayout(
+            columns: columns, viewport: viewport,
+            keepOriginalHeight: config.keepOriginalHeight)
 
         let targetScroll = StripLayoutEngine.revealTarget(
             columnIndex: activeColumnIndex,
@@ -333,6 +440,7 @@ public final class StripWindowManager: ObservableObject {
             viewport: viewport
         )
 
+        scheduleLayoutSave()
         if animate {
             animator.animateTo(target: targetScroll, omega: config.springOmega)
         } else {

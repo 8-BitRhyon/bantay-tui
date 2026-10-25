@@ -306,6 +306,12 @@ public final class StripWindowRegistry {
         return value as? Bool ?? false
     }
 
+    /// Drops cached AX references. Sleep and screen lock can invalidate
+    /// them; the next scan repopulates the cache.
+    public func invalidateAXCache() {
+        axElements.removeAll()
+    }
+
     /// Current on-screen frame, read back after a resize. Used to detect
     /// apps that refuse the strip's geometry.
     public func actualFrame(windowID: String) -> StripRect? {
