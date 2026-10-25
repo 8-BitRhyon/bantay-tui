@@ -1061,6 +1061,13 @@ struct NotchStatusView: View {
                 .foregroundColor(Color(hex: event.kind.color))
                 .fixedSize()
             }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                if let paneId {
+                    beginReplyFromCard(event: event, paneId: paneId, agent: agent)
+                }
+            }
+            .help("Double-click to reply to this agent")
 
             Text(detail)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -1068,10 +1075,14 @@ struct NotchStatusView: View {
                 .lineLimit(3)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
                 .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    if let paneId {
+                        beginReplyFromCard(event: event, paneId: paneId, agent: agent)
+                    }
+                }
                 .onTapGesture { withAnimation(morphAnimation) { expandTo(true) } }
-                .help("Open the full request")
+                .help("Click to open the request. Double-click to reply.")
 
             if let contextLine {
                 Text(contextLine)
@@ -2425,6 +2436,29 @@ struct NotchStatusView: View {
         {
             cancelComposing()
         }
+    }
+
+    /// Double-click on a closed card: open the inbox with the reply field
+    /// already focused for that agent. Works for approvals, waiting states,
+    /// and questions alike - replying is not limited to questions.
+    private func beginReplyFromCard(
+        event: AgentEvent, paneId: String, agent: AgentSnapshot?
+    ) {
+        let target =
+            agent
+            ?? mergedRoster.first {
+                ($0.paneId != nil && $0.paneId == paneId)
+                    || $0.source == event.sourceKey
+            }
+        if let target {
+            beginComposing(target)
+        } else {
+            composingPaneId = paneId
+            AppDelegate.composingPaneId = paneId
+            promptText = ""
+            promptFocused = true
+        }
+        withAnimation(morphAnimation) { expandTo(true) }
     }
 
     private func beginComposing(_ agent: AgentSnapshot) {

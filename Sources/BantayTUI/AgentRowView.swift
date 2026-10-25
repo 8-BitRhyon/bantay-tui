@@ -73,7 +73,9 @@ struct AgentRowView: View {
             .padding(.horizontal, 16)
             .frame(height: rowHeight)
             .contentShape(Rectangle())
+            .onTapGesture(count: 2) { onBeginComposing(agent) }
             .onTapGesture { onFocus(agent) }
+            .help("Click to focus. Double-click to reply.")
         }
         .background(isRowHovered ? Color.white.opacity(0.07) : Color.clear)
         .modifier(AgentRowAccessibility(agent: agent))
