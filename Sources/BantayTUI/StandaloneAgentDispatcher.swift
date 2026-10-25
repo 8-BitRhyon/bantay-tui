@@ -70,11 +70,9 @@ public enum StandaloneAgentDispatcher {
 
         let cleanName = cleanAgentName(from: agentName)
 
-        // 1. Save the clipboard; dispatch clobbers it and must restore.
-        let savedTypes = NSPasteboard.general.types ?? []
-        let savedStrings = savedTypes.compactMap {
-            NSPasteboard.general.string(forType: $0)
-        }
+        // 1. Save the whole pasteboard (every item and type) so images,
+        // RTF, and file URLs survive the dispatch, not just the first string.
+        let clipboard = captureClipboard()
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
 
@@ -82,7 +80,7 @@ public enum StandaloneAgentDispatcher {
         // A failed focus aborts: pasting into the frontmost window would
         // inject the task into the wrong app.
         guard TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid) else {
-            restoreClipboard(strings: savedStrings)
+            restoreClipboard(clipboard)
             return false
         }
 
@@ -97,20 +95,46 @@ public enum StandaloneAgentDispatcher {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
                 pasteAndReturn(isGui: isGui)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) {
-                    restoreClipboard(strings: savedStrings)
+                    restoreClipboard(clipboard)
                 }
             }
         } else {
-            restoreClipboard(strings: savedStrings)
+            restoreClipboard(clipboard)
         }
         return true
     }
 
-    /// Best-effort clipboard restore after a dispatch clobber.
-    private static func restoreClipboard(strings: [String]) {
-        guard let first = strings.first else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(first, forType: .string)
+    /// Clipboard snapshot: every pasteboard item with every data type.
+    private struct ClipboardSnapshot {
+        var items: [[NSPasteboard.PasteboardType: Data]] = []
+    }
+
+    private static func captureClipboard() -> ClipboardSnapshot {
+        let pasteboard = NSPasteboard.general
+        guard let items = pasteboard.pasteboardItems else { return ClipboardSnapshot() }
+        var saved: [[NSPasteboard.PasteboardType: Data]] = []
+        for item in items {
+            var entry: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) { entry[type] = data }
+            }
+            if !entry.isEmpty { saved.append(entry) }
+        }
+        return ClipboardSnapshot(items: saved)
+    }
+
+    /// Restores every saved item and type. Best effort: a pasteboard that
+    /// refuses a write is left cleared rather than half-written.
+    private static func restoreClipboard(_ snapshot: ClipboardSnapshot) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard !snapshot.items.isEmpty else { return }
+        let items = snapshot.items.map { entry -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in entry { item.setData(data, forType: type) }
+            return item
+        }
+        pasteboard.writeObjects(items)
     }
 
     @MainActor

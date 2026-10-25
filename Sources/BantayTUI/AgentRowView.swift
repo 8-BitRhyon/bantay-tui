@@ -196,6 +196,14 @@ struct AgentRowView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                if isCompact, agent.kind == .idle {
+                    Text("Idle")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.45))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                }
                 Spacer(minLength: 4)
                 if NotchHUDConfig.shared.showElapsedTime,
                     let startedAt = agent.startedAt,

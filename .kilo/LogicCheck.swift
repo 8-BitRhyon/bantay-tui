@@ -1765,6 +1765,19 @@ struct LogicCheckMain {
         let summed = UsageParser.parseAll(lines: [claudeLine, flatLine, "garbage"])
         check(summed.inputTokens == 1500, "L10 parseAll sums input (got \(summed.inputTokens))")
         check(summed.outputTokens == 300, "L10 parseAll sums output")
+
+        // Aggregating snapshots must keep every bucket, including reasoning
+        // and cache-write tokens fed by the opencode adapter.
+        var bucketSnapshot = UsageSnapshot()
+        bucketSnapshot.reasoningTokens = 7
+        bucketSnapshot.cacheWriteTokens = 11
+        bucketSnapshot.inputTokens = 3
+        let aggregateCheck = UsageTracker.aggregate([bucketSnapshot])
+        check(
+            aggregateCheck.reasoningTokens == 7
+                && aggregateCheck.cacheWriteTokens == 11
+                && aggregateCheck.inputTokens == 3,
+            "L10 aggregate keeps reasoning and cache-write buckets")
         check(
             abs(summed.costUSD - 0.016) < 0.0001,
             "L10 parseAll sums cost (got \(summed.costUSD))")
@@ -2523,15 +2536,16 @@ struct LogicCheckMain {
         check(fit4 >= 1 && fit4 <= 3, "L23 long names shrink fit (got \(fit4))")
         check(fit4 <= fit1, "L23 longer names never fit more than short ones")
 
-        // L24. Expanded height reserves the single tab row and +N overflow
-        // rows. Shelf, notes, and media are icons in that same row, so they
-        // add no height.
+        // L24. Expanded height reserves the tab row when it is shown, plus
+        // +N overflow rows.
         let baseSize = IslandMetrics.expandedSize(topInset: 47, agentCount: 3)
         let withTab = IslandMetrics.expandedSize(
             topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true)
         check(
-            abs(withTab.height - baseSize.height) < 0.01,
-            "L24 shelf tab shares the tab row (got \(withTab.height) vs \(baseSize.height))")
+            abs(
+                withTab.height - baseSize.height
+                    - (IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight)) < 0.01,
+            "L24 shelf tab adds tab+divider height (got \(withTab.height) vs \(baseSize.height))")
         let withOverflow = IslandMetrics.expandedSize(
             topInset: 47, agentCount: 3, queueCount: 0, overflowCount: 2)
         check(
@@ -2542,7 +2556,9 @@ struct LogicCheckMain {
         let both = IslandMetrics.expandedSize(
             topInset: 47, agentCount: 3, queueCount: 0, shelfTabVisible: true,
             overflowCount: 1)
-        let expected = baseSize.height + IslandMetrics.overflowRowHeight
+        let expected =
+            baseSize.height + IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight
+            + IslandMetrics.overflowRowHeight
         check(abs(both.height - expected) < 0.01, "L24 tab + overflow stack correctly")
         check(
             IslandMetrics.contentHeight(

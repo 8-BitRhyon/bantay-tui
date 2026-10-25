@@ -363,7 +363,7 @@ public final class StripWindowManager: ObservableObject {
             windows: scanned,
             displayKey: activeDisplayKey,
             disabledDisplayKeys: config.disabledDisplayKeys)
-        floatingWindowIDs.formIntersection(Set(eligible.map(\.id)))
+        floatingWindowIDs.formIntersection(Set(scanned.map(\.id)))
         let discovered = eligible.filter { !floatingWindowIDs.contains($0.id) }
         guard !discovered.isEmpty else { return }
 

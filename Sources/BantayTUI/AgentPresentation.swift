@@ -187,6 +187,9 @@ enum AgentPresentation {
         for pattern in [
             "^\\[?(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|NOTICE)\\]?\\s*",
             "^[A-Za-z0-9_.-]+::[A-Za-z0-9_.-]+:\\s*",
+            // Terminal titles append machine fields ("OpenCode update
+            // available current=2.1.3"). Drop the fields, keep the sentence.
+            "\\s+\\b(?:version|channel|current|commit|rev|host|pid|port)=\\S+",
             "timestamp=[^ ]+",
             "level=[^ ]+",
             "paneId=[^ ]+",

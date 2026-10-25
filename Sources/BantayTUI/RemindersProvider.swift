@@ -97,13 +97,12 @@ public final class RemindersProvider: ObservableObject {
 
     /// Opens Privacy settings at Reminders when the grant was denied.
     public func openPrivacySettings() {
-        guard
-            let url = URL(
-                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders")
-        else {
-            return
-        }
-        NSWorkspace.shared.open(url)
+        let modern =
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Reminders"
+        let legacy =
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"
+        if let url = URL(string: modern), NSWorkspace.shared.open(url) { return }
+        if let url = URL(string: legacy) { NSWorkspace.shared.open(url) }
     }
 
     /// Background inbound sync from Apple Reminders into Bantay TaskStore using
@@ -247,9 +246,13 @@ public final class RemindersProvider: ObservableObject {
     public func complete(_ reminder: EKReminder) async {
         guard let store else { return }
         reminder.isCompleted = true
-        try? store.save(reminder, commit: true)
-        lastOwnWriteAt = Date()
-        await refresh()
+        do {
+            try store.save(reminder, commit: true)
+            lastOwnWriteAt = Date()
+            await refresh()
+        } catch {
+            reminder.isCompleted = false
+        }
     }
 
     /// Reopen a reminder that a task un-completion should restore. Needs a
@@ -275,17 +278,23 @@ public final class RemindersProvider: ObservableObject {
         }
         guard let match, match.isCompleted else { return }
         match.isCompleted = false
-        try? store.save(match, commit: true)
-        lastOwnWriteAt = Date()
-        await refresh()
+        do {
+            try store.save(match, commit: true)
+            lastOwnWriteAt = Date()
+            await refresh()
+        } catch {
+            match.isCompleted = true
+        }
     }
 
     /// Remove a reminder.
     public func remove(_ reminder: EKReminder) async {
         guard let store else { return }
-        try? store.remove(reminder, commit: true)
-        lastOwnWriteAt = Date()
-        await refresh()
+        do {
+            try store.remove(reminder, commit: true)
+            lastOwnWriteAt = Date()
+            await refresh()
+        } catch {}
     }
 }
 

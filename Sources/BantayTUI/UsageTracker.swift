@@ -426,6 +426,7 @@ enum UsageTracker {
             total.outputTokens += part.outputTokens
             total.cacheReadTokens += part.cacheReadTokens
             total.cacheCreationTokens += part.cacheCreationTokens
+            total.reasoningTokens += part.reasoningTokens
             total.costUSD += part.costUSD
             for (source, cost) in part.costBySource {
                 total.costBySource[source, default: 0] += cost
