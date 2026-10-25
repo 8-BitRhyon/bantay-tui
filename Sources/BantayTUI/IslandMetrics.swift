@@ -67,6 +67,9 @@ public enum IslandMetrics: Sendable {
     /// Without it the card's top row renders inside the notch cutout.
     public static let notificationTopGap: CGFloat = 8
     public static let headerHeight: CGFloat = 40
+    /// Inbox / Tasks / History row. Always visible in the expanded panel, so
+    /// every expanded height calculation must reserve it.
+    public static let tabBarHeight: CGFloat = 34
     public static let rowHeight: CGFloat = 26
     public static let taskRowHeight: CGFloat = 34
     public static let taskSearchBarHeight: CGFloat = 38
@@ -286,7 +289,8 @@ public enum IslandMetrics: Sendable {
         taskCount: Int = 0, sectionCount: Int = 0, isTasksTab: Bool = false
     ) -> CGSize {
         let chrome =
-            (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
+            tabBarHeight
+            + (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
             + CGFloat(max(overflowCount, 0)) * overflowRowHeight
 
         let contentH: CGFloat = {
@@ -358,7 +362,8 @@ public enum IslandMetrics: Sendable {
         headerHeight: CGFloat = headerHeight, footerVisible: Bool = true
     ) -> CGSize {
         let chrome =
-            (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
+            tabBarHeight
+            + (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
             + CGFloat(max(overflowCount, 0)) * overflowRowHeight
         let contentH =
             headerHeight + chrome + rosterHeight(roster)
