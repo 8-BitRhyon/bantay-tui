@@ -61,7 +61,7 @@ public enum IslandMetrics: Sendable {
     public static let notificationWidth: CGFloat = 432
     /// Room below the last inbox row so a full row can clear the bottom
     /// fade instead of being cut by the panel edge.
-    public static let rosterBottomClearance: CGFloat = 26
+    public static let rosterBottomClearance: CGFloat = 8
     public static let notificationCornerRadius: CGFloat = 20
     /// Clearance between the physical notch and a closed notification card.
     /// Without it the card's top row renders inside the notch cutout.
