@@ -589,6 +589,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .ignoresCycle,
         ]
         window.canBecomeVisibleWithoutLogin = true
+        window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false
         // FileDropContentView provides AppKit drag-and-drop registration for the island.
         let dropView = FileDropContentView(

@@ -57,6 +57,14 @@ final class FileDropContentView<Content: View>: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// The island is a non-activating panel: without this, the first click
+    /// on a notification button only brings the panel forward and the button
+    /// never fires. Accepting the first mouse makes controls work while the
+    /// terminal or browser stays frontmost.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let activeRect = MainActor.assumeIsolated { IslandHitTracker.interactiveRect }
         guard activeRect != .zero else { return super.hitTest(point) }

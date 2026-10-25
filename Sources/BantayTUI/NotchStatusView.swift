@@ -14,6 +14,10 @@ struct NotchStatusView: View {
     @State private var showThoughtBubble = false
     @State private var composingPaneId: String?
     @State private var promptText = ""
+    /// Delivery feedback for the compose box. Kept visible after a failed
+    /// send so the draft is never silently discarded.
+    @State private var composeNotice: String?
+    @State private var composeNoticeTask: Task<Void, Never>?
     @State private var pulse = false
     @State private var queueSelections: [String: Set<Int>] = [:]
     @State private var showWelcome = false
@@ -369,6 +373,23 @@ struct NotchStatusView: View {
             content
                 .frame(width: contentFrameWidth, height: contentHeight, alignment: .top)
                 .offset(y: contentTopOffset)
+            if let composeNotice, isExpanded {
+                Text(composeNotice)
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(
+                            composeNotice.hasPrefix("Sent")
+                                ? BantayTheme.statusCompleted.opacity(0.9)
+                                : BantayTheme.statusFailed.opacity(0.9))
+                    )
+                    .padding(.bottom, 8)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
         }
         .overlay(edgeGlow)
         .overlay(SystemHUDOverlayView(), alignment: .bottom)
@@ -2320,28 +2341,52 @@ struct NotchStatusView: View {
 
     private func submitPrompt() {
         let text = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let paneId = composingPaneId, !text.isEmpty {
-            let targetAgent = eventManager.agents.first {
-                ($0.paneId ?? "standalone:\($0.source)") == paneId
-                    || $0.paneId == paneId
-                    || $0.source == paneId
-            }
-            if paneId.hasPrefix("standalone:") {
-                let agentName = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
-                StandaloneAgentDispatcher.dispatchPrompt(
-                    agentName: agentName, text: text, cwd: targetAgent?.cwd, autoSend: true
-                )
-            } else if OpenCodeActionWriter.isOpenCodePane(paneId) {
-                StandaloneAgentDispatcher.dispatchPrompt(
-                    agentName: "opencode", text: text, cwd: targetAgent?.cwd, autoSend: true
-                )
-            } else {
-                let activeAdapter = eventManager.activeAdapter
-                activeAdapter.sendLine(paneId: paneId, text: text)
-                activeAdapter.focusPane(paneId: paneId)
-            }
+        guard let paneId = composingPaneId, !text.isEmpty else {
+            cancelComposing()
+            return
         }
-        cancelComposing()
+        let targetAgent = eventManager.agents.first {
+            ($0.paneId ?? "standalone:\($0.source)") == paneId
+                || $0.paneId == paneId
+                || $0.source == paneId
+        }
+        let label = targetAgent?.source ?? StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+
+        var delivered = false
+        if paneId.hasPrefix("standalone:") {
+            delivered = StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: StandaloneAgentDispatcher.cleanAgentName(from: paneId),
+                text: text, cwd: targetAgent?.cwd, autoSend: true)
+        } else if OpenCodeActionWriter.isOpenCodePane(paneId) {
+            delivered = StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: "opencode", text: text, cwd: targetAgent?.cwd, autoSend: true)
+        } else {
+            // Multiplexer panes take text through the adapter directly; no
+            // Accessibility or clipboard involved.
+            let activeAdapter = eventManager.activeAdapter
+            activeAdapter.sendLine(paneId: paneId, text: text)
+            activeAdapter.focusPane(paneId: paneId)
+            delivered = true
+        }
+
+        if delivered {
+            showComposeNotice("Sent to \(label)")
+            cancelComposing()
+        } else {
+            // Never clear a draft that did not reach the agent.
+            showComposeNotice("Couldn't reach \(label). Grant Accessibility or open its terminal.")
+            promptFocused = true
+        }
+    }
+
+    private func showComposeNotice(_ text: String) {
+        composeNoticeTask?.cancel()
+        withAnimation(.easeOut(duration: 0.15)) { composeNotice = text }
+        composeNoticeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3.0))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.2)) { composeNotice = nil }
+        }
     }
 
     private func cancelComposing() {
