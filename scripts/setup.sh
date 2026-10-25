@@ -323,8 +323,20 @@ cat > "$AGENTS_PLIST" <<PLIST
 PLIST
 
 launchctl bootout gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) "$AGENTS_PLIST" 2>/dev/null || \
-  launchctl load "$AGENTS_PLIST" 2>/dev/null || true
+# bootout is asynchronous. Bootstrap can fail with "service already loaded"
+# or an I/O error while the old job is still exiting; retry, then kickstart so
+# a successful install never leaves the agent unloaded.
+for _ in 1 2 3 4 5; do
+  if launchctl bootstrap gui/$(id -u) "$AGENTS_PLIST" 2>/dev/null; then
+    break
+  fi
+  if launchctl kickstart -k gui/$(id -u)/com.bantay-tui.agent 2>/dev/null; then
+    break
+  fi
+  sleep 0.5
+done
+launchctl kickstart -k gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || \
+  launchctl start com.bantay-tui.agent 2>/dev/null || true
 
 if [[ -d "$HOME/.local/bin" ]]; then
   ln -sf "$LAUNCH_BIN" "$HOME/.local/bin/bantay"
