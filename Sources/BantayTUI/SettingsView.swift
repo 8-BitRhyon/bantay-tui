@@ -73,6 +73,7 @@ struct SettingsView: View {
     @State private var dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
     @State private var notifyOnBudgetThresholds = NotchHUDConfig.shared.notifyOnBudgetThresholds
     @State private var notifyOnHighBurnRate = NotchHUDConfig.shared.notifyOnHighBurnRate
+    @State private var highBurnThresholdTPM = NotchHUDConfig.shared.highBurnThresholdTPM
     @State private var enforceBudgetLimit = NotchHUDConfig.shared.enforceBudgetLimit
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
     @State private var showNotchMascot = NotchHUDConfig.shared.showNotchMascot
@@ -82,7 +83,6 @@ struct SettingsView: View {
     @State private var mascotLevel = NotchHUDConfig.shared.mascotLevel
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
-    @State private var showShelf = NotchHUDConfig.shared.showShelfTab
     @State private var shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
     @State private var shelfKeepDuration = NotchHUDConfig.shared.shelfKeepDuration
     @State private var followMouse = NotchHUDConfig.shared.followMouseScreen
@@ -121,6 +121,7 @@ struct SettingsView: View {
     @State private var approvalSoundName = NotchHUDConfig.shared.approvalSoundName
     @State private var completionSoundName = NotchHUDConfig.shared.completionSoundName
     @State private var errorSoundName = NotchHUDConfig.shared.errorSoundName
+    @State private var workingSoundName = NotchHUDConfig.shared.workingSoundName
     @State private var autoDispatchTasks = NotchHUDConfig.shared.autoDispatchTasks
     @State private var focusTerminalOnDispatch = NotchHUDConfig.shared.focusTerminalOnDispatch
 
@@ -509,7 +510,7 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.notifyOnBudgetThresholds = newValue
                     }
                     Toggle(
-                        "Alert on high token burn rate (⚡ > 2,500 tpm)",
+                        "Alert on high token burn rate (⚡ > \(highBurnThresholdTPM) tpm)",
                         isOn: $notifyOnHighBurnRate
                     )
                     .help(
@@ -517,6 +518,14 @@ struct SettingsView: View {
                     )
                     .onChange(of: notifyOnHighBurnRate) { newValue in
                         NotchHUDConfig.shared.notifyOnHighBurnRate = newValue
+                    }
+                    Stepper(
+                        "High burn threshold: \(highBurnThresholdTPM) tpm",
+                        value: $highBurnThresholdTPM, in: 500...20_000, step: 250
+                    )
+                    .help("Token rate that counts as a high-burn alert.")
+                    .onChange(of: highBurnThresholdTPM) { newValue in
+                        NotchHUDConfig.shared.highBurnThresholdTPM = newValue
                     }
                     Toggle(
                         "Enforce budget limit (block task dispatch)",
@@ -696,11 +705,6 @@ struct SettingsView: View {
 
             if selectedCategory == .notch && matchesSearch("Shelf") {
                 Section("Shelf") {
-                    Toggle("Shelf utilities in expanded view", isOn: $showShelf)
-                        .help("Clipboard history + dropped files next to agents.")
-                        .onChange(of: showShelf) { newValue in
-                            NotchHUDConfig.shared.showShelfTab = newValue
-                        }
                     Stepper("Shelf limit: \(shelfLimit)", value: $shelfLimit, in: 1...50)
                         .onChange(of: shelfLimit) { newValue in
                             NotchHUDConfig.shared.shelfLimit = newValue
@@ -715,6 +719,24 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.shelfKeepDuration = newValue
                         ShelfStore.shared.cleanExpired()
                     }
+                }
+            }
+
+            if selectedCategory == .notch && matchesSearch("Roster") {
+                Section("Roster") {
+                    Toggle(
+                        "Group agents by execution state",
+                        isOn: $expandedGroupByState
+                    )
+                    .help("Groups the roster into Working, Waiting, and Done sections.")
+                    .onChange(of: expandedGroupByState) { newValue in
+                        NotchHUDConfig.shared.expandedGroupByState = newValue
+                    }
+                    Toggle("Show token rate", isOn: $showTokenRate)
+                        .help("Shows tokens per minute in the header.")
+                        .onChange(of: showTokenRate) { newValue in
+                            NotchHUDConfig.shared.showTokenRate = newValue
+                        }
                 }
             }
 
@@ -991,6 +1013,7 @@ struct SettingsView: View {
                             approvalSoundName = NotchHUDConfig.shared.approvalSoundName
                             completionSoundName = NotchHUDConfig.shared.completionSoundName
                             errorSoundName = NotchHUDConfig.shared.errorSoundName
+                            workingSoundName = NotchHUDConfig.shared.workingSoundName
                         }
                     }
 
@@ -1058,6 +1081,28 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Preview error sound")
+                    }
+
+                    HStack {
+                        Picker("Working Sound", selection: $workingSoundName) {
+                            ForEach(
+                                [
+                                    "Glass", "Hero", "Ping", "Pop", "Tink", "Submarine", "Purr",
+                                    "Morse", "Blow", "Funk", "Basso", "Sosumi", "Bottle", "Frog",
+                                ], id: \.self
+                            ) { sound in
+                                Text(sound).tag(sound)
+                            }
+                        }
+                        .onChange(of: workingSoundName) { newValue in
+                            NotchHUDConfig.shared.workingSoundName = newValue
+                            if soundThemePreset != "Custom" { soundThemePreset = "Custom" }
+                        }
+                        Button("▶ Test") {
+                            NSSound(named: workingSoundName)?.play()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Preview working sound")
                     }
 
                     Toggle("Mute while in Terminal", isOn: $muteInTerminal)

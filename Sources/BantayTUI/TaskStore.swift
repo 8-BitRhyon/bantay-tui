@@ -291,8 +291,15 @@ public final class TaskStore: ObservableObject {
                 paneId != nil && task.linkedPaneID != nil
                 && TaskDispatcher.paneMatches(
                     linked: task.linkedPaneID!, paneId: paneId!)
+            // Standalone and app targets have no multiplexer pane, so their
+            // events arrive with a nil paneId. Source matching must still
+            // work for those links — but never for a real pane link, where
+            // one agent's event would flip every task carrying its name.
+            let standaloneLink =
+                task.linkedPaneID?.hasPrefix("standalone:") == true
+                || task.linkedPaneID?.hasPrefix("app:") == true
             let matchesSource =
-                task.linkedPaneID == nil
+                (task.linkedPaneID == nil || standaloneLink)
                 && task.assignedAgent?.lowercased() == source.lowercased()
             guard matchesPane || matchesSource else { continue }
 
@@ -338,12 +345,17 @@ public final class TaskStore: ObservableObject {
             let extID = task.externalID
             let isDone = task.isCompleted
             Task {
-                let matching = RemindersProvider.shared.reminders.first(where: {
-                    if let extID, $0.calendarItemIdentifier == extID { return true }
-                    return $0.title == targetTitle
-                })
-                if let matching, isDone {
-                    await RemindersProvider.shared.complete(matching)
+                if isDone {
+                    let matching = RemindersProvider.shared.reminders.first(where: {
+                        if let extID, $0.calendarItemIdentifier == extID { return true }
+                        return $0.title == targetTitle
+                    })
+                    if let matching {
+                        await RemindersProvider.shared.complete(matching)
+                    }
+                } else {
+                    await RemindersProvider.shared.reopen(
+                        matchingTitle: targetTitle, externalID: extID)
                 }
             }
         }

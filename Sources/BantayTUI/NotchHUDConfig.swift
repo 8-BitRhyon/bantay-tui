@@ -367,15 +367,6 @@ final class NotchHUDConfig {
     var clampedIdleMaxChips: Int {
         min(max(idleMaxChips, 1), 6)
     }
-    var expandedQueueCap: Int = IslandMetrics.expandedQueueCap {
-        didSet { defaults.set(expandedQueueCap, forKey: "expandedQueueCap") }
-    }
-    var clampedExpandedQueueCap: Int {
-        min(max(expandedQueueCap, 1), 5)
-    }
-    var expandedShowQueue = true {
-        didSet { defaults.set(expandedShowQueue, forKey: "expandedShowQueue") }
-    }
     var expandedGroupByState = true {
         didSet { defaults.set(expandedGroupByState, forKey: "expandedGroupByState") }
     }
@@ -408,22 +399,6 @@ final class NotchHUDConfig {
     }
     var standaloneScanEnabled = true {
         didSet { defaults.set(standaloneScanEnabled, forKey: "standaloneScanEnabled") }
-    }
-    var showUsageGauge = true {
-        didSet { defaults.set(showUsageGauge, forKey: "showUsageGauge") }
-    }
-    var usageBudgetUSD: Double = 10.0 {
-        didSet {
-            usageBudgetUSD = min(max(usageBudgetUSD, 1), 100)
-            defaults.set(usageBudgetUSD, forKey: "usageBudgetUSD")
-        }
-    }
-    /// Token rate indicator: amber when tokens/min ≥ this, red at ≥ 2×.
-    var usageRateWarnTokensPerMin: Int = 5000 {
-        didSet {
-            usageRateWarnTokensPerMin = min(max(usageRateWarnTokensPerMin, 100), 1_000_000)
-            defaults.set(usageRateWarnTokensPerMin, forKey: "usageRateWarnTokensPerMin")
-        }
     }
     var ingestEnabled = false {
         didSet { defaults.set(ingestEnabled, forKey: "ingestEnabled") }
@@ -527,11 +502,14 @@ final class NotchHUDConfig {
         return snoozedUntil.timeIntervalSinceNow > 0
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
     private var isInitializing = false
 
-    private init() {
+    /// Test seam: an isolated suite proves reload behavior without touching
+    /// the user's real defaults. Production always uses `.standard`.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         isInitializing = true
         if let v = defaults.object(forKey: "enableAgentAlerts") as? Bool {
             enableAgentAlerts = v
@@ -696,12 +674,6 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "idleMaxChips") as? NSNumber {
             idleMaxChips = min(max(v.intValue, 1), 6)
         }
-        if let v = defaults.object(forKey: "expandedQueueCap") as? NSNumber {
-            expandedQueueCap = min(max(v.intValue, 1), 5)
-        }
-        if let v = defaults.object(forKey: "expandedShowQueue") as? Bool {
-            expandedShowQueue = v
-        }
         if let v = defaults.object(forKey: "expandedGroupByState") as? Bool {
             expandedGroupByState = v
         }
@@ -735,15 +707,6 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "standaloneScanEnabled") as? Bool {
             standaloneScanEnabled = v
         }
-        if let v = defaults.object(forKey: "showUsageGauge") as? Bool {
-            showUsageGauge = v
-        }
-        if let v = defaults.object(forKey: "usageBudgetUSD") as? NSNumber {
-            usageBudgetUSD = min(max(v.doubleValue, 1), 100)
-        }
-        if let v = defaults.object(forKey: "usageRateWarnTokensPerMin") as? NSNumber {
-            usageRateWarnTokensPerMin = min(max(v.intValue, 100), 1_000_000)
-        }
         if let v = defaults.object(forKey: "ingestEnabled") as? Bool {
             ingestEnabled = v
         }
@@ -759,6 +722,24 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "showShelfTab") as? Bool {
             showShelfTab = v
+        }
+        if let v = defaults.object(forKey: "showAgentsTab") as? Bool {
+            showAgentsTab = v
+        }
+        if let v = defaults.object(forKey: "showHistoryTab") as? Bool {
+            showHistoryTab = v
+        }
+        if let v = defaults.object(forKey: "showMediaTab") as? Bool {
+            showMediaTab = v
+        }
+        if let v = defaults.object(forKey: "showNotesTab") as? Bool {
+            showNotesTab = v
+        }
+        if let v = defaults.object(forKey: "usageTrackingEnabled") as? Bool {
+            usageTrackingEnabled = v
+        }
+        if let v = defaults.object(forKey: "hoverSensitivityPreset") as? String {
+            hoverSensitivityPreset = v
         }
         if let v = defaults.object(forKey: "panelPinned") as? Bool {
             panelPinned = v

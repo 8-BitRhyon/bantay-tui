@@ -521,6 +521,25 @@ struct LogicCheckMain {
             check(
                 store.tasks.first { $0.id == linked.id }?.executionState == .failed,
                 "own-pane events transition linked tasks")
+            // Standalone links have no pane, so completion arrives by source.
+            let standalone = store.addTask(
+                "Desktop job @antigravity", syncReminders: false)
+            store.overrideExecutionForTesting(
+                taskID: standalone.id, state: .working,
+                paneID: "standalone:antigravity")
+            store.updateTaskState(
+                paneId: nil, source: "antigravity", kind: .completed)
+            check(
+                store.tasks.first { $0.id == standalone.id }?.isCompleted == true,
+                "standalone-linked tasks complete by source")
+            // ...but a real-pane task never completes from a bare source event.
+            let paneOnly = store.addTask("Pane job @claude", syncReminders: false)
+            store.overrideExecutionForTesting(
+                taskID: paneOnly.id, state: .working, paneID: "w5:p5")
+            store.updateTaskState(paneId: nil, source: "claude", kind: .completed)
+            check(
+                store.tasks.first { $0.id == paneOnly.id }?.isCompleted == false,
+                "bare source events never complete pane-linked tasks")
             try? FileManager.default.removeItem(atPath: tmpDir)
         }
         check(
@@ -1334,37 +1353,17 @@ struct LogicCheckMain {
         check(PlexerKind.tmux.label == "tmux", "L6 tmux label")
         check(PlexerKind.zellij.label == "zellij", "L6 zellij label")
 
-        // L6. Expanded facets persist + clamp.
+        // L6. Expanded grouping toggle persists (queue cap knobs were dead
+        // duplicates of the fixed layout cap and are removed).
         MainActor.assumeIsolated {
             let defaults = UserDefaults.standard
             let cfg = NotchHUDConfig.shared
-            let origCap = cfg.expandedQueueCap
-            let origShow = cfg.expandedShowQueue
             let origGroup = cfg.expandedGroupByState
-            check(
-                cfg.clampedExpandedQueueCap >= 1 && cfg.clampedExpandedQueueCap <= 5,
-                "L6 queue cap clamped in range (got \(cfg.clampedExpandedQueueCap))")
-            cfg.expandedQueueCap = 9
-            check(
-                cfg.clampedExpandedQueueCap == 5,
-                "L6 queue cap clamps at 5 (got \(cfg.clampedExpandedQueueCap))")
-            cfg.expandedQueueCap = 2
-            check(
-                defaults.integer(forKey: "expandedQueueCap") == 2,
-                "L6 queue cap persisted")
-            cfg.expandedShowQueue = false
-            check(
-                defaults.bool(forKey: "expandedShowQueue") == false,
-                "L6 queue toggle persisted")
             cfg.expandedGroupByState = false
             check(
                 defaults.bool(forKey: "expandedGroupByState") == false,
                 "L6 grouping toggle persisted")
-            cfg.expandedQueueCap = origCap
-            cfg.expandedShowQueue = origShow
             cfg.expandedGroupByState = origGroup
-            defaults.removeObject(forKey: "expandedQueueCap")
-            defaults.removeObject(forKey: "expandedShowQueue")
             defaults.removeObject(forKey: "expandedGroupByState")
         }
 
@@ -1775,28 +1774,29 @@ struct LogicCheckMain {
         check(
             UsageTracker.compactTokens(1234) == "1.2k",
             "L10 compact k (got \(UsageTracker.compactTokens(1234)))")
-        check(UsageTracker.compactTokens(3_500_000) == "3.5m", "L10 compact m")
+        check(UsageTracker.compactTokens(3_500_000) == "3.5M", "L10 compact m")
         check(UsageTracker.compactTokens(42) == "42", "L10 compact small")
 
-        // L10. Config facets: gauge default on, budget clamped + persisted.
+        // L10. Config facets: tab visibility, usage tracking, and hover
+        // sensitivity persist across relaunch (they were written but never
+        // reloaded, so every launch reset them).
         MainActor.assumeIsolated {
-            let defaults = UserDefaults.standard
-            let cfg = NotchHUDConfig.shared
-            let origGauge = cfg.showUsageGauge
-            let origBudget = cfg.usageBudgetUSD
-            check(cfg.showUsageGauge, "L10 usage gauge default on")
-            cfg.showUsageGauge = false
-            check(defaults.bool(forKey: "showUsageGauge") == false, "L10 gauge persisted")
-            cfg.usageBudgetUSD = 500
-            check(cfg.usageBudgetUSD == 100, "L10 budget clamps at 100 (got \(cfg.usageBudgetUSD))")
-            cfg.usageBudgetUSD = 0.5
-            check(cfg.usageBudgetUSD == 1, "L10 budget clamps at 1 (got \(cfg.usageBudgetUSD))")
-            cfg.usageBudgetUSD = 25
-            check(defaults.double(forKey: "usageBudgetUSD") == 25, "L10 budget persisted")
-            cfg.showUsageGauge = origGauge
-            cfg.usageBudgetUSD = origBudget
-            defaults.removeObject(forKey: "showUsageGauge")
-            defaults.removeObject(forKey: "usageBudgetUSD")
+            let suiteName = "bantay.harness.reload.\(UUID().uuidString)"
+            let suite = UserDefaults(suiteName: suiteName)!
+            defer { suite.removePersistentDomain(forName: suiteName) }
+            suite.set(false, forKey: "showAgentsTab")
+            suite.set(false, forKey: "usageTrackingEnabled")
+            suite.set("Calm", forKey: "hoverSensitivityPreset")
+            let reloaded = NotchHUDConfig(defaults: suite)
+            check(
+                reloaded.showAgentsTab == false,
+                "L10 tab visibility reloads from defaults")
+            check(
+                reloaded.usageTrackingEnabled == false,
+                "L10 usage tracking reloads from defaults")
+            check(
+                reloaded.hoverSensitivityPreset == "Calm",
+                "L10 hover sensitivity reloads from defaults")
         }
 
         // L11. Remote ingest (SSH bridge): HTTP parsing, payload
@@ -3831,24 +3831,16 @@ struct LogicCheckMain {
         MainActor.assumeIsolated {
             let defaults = UserDefaults.standard
             let cfg = NotchHUDConfig.shared
-            let orig = cfg.usageRateWarnTokensPerMin
+            let orig = cfg.highBurnThresholdTPM
             check(
-                cfg.usageRateWarnTokensPerMin == 5000,
-                "L46 warn threshold default 5000 (got \(cfg.usageRateWarnTokensPerMin))")
-            cfg.usageRateWarnTokensPerMin = 50
+                cfg.highBurnThresholdTPM > 0,
+                "L46 high burn threshold has a positive default")
+            cfg.highBurnThresholdTPM = 7500
             check(
-                cfg.usageRateWarnTokensPerMin == 100,
-                "L46 warn threshold clamps at 100 (got \(cfg.usageRateWarnTokensPerMin))")
-            cfg.usageRateWarnTokensPerMin = 2_000_000
-            check(
-                cfg.usageRateWarnTokensPerMin == 1_000_000,
-                "L46 warn threshold clamps at 1_000_000 (got \(cfg.usageRateWarnTokensPerMin))")
-            cfg.usageRateWarnTokensPerMin = 7500
-            check(
-                defaults.integer(forKey: "usageRateWarnTokensPerMin") == 7500,
-                "L46 warn threshold persisted")
-            cfg.usageRateWarnTokensPerMin = orig
-            defaults.removeObject(forKey: "usageRateWarnTokensPerMin")
+                defaults.integer(forKey: "highBurnThresholdTPM") == 7500,
+                "L46 high burn threshold persisted")
+            cfg.highBurnThresholdTPM = orig
+            defaults.removeObject(forKey: "highBurnThresholdTPM")
         }
 
         // L41. Plan 016 §1a — directory-keyed diff-stat cache. The key is
@@ -6903,6 +6895,23 @@ struct LogicCheckMain {
                 for: Date(timeIntervalSinceNow: -86_400)) == "Yesterday",
             "day groups label yesterday")
 
+        // Older stored rows lack newer flags: decoding must fill defaults,
+        // never fail the whole array (which silently wipes history).
+        do {
+            let legacyJSON = Data(
+                """
+                [{"id":"old","agentName":"opencode","title":"legacy row",
+                  "startTime":0,"durationSeconds":12,"totalTokens":99,
+                  "costUSD":0.5,"status":"Completed"}]
+                """.utf8)
+            let decoded = try? JSONDecoder().decode(
+                [AgentSessionRecord].self, from: legacyJSON)
+            check(
+                decoded?.count == 1 && decoded?.first?.isDelta == false
+                    && decoded?.first?.isWindowEstimate == false,
+                "legacy session rows decode with safe defaults")
+        }
+
         // -- Session summary: legacy lifetime rows never join delta sums.
         let legacy = AgentSessionRecord(
             agentName: "opencode", title: "old", totalTokens: 152_000_000,
@@ -7957,12 +7966,12 @@ struct LogicCheckMain {
 
             // UsageTracker giant token count
             check(
-                UsageTracker.compactTokens(1_500_000_000) == "1.5b",
+                UsageTracker.compactTokens(1_500_000_000) == "1.5B",
                 "L146 UsageTracker formats billion tokens as 1.5b"
             )
             check(
-                UsageTracker.compactTokens(42_000_000_000) == "42.0b",
-                "L146 UsageTracker formats 42 billion tokens as 42.0b"
+                UsageTracker.compactTokens(42_000_000_000) == "42.0B",
+                "L146 UsageTracker formats 42 billion tokens as 42.0B"
             )
 
             // MultiAgentTimelineStore empty lookups

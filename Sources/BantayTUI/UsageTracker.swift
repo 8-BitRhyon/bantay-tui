@@ -100,6 +100,27 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
     }
 
     public var isFailed: Bool { status == "Failed" }
+
+    /// Tolerant decoding: every field added after the first release decodes
+    /// with a safe default instead of throwing. A thrown error fails the
+    /// WHOLE array decode and silently wipes stored history on upgrade.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        agentName = try c.decode(String.self, forKey: .agentName)
+        title = try c.decode(String.self, forKey: .title)
+        startTime = try c.decode(Date.self, forKey: .startTime)
+        durationSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .durationSeconds) ?? 0
+        totalTokens = try c.decodeIfPresent(Int.self, forKey: .totalTokens) ?? 0
+        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD) ?? 0
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "Completed"
+        project = try c.decodeIfPresent(String.self, forKey: .project)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        sessionPath = try c.decodeIfPresent(String.self, forKey: .sessionPath)
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
+        isDelta = try c.decodeIfPresent(Bool.self, forKey: .isDelta) ?? false
+        isWindowEstimate = try c.decodeIfPresent(Bool.self, forKey: .isWindowEstimate) ?? false
+    }
 }
 
 /// Summary math for the sessions tab. Legacy rows (pre-delta lifetime
@@ -456,18 +477,11 @@ enum UsageTracker {
         return .normal
     }
 
-    /// Compact token count: "1.2k", "3.4m", "5.6b".
+    /// Compact token count. Delegates to the single formatter so session
+    /// rows, spend headers, and digests never show divergent suffixes
+    /// (`3.4m` vs `3.4M`).
     static func compactTokens(_ count: Int) -> String {
-        if count >= 1_000_000_000 {
-            return String(format: "%.1fb", Double(count) / 1_000_000_000)
-        }
-        if count >= 1_000_000 {
-            return String(format: "%.1fm", Double(count) / 1_000_000)
-        }
-        if count >= 1_000 {
-            return String(format: "%.1fk", Double(count) / 1_000)
-        }
-        return "\(count)"
+        IslandMetrics.compactTokenCount(count)
     }
 
     /// Sum usage across the newest transcript of each agent family.

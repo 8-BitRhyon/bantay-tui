@@ -252,6 +252,34 @@ public final class RemindersProvider: ObservableObject {
         await refresh()
     }
 
+    /// Reopen a reminder that a task un-completion should restore. Needs a
+    /// fetch that INCLUDES completed items, since `refresh()` deliberately
+    /// filters them out.
+    public func reopen(matchingTitle title: String, externalID: String?) async {
+        guard await ensureAccess(), let store else { return }
+        let calendar = defaultList ?? store.defaultCalendarForNewReminders()
+        guard let calendar else { return }
+        let predicate = store.predicateForReminders(in: [calendar])
+        let gate = AtomicRemindersGate()
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            store.fetchReminders(matching: predicate) { items in
+                gate.resume(with: items ?? [], continuation: cont)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                gate.resume(with: [], continuation: cont)
+            }
+        }
+        let match = gate.items.first { item in
+            if let externalID, item.calendarItemIdentifier == externalID { return true }
+            return item.title == title
+        }
+        guard let match, match.isCompleted else { return }
+        match.isCompleted = false
+        try? store.save(match, commit: true)
+        lastOwnWriteAt = Date()
+        await refresh()
+    }
+
     /// Remove a reminder.
     public func remove(_ reminder: EKReminder) async {
         guard let store else { return }

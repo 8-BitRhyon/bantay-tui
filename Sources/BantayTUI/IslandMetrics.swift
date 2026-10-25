@@ -810,8 +810,12 @@ public enum IslandMetrics: Sendable {
             let k = Double(n) / 1_000.0
             return k >= 100 ? "\(Int(k.rounded()))k" : String(format: "%.1fk", k)
         }
-        let m = Double(n) / 1_000_000.0
-        return m >= 100 ? "\(Int(m.rounded()))M" : String(format: "%.1fM", m)
+        if n < 1_000_000_000 {
+            let m = Double(n) / 1_000_000.0
+            return m >= 100 ? "\(Int(m.rounded()))M" : String(format: "%.1fM", m)
+        }
+        let b = Double(n) / 1_000_000_000.0
+        return b >= 100 ? "\(Int(b.rounded()))B" : String(format: "%.1fB", b)
     }
 
     /// Day-bucket label for session grouping. Today and Yesterday read
