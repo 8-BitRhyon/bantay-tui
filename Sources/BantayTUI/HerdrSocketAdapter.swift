@@ -51,12 +51,17 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
 
     /// CLI fallback: run herdr through the non-blocking `ProcessRunner`.
     /// Never blocks the caller; `ProcessRunner.run` drains output
-    /// concurrently and terminates on timeout.
-    private func runHerdrAsync(_ arguments: [String], timeout: TimeInterval = 3.0) async -> String {
-        guard let url = herdrExecutableURL() else { return "" }
-        let result = await ProcessRunner.run(
+    /// concurrently and terminates on timeout. The full result is returned
+    /// so callers can check the exit status instead of assuming delivery.
+    private func runHerdrAsync(_ arguments: [String], timeout: TimeInterval = 3.0) async
+        -> ProcessRunner.ProcessResult
+    {
+        guard let url = herdrExecutableURL() else {
+            return ProcessRunner.ProcessResult(
+                status: -1, stdout: "", stderr: "herdr binary not found")
+        }
+        return await ProcessRunner.run(
             executableURL: url, arguments: arguments, timeout: timeout)
-        return result.stdout
     }
 
     func paneFocus(paneId: String) {
@@ -86,48 +91,23 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         }
     }
 
-    /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter). opencode
-    /// panes are answered via the control-file channel (the opencode plugin
-    /// talks to the opencode server directly), not herdr keystrokes.
-    func approve(paneId: String) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
-            return
+    /// Awaited write for the approval path: socket first, CLI fallback.
+    /// True only when one of them acknowledges the write.
+    func sendKeysConfirmed(paneId: String, keys: [String]) async -> Bool {
+        if await socketCall(
+            "agent.send_keys", params: ["pane_id": paneId, "keys": keys])
+        {
+            return true
         }
-        sendKeys(paneId: paneId, keys: ["y", "enter"])
+        var arguments = ["agent", "send-keys", paneId]
+        arguments.append(contentsOf: keys)
+        let result = await runHerdrAsync(arguments, timeout: 2.0)
+        return result.status == 0
     }
 
-    /// Denies a yes-no "Need approval" prompt (e.g. "n" + Enter). opencode
-    /// panes are answered via the control-file channel.
-    func deny(paneId: String) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
-            return
-        }
-        sendKeys(paneId: paneId, keys: ["n", "enter"])
-    }
-
-    /// Responds to a single-choice (choices) prompt by sending the 1-based
-    /// option index followed by Enter. opencode panes are binary yes/no via
-    /// the control-file channel, so a stray choice is treated as approve.
-    func approveChoice(paneId: String, choice: Int) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
-            return
-        }
-        sendKeys(paneId: paneId, keys: [String(choice), "enter"])
-    }
-
-    /// Responds to a multi-select prompt by sending the comma-joined,
-    /// 1-based option indices followed by Enter (e.g. "1,3" + Enter).
-    /// opencode panes are binary yes/no via the control-file channel.
-    func approveMulti(paneId: String, selections: [Int]) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
-            return
-        }
-        let joined = selections.map(String.init).joined(separator: ",")
-        sendKeys(paneId: paneId, keys: [joined, "enter"])
+    func sendLineConfirmed(paneId: String, text: String) async -> Bool {
+        let result = await runHerdrAsync(["pane", "run", paneId, text], timeout: 2.0)
+        return result.status == 0
     }
 
     func spawnAgentWait(paneId: String, statuses: [String]) -> Process? {
@@ -163,7 +143,7 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
     /// Async workhorse behind the sync `listPanes()` protocol seam.
     nonisolated func listPanesAsync() async -> [PaneInfo] {
         for args in Self.paneListCommandVariants() {
-            let output = await runHerdrAsync(args)
+            let output = await runHerdrAsync(args).stdout
             guard !output.isEmpty else { continue }
             let decoder = JSONDecoder()
             guard let jsonData = output.data(using: .utf8),
@@ -195,7 +175,7 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         if let viaSocket = await listAgentsViaSocket() {
             return viaSocket
         }
-        let output = await runHerdrAsync(["agent", "list"])
+        let output = await runHerdrAsync(["agent", "list"]).stdout
         guard !output.isEmpty else { return [] }
 
         let decoder = JSONDecoder()
@@ -267,7 +247,8 @@ final class HerdrSocketAdapter: Sendable, PlexerAdapter {
         }
         return await runHerdrAsync(
             ["pane", "read", paneId, "--source", "recent", "--lines", "\(lines)"],
-            timeout: 2.0)
+            timeout: 2.0
+        ).stdout
     }
 
     /// Generates git diff preview for an agent working directory.

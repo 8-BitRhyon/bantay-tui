@@ -15,7 +15,7 @@ enum InteractionMotion {
     static let hoverOut = Animation.easeOut(duration: micro)
     static let selection = Animation.spring(response: 0.24, dampingFraction: 0.7)
 
-    /// How long a delivered action holds before the card leaves, so the
+    /// How long a sent action holds before the card leaves, so the
     /// commit flash is visible without making the action feel slow.
     static let commitHold: Duration = .milliseconds(200)
 }

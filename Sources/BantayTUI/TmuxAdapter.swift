@@ -50,12 +50,17 @@ struct TmuxAdapter: Sendable, PlexerAdapter {
 
     /// CLI fallback: run tmux through the non-blocking `ProcessRunner`.
     /// Never blocks the caller; `ProcessRunner.run` drains output
-    /// concurrently and terminates on timeout.
-    private func runTmuxAsync(_ arguments: [String], timeout: TimeInterval = 3.0) async -> String {
-        guard let url = tmuxExecutableURL() else { return "" }
-        let result = await ProcessRunner.run(
+    /// concurrently and terminates on timeout. The full result is returned
+    /// so callers can check the exit status instead of assuming delivery.
+    private func runTmuxAsync(_ arguments: [String], timeout: TimeInterval = 3.0) async
+        -> ProcessRunner.ProcessResult
+    {
+        guard let url = tmuxExecutableURL() else {
+            return ProcessRunner.ProcessResult(
+                status: -1, stdout: "", stderr: "tmux binary not found")
+        }
+        return await ProcessRunner.run(
             executableURL: url, arguments: arguments, timeout: timeout)
-        return result.stdout
     }
 
     // MARK: - tmux pane listing
@@ -151,7 +156,7 @@ struct TmuxAdapter: Sendable, PlexerAdapter {
     /// yields nothing parseable.
     nonisolated func listPanesAsync() async -> [PaneInfo] {
         for args in Self.paneListCommandVariants() {
-            let output = await runTmuxAsync(args)
+            let output = await runTmuxAsync(args).stdout
             guard !output.isEmpty else { continue }
             let panes = Self.parsePaneLines(output)
             if !panes.isEmpty { return panes }
@@ -179,7 +184,8 @@ struct TmuxAdapter: Sendable, PlexerAdapter {
         let count = max(lines, 1)
         return await runTmuxAsync(
             ["capture-pane", "-p", "-t", target, "-S", "-\(count)"],
-            timeout: 2.0)
+            timeout: 2.0
+        ).stdout
     }
 
     /// Selects the pane inside tmux, switches the client to its session, then
@@ -212,34 +218,18 @@ struct TmuxAdapter: Sendable, PlexerAdapter {
         sendKeys(paneId: paneId, keys: [text, "enter"])
     }
 
-    /// Approves a yes-no "Need approval" prompt (e.g. "y" + Enter).
-    func approve(paneId: String) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
-            return
-        }
-        sendKeys(paneId: paneId, keys: ["y", "enter"])
+    /// Awaited write for the approval path. True only when tmux exits zero;
+    /// a missing binary or nonzero exit is a transport failure, never success.
+    func sendKeysConfirmed(paneId: String, keys: [String]) async -> Bool {
+        guard let target = Self.paneTarget(from: paneId) else { return false }
+        var arguments = ["send-keys", "-t", target]
+        arguments.append(contentsOf: keys)
+        let result = await runTmuxAsync(arguments, timeout: 2.0)
+        return result.status == 0
     }
 
-    /// Denies a yes-no "Need approval" prompt (e.g. "n" + Enter).
-    func deny(paneId: String) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
-            return
-        }
-        sendKeys(paneId: paneId, keys: ["n", "enter"])
-    }
-
-    /// Responds to a single-choice prompt with the 1-based option index.
-    func approveChoice(paneId: String, choice: Int) {
-        sendKeys(paneId: paneId, keys: [String(choice), "enter"])
-    }
-
-    /// Responds to a multi-select prompt with the comma-joined, 1-based
-    /// option indices followed by Enter (e.g. "1,3" + Enter).
-    func approveMulti(paneId: String, selections: [Int]) {
-        let joined = selections.map(String.init).joined(separator: ",")
-        sendKeys(paneId: paneId, keys: [joined, "enter"])
+    func sendLineConfirmed(paneId: String, text: String) async -> Bool {
+        await sendKeysConfirmed(paneId: paneId, keys: [text, "enter"])
     }
 
     /// Interrupts the running process (Ctrl-C equivalent).

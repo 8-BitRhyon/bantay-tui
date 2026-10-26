@@ -86,7 +86,9 @@ struct AgentRowAccessibility: ViewModifier {
                     paneId: agent.paneId, source: agent.source),
                     agent.kind == .accessRequest || agent.kind == .waiting
                 {
-                    AgentEventManager.shared.approve(paneId: paneId)
+                    Task { @MainActor in
+                        await AgentEventManager.shared.approve(paneId: paneId)
+                    }
                 }
             }
             .accessibilityAction(named: "Deny") {
@@ -94,7 +96,9 @@ struct AgentRowAccessibility: ViewModifier {
                     paneId: agent.paneId, source: agent.source),
                     agent.kind == .accessRequest || agent.kind == .waiting
                 {
-                    AgentEventManager.shared.deny(paneId: paneId)
+                    Task { @MainActor in
+                        await AgentEventManager.shared.deny(paneId: paneId)
+                    }
                 }
             }
     }

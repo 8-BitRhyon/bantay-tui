@@ -9654,6 +9654,216 @@ struct LogicCheckMain {
             abs(ShakeEffect.offset(progress: 0.2)) <= 5,
             "FEEDBACK shake stays within its travel budget")
 
+        // P0 approval proof: confirmed sends, decision receipts, observe-only.
+        // Unsupported panes must stay review-only, and no failure may ever
+        // report success.
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "mcp:claude", inputSynthesisEnabled: true) == false,
+            "PROOF mcp panes cannot receive a decision")
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "app:claude", inputSynthesisEnabled: true) == false,
+            "PROOF app panes cannot receive a decision")
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "  ", inputSynthesisEnabled: true) == false,
+            "PROOF empty pane ids cannot receive a decision")
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "standalone:claude", inputSynthesisEnabled: true) == true
+                && ApprovalRouting.supportsDecision(
+                    paneId: "standalone:claude", inputSynthesisEnabled: false)
+                    == false,
+            "PROOF standalone panes follow the input-synthesis gate")
+        check(
+            ApprovalRouting.route(
+                paneId: "dev:1.2", adapterKind: .tmux,
+                inputSynthesisEnabled: true, paneAlive: true)
+                == .multiplexer(.tmux),
+            "PROOF multiplexer panes route to their adapter")
+        check(
+            ApprovalRouting.route(
+                paneId: "opencode:proj", adapterKind: .herdr,
+                inputSynthesisEnabled: true, paneAlive: true)
+                == .openCodeDecisionFile,
+            "PROOF opencode panes route to the decision file")
+        if case .observeOnly = ApprovalRouting.route(
+            paneId: "mcp:claude", adapterKind: .tmux,
+            inputSynthesisEnabled: true, paneAlive: true)
+        {
+        } else {
+            check(false, "PROOF mcp pane routes to observe-only")
+        }
+
+        let proofHashA = ApprovalReceiptStore.requestHash("dev:1.2|run tests?")
+        check(
+            proofHashA == ApprovalReceiptStore.requestHash("dev:1.2|run tests?")
+                && proofHashA.count == 64
+                && ApprovalReceiptStore.requestHash("dev:1.2|other") != proofHashA,
+            "PROOF request hashes are stable, 64 chars, and distinct")
+
+        let proofDir =
+            FileManager.default.temporaryDirectory
+            .appendingPathComponent("bantay-proof-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(
+            at: proofDir, withIntermediateDirectories: true)
+        let proofReceipts = ApprovalReceiptStore(
+            fileURL: proofDir.appendingPathComponent("receipts.jsonl"))
+        proofReceipts.append(
+            ApprovalReceipt(
+                paneId: "fixture:9.9", source: "claude", eventKind: "access_request",
+                action: "approve",
+                requestHash: ApprovalReceiptStore.requestHash("x"),
+                idempotencyKey: "key-1", route: "tmux_send_keys", outcome: "sent"))
+        check(
+            proofReceipts.recent().first?.agentAck == "not_available",
+            "PROOF receipt store round-trips with explicit no-ack")
+
+        func awaitProof<T>(_ work: @escaping @MainActor () async -> T) -> T? {
+            var box: T?
+            Task { @MainActor in box = await work() }
+            let deadline = Date().addingTimeInterval(10.0)
+            while box == nil, Date() < deadline {
+                RunLoop.current.run(
+                    mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            return box
+        }
+
+        final class ProofAdapter: PlexerAdapter {
+            let kind: PlexerKind = .tmux
+            let confirmed: Bool
+            init(confirmed: Bool) { self.confirmed = confirmed }
+            func listPanes() -> [PaneInfo] { [] }
+            func captureTail(paneId: String, lines: Int) async -> String { "" }
+            func focusPane(paneId: String) {}
+            func sendLine(paneId: String, text: String) {}
+            func sendKeys(paneId: String, keys: [String]) {}
+            func sendLineConfirmed(paneId: String, text: String) async -> Bool {
+                confirmed
+            }
+            func sendKeysConfirmed(paneId: String, keys: [String]) async -> Bool {
+                confirmed
+            }
+            func stop(paneId: String) {}
+            func attachPane(paneId: String) {}
+            func agentPrompt(paneId: String, text: String) async {}
+            func captureDiff(cwd: String, pathLimit: Int) async -> String? { nil }
+        }
+
+        func proofManager(confirmed: Bool) -> AgentEventManager {
+            let file = proofDir.appendingPathComponent("events-\(UUID().uuidString).jsonl")
+            FileManager.default.createFile(atPath: file.path, contents: nil)
+            let manager = AgentEventManager(
+                eventsFileURL: file, capture: false, receiptStore: proofReceipts)
+            manager.activeAdapter = ProofAdapter(confirmed: confirmed)
+            return manager
+        }
+
+        func proofBlockedAgent(paneId: String) -> AgentSnapshot {
+            AgentSnapshot(
+                id: "proof-agent", source: "claude", kind: .accessRequest,
+                title: "Run tests?", message: nil, paneId: paneId,
+                workspaceId: "dev", cwd: nil, variance: .yesNo, choices: nil,
+                startedAt: nil, projectContext: nil)
+        }
+
+        func proofBlockedEvent(paneId: String) -> AgentEvent {
+            AgentEvent(
+                source: "claude", kind: .accessRequest, title: "Run tests?",
+                message: nil, paneId: paneId, workspaceId: nil,
+                variance: .yesNo, choices: nil, playSound: false, persistent: true)
+        }
+
+        let proofMcp = proofManager(confirmed: true)
+        proofMcp.publishEventForTesting(proofBlockedEvent(paneId: "mcp:claude"))
+        check(
+            proofMcp.pendingApprovals["mcp:claude"]?.actionable == false,
+            "PROOF mcp requests stay review-only")
+        let proofMcpOutcome = awaitProof { await proofMcp.approve(paneId: "mcp:claude") }
+        check(
+            proofMcpOutcome == .failed(.unsupported),
+            "PROOF mcp approval fails unsupported, never success")
+        check(
+            proofMcp.pendingApprovals["mcp:claude"] != nil,
+            "PROOF failed mcp approval keeps the request visible")
+        proofMcp.stop()
+
+        let proofDead = proofManager(confirmed: true)
+        let proofDeadOutcome = awaitProof { await proofDead.approve(paneId: "gone:9.9") }
+        check(
+            proofDeadOutcome == .failed(.deadPane),
+            "PROOF dead-pane approval fails without transport")
+        proofDead.stop()
+
+        let proofFail = proofManager(confirmed: false)
+        proofFail.setAgentsForTesting([proofBlockedAgent(paneId: "dev:1.2")])
+        proofFail.publishEventForTesting(proofBlockedEvent(paneId: "dev:1.2"))
+        let settleUntil = Date().addingTimeInterval(1.5)
+        while Date() < settleUntil {
+            RunLoop.current.run(
+                mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        let proofFailOutcome = awaitProof { await proofFail.approve(paneId: "dev:1.2") }
+        check(
+            proofFailOutcome == .failed(.transport),
+            "PROOF failed transport reports transport, never success")
+        check(
+            proofFail.pendingApprovals["dev:1.2"] != nil,
+            "PROOF failed transport keeps the request visible")
+        let proofRetryOutcome = awaitProof { await proofFail.approve(paneId: "dev:1.2") }
+        check(
+            proofRetryOutcome == .failed(.transport),
+            "PROOF retry of a failed transport reports transport again")
+        let proofKeys =
+            proofReceipts.recent(limit: 20)
+            .filter { $0.paneId == "dev:1.2" && $0.action == "approve" }
+            .map(\.idempotencyKey)
+        check(
+            proofKeys.count >= 2 && Set(proofKeys).count == 1,
+            "PROOF retries share one idempotency key")
+        proofFail.stop()
+
+        let proofSent = proofManager(confirmed: true)
+        proofSent.setAgentsForTesting([proofBlockedAgent(paneId: "dev:1.2")])
+        proofSent.publishEventForTesting(proofBlockedEvent(paneId: "dev:1.2"))
+        let proofSentOutcome = awaitProof { await proofSent.approve(paneId: "dev:1.2") }
+        check(
+            proofSentOutcome == .sent,
+            "PROOF confirmed transport sends")
+        check(
+            proofSent.pendingApprovals["dev:1.2"] == nil,
+            "PROOF confirmed transport clears the answered request")
+        proofSent.stop()
+
+        let proofEmpty = proofManager(confirmed: true)
+        let proofEmptyOutcome = awaitProof {
+            await proofEmpty.sendText(paneId: "dev:1.2", text: "   ")
+        }
+        check(
+            proofEmptyOutcome == .failed(.emptyText),
+            "PROOF empty free text fails without a receipt")
+        proofEmpty.stop()
+
+        let proofSynthesis = StandaloneAgentDispatcher.enableInputSynthesis
+        StandaloneAgentDispatcher.enableInputSynthesis = false
+        check(
+            StandaloneAgentDispatcher.dispatchApproval(
+                agentName: "claude", approved: true) == false,
+            "PROOF disabled input synthesis cannot approve")
+        StandaloneAgentDispatcher.enableInputSynthesis = proofSynthesis
+
+        let proofMissing = TmuxAdapter(tmuxBinPath: "bantay-no-such-binary-xyz")
+        let proofMissingOutcome = awaitProof {
+            await proofMissing.sendKeysConfirmed(paneId: "dev:1.2", keys: ["y"])
+        }
+        check(
+            proofMissingOutcome == false,
+            "PROOF missing tmux binary reports transport failure")
+
+        try? FileManager.default.removeItem(at: proofDir)
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 

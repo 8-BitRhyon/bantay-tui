@@ -29,6 +29,7 @@ struct ApprovalCardView: View {
 
     private var canApprove: Bool {
         guard agent.kind == .accessRequest, agent.approvalActionable else { return false }
+        guard manager.supportsDecision(paneId: paneId) else { return false }
         if let variance = agent.variance,
             variance == .choices || variance == .multi,
             (agent.choices?.count ?? 0) < 2
@@ -188,7 +189,9 @@ struct ApprovalCardView: View {
                             IslandMetrics.ApprovalControls.toggling(
                                 queueSelections[paneId] ?? [], index: index)
                     } else {
-                        manager.approveChoice(paneId: paneId, choice: number)
+                        Task { @MainActor in
+                            await manager.approveChoice(paneId: paneId, choice: number)
+                        }
                     }
                 } label: {
                     HStack(spacing: 6) {
@@ -261,11 +264,15 @@ struct ApprovalCardView: View {
             reviewButton
         } else if controls.isYesNo {
             primaryButton(title: "Allow Once", icon: "checkmark") {
-                manager.approve(paneId: paneId)
+                Task { @MainActor in
+                    await manager.approve(paneId: paneId)
+                }
             }
             reviewButton
             denyButton {
-                manager.deny(paneId: paneId)
+                Task { @MainActor in
+                    await manager.deny(paneId: paneId)
+                }
             }
         } else {
             reviewButton
@@ -287,7 +294,9 @@ struct ApprovalCardView: View {
         let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
             queueSelections[paneId] ?? [])
         return Button {
-            manager.approveMulti(paneId: paneId, selections: numbers)
+            Task { @MainActor in
+                await manager.approveMulti(paneId: paneId, selections: numbers)
+            }
             queueSelections.removeValue(forKey: paneId)
         } label: {
             HStack(spacing: 4) {

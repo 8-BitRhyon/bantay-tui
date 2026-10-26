@@ -84,6 +84,14 @@ enum AgentAlertNotifier {
         isMulti: Bool = false
     ) -> String? {
         guard let paneId, !paneId.isEmpty, !isMulti else { return nil }
+        // Remote buttons route through the same decision pipeline. Panes
+        // without a transport get no buttons: a tap could never work.
+        guard
+            ApprovalRouting.supportsDecision(
+                paneId: paneId,
+                inputSynthesisEnabled: StandaloneAgentDispatcher.enableInputSynthesis
+            )
+        else { return nil }
         let base = callbackBase.hasSuffix("/") ? String(callbackBase.dropLast()) : callbackBase
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~"))
         guard

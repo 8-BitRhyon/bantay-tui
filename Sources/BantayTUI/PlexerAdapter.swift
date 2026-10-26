@@ -66,9 +66,10 @@ enum PlexerFactory {
     }
 }
 
-/// Unified control-plane surface for any multiplexer. Every operation is
-/// fire-and-forget from the UI side; blocking work belongs in a detached
-/// task with a timeout.
+/// Unified control-plane surface for any multiplexer. Reads and focus are
+/// best-effort; writes that carry a user decision use the `Confirmed`
+/// variants, which await the transport and report whether it accepted the
+/// write. A confirmed write is still not an agent acknowledgment.
 protocol PlexerAdapter: Sendable {
     var kind: PlexerKind { get }
 
@@ -79,10 +80,10 @@ protocol PlexerAdapter: Sendable {
     /// Sends a full line (text + Enter) to the pane.
     func sendLine(paneId: String, text: String)
     func sendKeys(paneId: String, keys: [String])
-    func approve(paneId: String)
-    func deny(paneId: String)
-    func approveChoice(paneId: String, choice: Int)
-    func approveMulti(paneId: String, selections: [Int])
+    /// Awaited variants used by the approval path. True only when the
+    /// transport accepted the write (process exit zero / socket ack).
+    func sendLineConfirmed(paneId: String, text: String) async -> Bool
+    func sendKeysConfirmed(paneId: String, keys: [String]) async -> Bool
     /// Interrupts the running process (Ctrl-C equivalent).
     func stop(paneId: String)
     /// Best-effort: raise a GUI terminal attached to the pane.
@@ -92,15 +93,6 @@ protocol PlexerAdapter: Sendable {
 }
 
 extension PlexerAdapter {
-    func approveChoice(paneId: String, choice: Int) {
-        sendLine(paneId: paneId, text: String(choice))
-    }
-
-    func approveMulti(paneId: String, selections: [Int]) {
-        let joined = selections.map(String.init).joined(separator: ",")
-        sendLine(paneId: paneId, text: joined)
-    }
-
     func paneFocus(paneId: String) {
         focusPane(paneId: paneId)
     }

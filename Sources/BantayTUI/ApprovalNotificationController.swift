@@ -135,24 +135,36 @@ final class ApprovalNotificationController: NSObject,
         let hasChoices = choices?.isEmpty == false
         let isQuestion = (choices?.count ?? 0) >= 2
         let concrete = isConcreteApprovalTitle(title)
+        // Review-only panes never get Approve/Deny actions: without a
+        // transport the buttons could only lie.
+        let canRespond = ApprovalRouting.supportsDecision(
+            paneId: paneId,
+            inputSynthesisEnabled: StandaloneAgentDispatcher.enableInputSynthesis)
+        let answerable = (concrete || hasChoices) && canRespond
         content.title =
             isMulti
             ? "\(source) has a multi-part question"
             : (isQuestion
                 ? "\(source) has a question"
-                : (concrete || hasChoices ? "\(source) needs approval" : "\(source) is waiting"))
+                : (answerable ? "\(source) needs approval" : "\(source) is waiting"))
         content.body =
-            concrete || hasChoices
+            answerable
             ? approvalBody(title: title, choices: choices)
             : "Open Bantay to review the request before deciding."
         content.sound = .default
-        content.categoryIdentifier =
+        var category =
             isMulti
             ? Self.multiCategoryID
             : (isQuestion
                 ? Self.questionCategoryID
                 : (hasChoices
                     ? Self.choiceCategoryID : (concrete ? Self.categoryID : Self.reviewCategoryID)))
+        if !canRespond
+            && (category == Self.categoryID || category == Self.choiceCategoryID)
+        {
+            category = Self.reviewCategoryID
+        }
+        content.categoryIdentifier = category
         var info: [String: String] = ["paneId": paneId, "source": source]
         if let cwd { info["cwd"] = cwd }
         if let sessionPath { info["sessionPath"] = sessionPath }
@@ -316,12 +328,12 @@ final class ApprovalNotificationController: NSObject,
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.approve(paneId: paneId)
+                await manager.approve(paneId: paneId)
             case Self.denyActionID:
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.deny(paneId: paneId)
+                await manager.deny(paneId: paneId)
             case Self.answerActionID:
                 // Questions open where they can be answered: focus the exact
                 // terminal pane and expand the inbox. Never resolves anything.
@@ -363,7 +375,7 @@ final class ApprovalNotificationController: NSObject,
                         Self.choiceActionIDPrefix.count)
                     guard let index = Int(indexString) else { return }
                     let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    manager.approveChoice(paneId: paneId, choice: number)
+                    await manager.approveChoice(paneId: paneId, choice: number)
                 }
             }
         }

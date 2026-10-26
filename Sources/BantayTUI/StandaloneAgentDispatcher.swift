@@ -138,47 +138,57 @@ public enum StandaloneAgentDispatcher {
     }
 
     @MainActor
+    @discardableResult
     public static func dispatchApproval(
         agentName: String,
         approved: Bool,
         cwd: String? = nil,
         pid: Int? = nil
-    ) {
-        guard enableInputSynthesis else { return }
+    ) -> Bool {
+        guard enableInputSynthesis, accessibilityGranted() else { return false }
         let cleanName = cleanAgentName(from: agentName)
-        _ = TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid)
+        guard TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid) else {
+            return false
+        }
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             KeyboardSynthesizer.approveOrDeny(approved: approved)
         }
+        return true
     }
 
     @MainActor
+    @discardableResult
     public static func dispatchOption(
         agentName: String,
         option: String,
         cwd: String? = nil,
         pid: Int? = nil
-    ) {
-        guard enableInputSynthesis else { return }
-        dispatchPrompt(agentName: agentName, text: option, cwd: cwd, pid: pid, autoSend: true)
+    ) -> Bool {
+        guard enableInputSynthesis else { return false }
+        return dispatchPrompt(
+            agentName: agentName, text: option, cwd: cwd, pid: pid, autoSend: true)
     }
 
     @MainActor
+    @discardableResult
     public static func dispatchAbort(
         agentName: String,
         cwd: String? = nil,
         pid: Int? = nil
-    ) {
-        guard enableInputSynthesis else { return }
+    ) -> Bool {
+        guard enableInputSynthesis, accessibilityGranted() else { return false }
         let cleanName = cleanAgentName(from: agentName)
-        _ = TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid)
+        guard TerminalFocusser.focusStandalone(source: cleanName, cwd: cwd, pid: pid) else {
+            return false
+        }
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             KeyboardSynthesizer.interrupt()
         }
+        return true
     }
 
     private static func sendPasteAndReturn() {

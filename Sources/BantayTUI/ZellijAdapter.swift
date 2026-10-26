@@ -253,26 +253,29 @@ struct ZellijAdapter: Sendable, PlexerAdapter {
     }
 
     /// CLI workhorse behind every read verb. Unknown verbs exit nonzero with
-    /// empty stdout, so the caller sees `""` and returns empty results.
+    /// empty stdout, so the caller sees `""` and returns empty results. The
+    /// full result is returned so writers can check the exit status.
     private func runZellijAsync(
         _ arguments: [String], timeout: TimeInterval = 3.0
-    ) async -> String {
-        guard let url = zellijExecutableURL() else { return "" }
-        let result = await ProcessRunner.run(
+    ) async -> ProcessRunner.ProcessResult {
+        guard let url = zellijExecutableURL() else {
+            return ProcessRunner.ProcessResult(
+                status: -1, stdout: "", stderr: "zellij binary not found")
+        }
+        return await ProcessRunner.run(
             executableURL: url, arguments: arguments, timeout: timeout)
-        return result.stdout
     }
 
     // MARK: - PlexerAdapter
 
     /// Async workhorse behind the sync `listPanes()` protocol seam.
     nonisolated func listPanesAsync() async -> [PaneInfo] {
-        let output = await runZellijAsync(Self.listSessionsCommand())
+        let output = await runZellijAsync(Self.listSessionsCommand()).stdout
         let sessions = Self.parseSessions(output)
         guard !sessions.isEmpty else { return [] }
         var panes: [PaneInfo] = []
         for session in sessions {
-            let paneOutput = await runZellijAsync(Self.listPanesCommand(session: session))
+            let paneOutput = await runZellijAsync(Self.listPanesCommand(session: session)).stdout
             guard !paneOutput.isEmpty else { continue }
             panes.append(contentsOf: Self.parsePaneList(paneOutput, session: session))
         }
@@ -298,7 +301,8 @@ struct ZellijAdapter: Sendable, PlexerAdapter {
         guard let target = Self.splitPaneId(paneId) else { return "" }
         let output = await runZellijAsync(
             Self.captureCommand(session: target.session, pane: target.pane),
-            timeout: 2.0)
+            timeout: 2.0
+        ).stdout
         guard !output.isEmpty else { return "" }
         let rows = output.split(whereSeparator: \.isNewline)
         let cap = max(lines, 1)
@@ -342,20 +346,32 @@ struct ZellijAdapter: Sendable, PlexerAdapter {
                 session: target.session, pane: target.pane, keys: keys))
     }
 
-    func approve(paneId: String) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
-            return
-        }
-        sendKeys(paneId: paneId, keys: ["y", "enter"])
+    /// Awaited write for the approval path. True only when zellij exits zero.
+    func sendKeysConfirmed(paneId: String, keys: [String]) async -> Bool {
+        guard
+            let target = Self.splitPaneId(paneId),
+            let url = zellijExecutableURL()
+        else { return false }
+        let result = await ProcessRunner.run(
+            executableURL: url,
+            arguments: Self.sendKeysCommand(
+                session: target.session, pane: target.pane, keys: keys),
+            timeout: 2.0)
+        return result.status == 0
     }
 
-    func deny(paneId: String) {
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
-            return
-        }
-        sendKeys(paneId: paneId, keys: ["n", "enter"])
+    func sendLineConfirmed(paneId: String, text: String) async -> Bool {
+        guard
+            let target = Self.splitPaneId(paneId),
+            let url = zellijExecutableURL()
+        else { return false }
+        let write = await ProcessRunner.run(
+            executableURL: url,
+            arguments: Self.writeCharsCommand(
+                session: target.session, pane: target.pane, text: text),
+            timeout: 2.0)
+        guard write.status == 0 else { return false }
+        return await sendKeysConfirmed(paneId: paneId, keys: ["enter"])
     }
 
     func stop(paneId: String) {
