@@ -9864,6 +9864,75 @@ struct LogicCheckMain {
 
         try? FileManager.default.removeItem(at: proofDir)
 
+        // LEDGER loading states: the spend tab must never run SQLite on the
+        // main thread. Snapshots load off-main, gate on the ledger
+        // revision, and scope filtering is pure in-memory math.
+        func awaitLedger<T>(_ work: @escaping () async -> T) -> T? {
+            var box: T?
+            Task { box = await work() }
+            let deadline = Date().addingTimeInterval(30.0)
+            while box == nil, Date() < deadline {
+                RunLoop.current.run(
+                    mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            return box
+        }
+        let ledgerEmptyHome =
+            FileManager.default.temporaryDirectory
+            .appendingPathComponent("bantay-ledger-empty-\(UUID().uuidString)").path
+        try? FileManager.default.createDirectory(
+            atPath: ledgerEmptyHome, withIntermediateDirectories: true)
+        let ledgerEmpty = awaitLedger {
+            await LedgerSnapshotCache.shared.snapshot(home: ledgerEmptyHome)
+        }
+        check(
+            ledgerEmpty?.lifetime == nil && ledgerEmpty?.buckets.isEmpty == true
+                && ledgerEmpty?.revision == 0,
+            "LEDGER empty home yields an empty snapshot")
+        try? FileManager.default.removeItem(atPath: ledgerEmptyHome)
+
+        let ledgerFirst = awaitLedger {
+            await LedgerSnapshotCache.shared.snapshot()
+        }
+        let ledgerSecond = awaitLedger {
+            await LedgerSnapshotCache.shared.snapshot()
+        }
+        check(
+            ledgerFirst != nil && ledgerFirst == ledgerSecond,
+            "LEDGER repeat loads hit the revision-gated cache")
+
+        let ledgerCalendar = Calendar.current
+        let ledgerToday = ledgerCalendar.startOfDay(for: Date())
+        func ledgerBucket(daysAgo: Int, tokens: Int) -> OpenCodeUsageAdapter.DayBucket {
+            OpenCodeUsageAdapter.DayBucket(
+                dayStart: ledgerCalendar.date(
+                    byAdding: .day, value: -daysAgo, to: ledgerToday)!,
+                tokens: tokens, cost: Double(tokens) / 1_000_000.0 * 3.0,
+                messages: tokens > 0 ? 1 : 0)
+        }
+        let ledgerFake = LedgerSnapshotData(
+            lifetime: OpenCodeUsageAdapter.LifetimeTotals(
+                tokens: 600, cost: 0.002, sessions: 3),
+            buckets: [
+                ledgerBucket(daysAgo: 0, tokens: 100),
+                ledgerBucket(daysAgo: 3, tokens: 200),
+                ledgerBucket(daysAgo: 30, tokens: 300),
+            ],
+            revision: 7)
+        let ledgerLife = ScopedLedger.summary(scope: .lifetime, snapshot: ledgerFake)
+        check(
+            ledgerLife.tokens == 600 && ledgerLife.sessions == 3
+                && ledgerLife.activeDays == 3,
+            "LEDGER lifetime scope sums every bucket (got \(ledgerLife.tokens) tok)")
+        let ledgerWeek = ScopedLedger.summary(scope: .week, snapshot: ledgerFake)
+        check(
+            ledgerWeek.tokens == 300,
+            "LEDGER week scope keeps only the last 7 days (got \(ledgerWeek.tokens) tok)")
+        let ledgerDay = ScopedLedger.summary(scope: .day, snapshot: ledgerFake)
+        check(
+            ledgerDay.tokens == 100,
+            "LEDGER day scope keeps only today (got \(ledgerDay.tokens) tok)")
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 

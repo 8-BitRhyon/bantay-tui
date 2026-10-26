@@ -23,6 +23,7 @@ UI_ONLY=(
   MultiAgentTimelineView.swift
   NotchCommonViews.swift
   NotchHeaderBarView.swift
+  LoadingSkeleton.swift
   NotchHistoryView.swift
   NotchIdleStripView.swift
   NotchMediaView.swift

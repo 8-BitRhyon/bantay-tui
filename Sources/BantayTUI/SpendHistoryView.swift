@@ -13,6 +13,7 @@ struct SpendHistoryView: View {
     }
 
     @State private var scope: SpendScope = .lifetime
+    @State private var ledger: LedgerSnapshotData?
 
     init(budget: Double = NotchHUDConfig.shared.dailyBudgetUSD) {
         self.budget = budget
@@ -21,7 +22,14 @@ struct SpendHistoryView: View {
     var body: some View {
         VStack(spacing: 8) {
             scopePills
-            ledgerSection
+            if let ledger {
+                ledgerSection(snapshot: ledger)
+            } else {
+                // The SQLite scan behind the snapshot takes seconds on large
+                // ledgers and runs off the main thread. Paint the skeleton
+                // on the first frame so the tab switch never feels dead.
+                LoadingSkeleton(rows: 2)
+            }
             headerSummary
             weekBarChart
             agentBreakdown
@@ -32,6 +40,21 @@ struct SpendHistoryView: View {
             RoundedRectangle(cornerRadius: BantayTheme.radiusCard, style: .continuous)
                 .fill(BantayTheme.cardBackground)
         )
+        .onAppear {
+            Task { await reloadLedger() }
+        }
+    }
+
+    private func reloadLedger() async {
+        ledger = await LedgerSnapshotCache.shared.snapshot()
+    }
+
+    private func ledgerScope() -> LedgerScope {
+        switch scope {
+        case .lifetime: return .lifetime
+        case .week: return .week
+        case .day: return .day
+        }
     }
 
     private var scopePills: some View {
@@ -70,52 +93,49 @@ struct SpendHistoryView: View {
     /// Authoritative ledger numbers for the selected window: lifetime
     /// totals plus streak, active days, and session count. The local
     /// sections below stay on device-local records; this row states its
-    /// window so scopes never silently mix.
-    private var ledgerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if scope == .lifetime,
-                let life = OpenCodeUsageAdapter.lifetimeTotals()
-            {
-                let buckets = OpenCodeUsageAdapter.dailyBuckets(days: 400)
-                let activeDays = buckets.filter { $0.messages > 0 }.map(\.dayStart)
-                let streak = IslandMetrics.usageStreak(activeDays: activeDays)
+    /// window so scopes never silently mix. Every scope derives from the
+    /// one cached snapshot, so switching scopes is instant.
+    private func ledgerSection(snapshot: LedgerSnapshotData) -> some View {
+        let summary = ScopedLedger.summary(scope: ledgerScope(), snapshot: snapshot)
+        return VStack(alignment: .leading, spacing: 4) {
+            if scope == .lifetime, let sessions = summary.sessions {
+                let tokens = summary.tokens
+                let cost = summary.cost
                 HStack(alignment: .firstTextBaseline) {
-                    Text(IslandMetrics.compactTokenCount(life.tokens))
+                    Text(IslandMetrics.compactTokenCount(tokens))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundColor(BantayTheme.textPrimary)
                     Text("TOKENS LIFETIME")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(BantayTheme.textTertiary)
                     Spacer(minLength: 0)
-                    Text(String(format: "$%.2f", life.cost))
+                    Text(String(format: "$%.2f", cost))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundColor(BantayTheme.statusCompleted)
                 }
                 HStack(spacing: 6) {
-                    Text("\(life.sessions) sessions")
+                    Text("\(sessions) sessions")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(BantayTheme.textSecondary)
-                    Text("· \(activeDays.count) active days")
+                    Text("· \(summary.activeDays) active days")
                         .font(.system(size: 9))
                         .foregroundColor(BantayTheme.textTertiary)
-                    Text("· \(streak.current)-day streak")
+                    Text("· \(summary.streakCurrent)-day streak")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(BantayTheme.statusAttention)
-                    if streak.longest > streak.current {
-                        Text("(best \(streak.longest))")
+                    if summary.streakLongest > summary.streakCurrent {
+                        Text("(best \(summary.streakLongest))")
                             .font(.system(size: 9))
                             .foregroundColor(BantayTheme.textTertiary)
                     }
                     Spacer(minLength: 0)
                 }
                 .accessibilityLabel(
-                    "\(life.tokens) lifetime tokens, $\(String(format: "%.2f", life.cost)), \(streak.current) day streak"
+                    "\(tokens) lifetime tokens, $\(String(format: "%.2f", cost)), \(summary.streakCurrent) day streak"
                 )
             } else {
-                let days = scope == .week ? 7 : 1
-                let buckets = OpenCodeUsageAdapter.dailyBuckets(days: days)
-                let tokens = buckets.reduce(0) { $0 + $1.tokens }
-                let cost = buckets.reduce(0.0) { $0 + $1.cost }
+                let tokens = summary.tokens
+                let cost = summary.cost
                 HStack(alignment: .firstTextBaseline) {
                     Text(IslandMetrics.compactTokenCount(tokens))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))

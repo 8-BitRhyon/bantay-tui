@@ -19,7 +19,14 @@ struct ProviderQuotaView: View {
 
             FLXCardContent {
                 if quotas.isEmpty {
-                    emptyQuotasView
+                    if monitor.lastRefresh == nil {
+                        // First load runs a subprocess plus ledger scans off
+                        // the main thread. Paint the skeleton on the first
+                        // frame so the tab switch never feels dead.
+                        LoadingSkeleton(rows: 3)
+                    } else {
+                        emptyQuotasView
+                    }
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 6) {
@@ -49,6 +56,11 @@ struct ProviderQuotaView: View {
 
             Spacer()
 
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.mini)
+                    .accessibilityLabel("Refreshing quotas")
+            }
             FLXButton(
                 "Refresh",
                 systemImage: "arrow.clockwise",
@@ -56,6 +68,8 @@ struct ProviderQuotaView: View {
                 action: { Task { await refreshQuotas() } }
             )
             .controlSize(.small)
+            .disabled(isRefreshing)
+            .opacity(isRefreshing ? 0.5 : 1)
         }
     }
 
@@ -65,9 +79,7 @@ struct ProviderQuotaView: View {
                 .font(.system(size: 16))
                 .foregroundColor(BantayTheme.textTertiary)
             Text(
-                monitor.lastRefresh == nil
-                    ? "Checking provider quotas..."
-                    : "No live provider quota source found.\nInstall quota-axi or sign in to a provider."
+                "No live provider quota source found.\nInstall quota-axi or sign in to a provider."
             )
             .font(.system(size: 10, weight: .medium))
             .multilineTextAlignment(.center)
