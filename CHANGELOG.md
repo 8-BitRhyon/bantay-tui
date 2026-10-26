@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- **Closed Strip Choice** (`IslandMetrics.swift`, `NotchIdleStripView.swift`, `NotchHUDConfig.swift`, `SettingsView.swift`): The strip beside the notch now offers four modes: lead project plus working count, working count alone, agent name chips, and status dots. Project mode groups agents by folder, folds other projects into `+N`, and is the default for new installs. The choice persists and applies to centered and docked placements. A quiet notch no longer renders an `Idle` capsule.
 - **Desktop Strip HUD** (`DesktopHUDController.swift`, `DesktopHUDView.swift`): Bottom-center window-only surface with column cards, Chain, Overview, navigation, and a Layout menu. Opens with `⌃⌥Space`, the menu bar, or `bantay strip hud`. Auto-hides unless pinned. Never appears in full screen. The notch no longer renders window controls.
 - **Unified Approval Cards** (`ApprovalCardView.swift`): Blocked agents render as cards. Each card shows the exact request, risk badge, and queue position. Actions are Allow Once, Review, and Deny. Supports yes-no, numbered choices, and multi-select prompts.
 - **Humanized Agent Rows** (`AgentPresentation.swift`, `AgentRowView.swift`): Raw tool text maps to plain status lines. Risk tiers flag destructive commands. Subagents fold under their project. Clicking a row focuses its window. Reply uses `R` or the row menu.

@@ -37,6 +37,9 @@ public enum IslandMetrics: Sendable {
         case names
         /// Dot + a single "N agents" summary.
         case summary
+        /// One project chip plus the working count. Project names are more
+        /// distinct than tool names when several agents run at once.
+        case project
     }
 
     // MARK: - Constants
@@ -181,13 +184,66 @@ public enum IslandMetrics: Sendable {
         return IdleChipFit(shown: withOverflow, overflow: count - withOverflow)
     }
 
-    /// Right-wing wording when nothing needs the user. Working agents must
-    /// never read as "Idle" just because nothing is blocked.
-    public static func centeredIdleLabel(working: Int) -> String {
-        working > 0 ? "\(working) working" : "Idle"
+    /// Count label for the right wing while agents are working.
+    public static func centeredWorkingLabel(working: Int) -> String {
+        "\(working) working"
     }
 
-    /// Total closed idle strip width for `style`.
+    /// Width of the docked project chip: project name, `+N` overflow, and the
+    /// agent count that replaces the right-wing status on a docked strip.
+    public static func idleProjectChipWidth(
+        nameLength: Int, agentCount: Int, projectCount: Int
+    ) -> CGFloat {
+        let digits = max(String(max(agentCount, 0)).count, 1)
+        let countWidth = 10 + CGFloat(digits) * 6.4
+        let overflow = projectCount > 1 ? idleOverflowPad : 0
+        return idleNameChipWidth(nameLength: nameLength) + countWidth + overflow
+    }
+
+    /// Distinct project labels in roster order. Falls back to the agent source
+    /// when the working directory produced no project. Case-insensitive dedupe
+    /// so two paths that resolve to the same project do not become two chips.
+    public static func compactProjectLabels(
+        projects: [String?], sources: [String]
+    ) -> [String] {
+        let count = min(projects.count, sources.count)
+        return compactProjectLabels(
+            projects: projects, sources: sources, order: Array(0..<count))
+    }
+
+    /// Distinct project labels ordered by the most recently started agent.
+    /// Ties keep roster order so the lead chip does not jitter.
+    public static func compactProjectLabels(
+        projects: [String?], sources: [String], startedAt: [Date?]
+    ) -> [String] {
+        let count = min(projects.count, min(sources.count, startedAt.count))
+        let order = (0..<count).sorted { lhs, rhs in
+            let left = startedAt[lhs] ?? .distantPast
+            let right = startedAt[rhs] ?? .distantPast
+            if left != right { return left > right }
+            return lhs < rhs
+        }
+        return compactProjectLabels(projects: projects, sources: sources, order: order)
+    }
+
+    private static func compactProjectLabels(
+        projects: [String?], sources: [String], order: [Int]
+    ) -> [String] {
+        var seen = Set<String>()
+        var labels: [String] = []
+        for index in order {
+            let raw = (projects[index] ?? sources[index])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { continue }
+            guard seen.insert(raw.lowercased()).inserted else { continue }
+            labels.append(raw)
+        }
+        return labels
+    }
+
+    /// Total closed idle strip width for `style`. For `.project`, `nameLengths`
+    /// carries the distinct project label lengths and `agentCount` stays the
+    /// agent total shown in the chip's count.
     public static func idleStripWidth(
         style: IdleStyle, agentCount: Int, maxChips: Int, nameLengths: [Int]
     ) -> CGFloat {
@@ -209,6 +265,11 @@ public enum IslandMetrics: Sendable {
             w += CGFloat(max(shown - 1, 0)) * idleChipGap
             if count > shown { w += idleOverflowPad }
             return w
+        case .project:
+            return idleProjectChipWidth(
+                nameLength: nameLengths.first ?? 6,
+                agentCount: count,
+                projectCount: max(nameLengths.count, 1))
         }
     }
 

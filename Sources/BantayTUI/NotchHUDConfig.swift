@@ -364,7 +364,7 @@ final class NotchHUDConfig {
     var islandDockSide: IslandMetrics.IslandDockSide = .center {
         didSet { defaults.set(islandDockSide.rawValue, forKey: "islandDockSide") }
     }
-    var idleStyle: IslandMetrics.IdleStyle = .names {
+    var idleStyle: IslandMetrics.IdleStyle = .project {
         didSet { defaults.set(idleStyle.rawValue, forKey: "idleStyle") }
     }
     var idleMaxChips: Int = IslandMetrics.idleDefaultMaxChips {

@@ -5,6 +5,7 @@ import UserNotifications
 @MainActor
 struct NotchStatusView: View {
     @EnvironmentObject var eventManager: AgentEventManager
+    @AppStorage("idleStyle") private var idleStyleRaw = IslandMetrics.IdleStyle.project.rawValue
     @State private var isExpanded = false
     @State private var isHovered = false
     @State private var hoverTask: Task<Void, Never>?
@@ -103,11 +104,32 @@ struct NotchStatusView: View {
         let full = min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
         guard !hasTransientEvent else { return full }
         let config = NotchHUDConfig.shared
+        let style = IslandMetrics.IdleStyle(rawValue: idleStyleRaw) ?? .project
         if isCenteredIdle {
             return full
         }
+        if style == .project {
+            let projects = IslandMetrics.compactProjectLabels(
+                projects: eventManager.agents.map { $0.projectContext?.project },
+                sources: eventManager.agents.map(\.source),
+                startedAt: eventManager.agents.map(\.startedAt))
+            let lead = IslandMetrics.cleanHUDText(projects.first ?? "", maxCharacters: 14)
+            var width = IslandMetrics.idleProjectChipWidth(
+                nameLength: lead.isEmpty ? 6 : lead.count,
+                agentCount: eventManager.agents.count,
+                projectCount: max(projects.count, 1))
+            if config.avoidMenuBarIcons {
+                let clearance = IslandMetrics.MenuBarClearance.maxIdleWidth(
+                    side: config.islandDockSide, notchWidth: AppDelegate.notchWidth,
+                    screenWidth: AppDelegate.islandScreen()?.frame.width
+                        ?? AppDelegate.notchWidth,
+                    auxLeft: AppDelegate.auxLeftWidth, auxRight: AppDelegate.auxRightWidth)
+                width = min(width, max(clearance, IslandMetrics.idleChipWidth))
+            }
+            return max(width, IslandMetrics.idleChipWidth)
+        }
         var width = IslandMetrics.idleClosedWidth(
-            style: config.idleStyle,
+            style: style,
             agentCount: eventManager.agents.count,
             maxChips: config.clampedIdleMaxChips,
             nameLengths: eventManager.agents.map(\.source.count),

@@ -1243,6 +1243,28 @@ struct LogicCheckMain {
         let sumW = IslandMetrics.idleStripWidth(
             style: .summary, agentCount: 9, maxChips: 6, nameLengths: [])
         check(sumW > 0 && sumW < IslandMetrics.expandedWidth, "L5 summary width sane")
+        check(
+            IslandMetrics.IdleStyle.project.rawValue == "project",
+            "L5 project style has a stable raw value")
+        let projectOne = IslandMetrics.idleStripWidth(
+            style: .project, agentCount: 4, maxChips: 3, nameLengths: [4])
+        let projectTwo = IslandMetrics.idleStripWidth(
+            style: .project, agentCount: 4, maxChips: 3, nameLengths: [4, 4])
+        check(
+            projectTwo > projectOne,
+            "L5 project overflow widens the chip (got \(projectTwo) vs \(projectOne))")
+        let projectLong = IslandMetrics.idleProjectChipWidth(
+            nameLength: 14, agentCount: 4, projectCount: 1)
+        let projectShort = IslandMetrics.idleProjectChipWidth(
+            nameLength: 4, agentCount: 4, projectCount: 1)
+        check(projectLong > projectShort, "L5 longer project names widen the chip")
+        let closedProject = IslandMetrics.idleClosedWidth(
+            style: .project, agentCount: 4, maxChips: 3,
+            nameLengths: [10, 6], notchWidth: 190)
+        check(
+            closedProject >= IslandMetrics.idleChipWidth
+                && closedProject <= IslandMetrics.expandedWidth,
+            "L5 closed project chip clamps to the strip (got \(closedProject))")
         let closedNames = IslandMetrics.idleClosedWidth(
             style: .names, agentCount: 8, maxChips: 6,
             nameLengths: Array(repeating: 4, count: 8), notchWidth: 190)
@@ -1263,6 +1285,10 @@ struct LogicCheckMain {
             check(
                 cfg.clampedIdleMaxChips >= 1 && cfg.clampedIdleMaxChips <= 6,
                 "L5 clamped max chips in range (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleStyle = .project
+            check(
+                defaults.string(forKey: "idleStyle") == "project",
+                "L5 project style persisted")
             cfg.idleStyle = .dots
             check(
                 defaults.string(forKey: "idleStyle") == "dots",
@@ -2558,11 +2584,48 @@ struct LogicCheckMain {
             noRoom.shown == 0 && noRoom.overflow == 0,
             "L23 no readable chip means no cramped chips")
         check(
-            IslandMetrics.centeredIdleLabel(working: 4) == "4 working",
+            IslandMetrics.centeredWorkingLabel(working: 4) == "4 working",
             "L23 working count never reads as Idle")
+        let projectLabels = IslandMetrics.compactProjectLabels(
+            projects: ["bantay-tui", "Bantay-TUI", "api", nil, "  api  "],
+            sources: ["opencode", "kilo", "codex", "herdr", "cursor"])
         check(
-            IslandMetrics.centeredIdleLabel(working: 0) == "Idle",
-            "L23 empty strip reads Idle")
+            projectLabels == ["bantay-tui", "api", "herdr"],
+            "L23 project labels dedupe and fall back to source (got \(projectLabels))")
+        check(
+            IslandMetrics.compactProjectLabels(
+                projects: ["", nil], sources: ["", "  "]
+            ).isEmpty,
+            "L23 empty project and source make no chip")
+        check(
+            IslandMetrics.compactProjectLabels(
+                projects: ["  api  "], sources: ["opencode"]
+            ) == ["api"],
+            "L23 project labels trim whitespace")
+        let recentFirst = IslandMetrics.compactProjectLabels(
+            projects: ["older", "newer", "oldest"],
+            sources: ["a", "b", "c"],
+            startedAt: [
+                Date(timeIntervalSince1970: 10),
+                Date(timeIntervalSince1970: 20),
+                nil,
+            ])
+        check(
+            recentFirst == ["newer", "older", "oldest"],
+            "L23 newest project leads the strip (got \(recentFirst))")
+        let tiedOrder = IslandMetrics.compactProjectLabels(
+            projects: ["first", "second"], sources: ["a", "b"],
+            startedAt: [nil, nil])
+        check(
+            tiedOrder == ["first", "second"],
+            "L23 tied start times keep roster order (got \(tiedOrder))")
+        let projectPill = IslandMetrics.idleProjectChipWidth(
+            nameLength: 6, agentCount: 1, projectCount: 1)
+        let projectPillWide = IslandMetrics.idleProjectChipWidth(
+            nameLength: 6, agentCount: 12, projectCount: 3)
+        check(
+            projectPillWide > projectPill,
+            "L23 project pill grows with count and overflow (got \(projectPillWide))")
 
         // L24. Expanded height reserves the tab row when it is shown, plus
         // +N overflow rows.

@@ -161,7 +161,7 @@ Settings are stored in `UserDefaults` under domain `BantayTUI`. Open the Setting
 | Key | Default | Description |
 |---|---|---|
 | `islandDockSide` | `center` | Placement of the idle strip (`left`, `right`, or `center`) |
-| `idleStyle` | `names` | Style of idle chips (`names`, `dots`, or `summary`) |
+| `idleStyle` | `project` | Closed strip content: lead project + count (`project`), count only (`summary`), agent names (`names`), or dots (`dots`) |
 | `idleMaxChips` | `3` | Maximum visible chips before the `+N` badge (1 to 6) |
 | `expandedGroupByState` | `true` | Group agents by status in the roster |
 | `globalHotkeyEnabled` | `true` | Enable global hotkeys (`⌥Y` approve, `⌥N` deny, `⌥S` snooze, `⌥,` settings) |
