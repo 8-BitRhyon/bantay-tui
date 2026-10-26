@@ -32,9 +32,17 @@
         }
 
         @Test("repeat loads hit the revision-gated cache")
-        func repeatLoadsHitCache() async {
-            let first = await LedgerSnapshotCache.shared.snapshot()
-            let second = await LedgerSnapshotCache.shared.snapshot()
+        func repeatLoadsHitCache() async throws {
+            // Empty home keeps this deterministic: no live ledger can move
+            // the revision between the two loads on any machine.
+            let home =
+                FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-ledger-cache-\(UUID().uuidString)").path
+            try FileManager.default.createDirectory(
+                atPath: home, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(atPath: home) }
+            let first = await LedgerSnapshotCache.shared.snapshot(home: home)
+            let second = await LedgerSnapshotCache.shared.snapshot(home: home)
             #expect(first == second)
         }
 

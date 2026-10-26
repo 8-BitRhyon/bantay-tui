@@ -373,11 +373,26 @@ final class AgentEventManager: ObservableObject {
     /// Whether the baseline came from a covered source (true delta) or a
     /// rolling window (honest estimate). Pruned with the other per-pane maps.
     private var baselineCoveredByKey: [String: Bool] = [:]
-    /// Last recorded completion fingerprint per pane (kind + title). Kills
-    /// the 48-rows-for-one-finish class: heartbeats with no work between
-    /// completions record once. Cleared by progress/started, pruned with the
-    /// other per-pane maps.
-    private var completedFingerprintByKey: [String: String] = [:]
+    /// What the last completion for a pane recorded. One finish often
+    /// arrives as several events with different titles (a terminal title
+    /// from the roster poll, then a fallback from the event stream). The
+    /// session path identifies the finish; the title is only a description,
+    /// so a refire upgrades the row in place instead of doubling it.
+    private struct CompletionMark: Sendable {
+        var fingerprint: String
+        var title: String
+        var tokens: Int
+        var rowId: String
+        /// Baseline the recorded numbers were metered against. Upgrades
+        /// re-read current usage against this fixed start; without it the
+        /// cleared burst maps would meter lifetime as a delta.
+        var baseline: (tokens: Int, cost: Double)?
+        var covered: Bool
+    }
+
+    /// Last recorded completion per pane. Cleared by progress/started,
+    /// pruned with the other per-pane maps.
+    private var completionMarks: [String: CompletionMark] = [:]
     /// Latest approval prompt shape per pane, decoded from the event stream
     /// and enriched from the live pane when the event is only "blocked".
     var pendingApprovals: [String: PendingApproval] = [:]
@@ -399,13 +414,17 @@ final class AgentEventManager: ObservableObject {
     var activeAdapter: any PlexerAdapter = PlexerFactory.makeAdapter()
     /// Append-only decision receipts. Injected in tests; shared in the app.
     private let receiptStore: ApprovalReceiptStore
+    /// Session history. Injected in tests; shared in the app.
+    private let sessionStore: SessionHistoryStore
 
     init(
         eventsFileURL: URL? = nil, capture: Bool = true,
-        receiptStore: ApprovalReceiptStore? = nil
+        receiptStore: ApprovalReceiptStore? = nil,
+        sessionStore: SessionHistoryStore? = nil
     ) {
         self.captureEnabled = capture
         self.receiptStore = receiptStore ?? .shared
+        self.sessionStore = sessionStore ?? .shared
         let url =
             eventsFileURL
             ?? FileManager.default
@@ -748,7 +767,7 @@ final class AgentEventManager: ObservableObject {
             }
             // New working burst re-arms completion recording: the next
             // completion for this pane is a real finish, not a heartbeat.
-            completedFingerprintByKey.removeValue(forKey: key)
+            completionMarks.removeValue(forKey: key)
         } else if event.kind == .completed || event.kind == .failed
             || event.kind == .cancelled || event.kind == .clear
         {
@@ -756,84 +775,108 @@ final class AgentEventManager: ObservableObject {
         }
 
         if event.kind == .completed || event.kind == .failed {
-            let title = event.title ?? event.message ?? event.kind.label
-            // Completion heartbeats re-emit the same finish for minutes.
-            // Record one row per working burst: identical kind+title with no
-            // progress since the last one is a dupe, not a new session.
-            let fingerprint = "\(event.kind.rawValue):\(title)"
-            if completedFingerprintByKey[key] != fingerprint {
-                completedFingerprintByKey[key] = fingerprint
-                recordedFreshFinish = true
-                // The periodic lifetime sweep may be up to 10s behind. A
-                // finish is the one moment the final tokens must land, so
-                // accrue transcript sources once more before metering.
-                if !UsageTracker.ledgerCoveredSources.contains(event.sourceKey) {
-                    lifetimeAccrual = UsageTracker.accrueLifetime(
-                        home: NSHomeDirectory(),
-                        names: self.agents.map { $0.source },
-                        state: lifetimeAccrual)
+            let snap = self.agents.first {
+                (event.paneId != nil && $0.paneId == event.paneId)
+                    || $0.source == event.sourceKey
+            }
+            let sessionIdentity = snap?.sessionPath.flatMap {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+            }
+            // Prefer the roster's terminal title over a bare kind label:
+            // completion events often carry no text, and the terminal title
+            // names the actual task. It also unifies the titles of refires
+            // so the dedupe below sees one finish, not two.
+            let title = event.title ?? event.message ?? snap?.title ?? event.kind.label
+            // One finish often arrives as several events with different
+            // titles. The session path identifies the finish; without one,
+            // the title does. Identical refires skip without recomputing;
+            // cross-title refires re-meter against the recorded baseline
+            // and keep the most complete numbers.
+            let fingerprint = "\(event.kind.rawValue):\(sessionIdentity ?? title)"
+            let marked = completionMarks[key]
+            if marked?.fingerprint == fingerprint, marked?.title == title {
+                // Identical refire: nothing new. Skip the recompute too —
+                // the ledger scan behind it is seconds of main-thread disk.
+            } else {
+                let upgrading = marked?.fingerprint == fingerprint
+                if upgrading, marked?.baseline == nil {
+                    // Same finish, still no observable start (progress
+                    // would have cleared the mark): keep waiting, keep mark.
+                } else {
+                    let metered = meterCompletion(
+                        key: key, sourceKey: event.sourceKey,
+                        sessionStart: sessionStart,
+                        fixedBaseline: upgrading
+                            ? marked.flatMap({ $0.baseline }) : nil,
+                        fixedCovered: upgrading ? marked?.covered : nil)
+                    if !upgrading || metered.tokens > (marked?.tokens ?? -1) {
+                        let failed = event.kind == .failed
+                        // A finished session with no attributable usage is
+                        // not a session row: without a baseline the numbers
+                        // would be lifetime totals, and zeros carry no
+                        // information. Failures keep their error signal
+                        // with honest zero numbers.
+                        let attributable =
+                            metered.baseline != nil
+                            && !(metered.tokens == 0 && metered.cost <= 0)
+                        if !failed, !attributable {
+                            completionMarks[key] = CompletionMark(
+                                fingerprint: fingerprint, title: title,
+                                tokens: 0, rowId: "",
+                                baseline: metered.baseline,
+                                covered: metered.covered)
+                        } else {
+                            let rowId = "\(key):\(Int(event.createdAt.timeIntervalSince1970))"
+                            let resolvedTitle: String
+                            if let old = marked.flatMap({
+                                sessionStore.session(withId: $0.rowId)
+                            }),
+                                old.title != event.kind.label
+                            {
+                                resolvedTitle = old.title
+                            } else {
+                                resolvedTitle = title
+                            }
+                            if upgrading, !(marked?.rowId.isEmpty ?? true) {
+                                sessionStore.updateSessionNumbers(
+                                    id: marked!.rowId, tokens: metered.tokens,
+                                    cost: metered.cost,
+                                    duration: completionDuration ?? 0,
+                                    title: resolvedTitle)
+                            } else {
+                                sessionStore.addSession(
+                                    AgentSessionRecord(
+                                        id: rowId,
+                                        agentName: event.sourceKey,
+                                        title: resolvedTitle,
+                                        startTime: sessionStart,
+                                        durationSeconds: completionDuration ?? 0,
+                                        totalTokens: metered.tokens,
+                                        costUSD: metered.cost,
+                                        status: failed ? "Failed" : "Completed",
+                                        project: snap?.projectContext?.project
+                                            ?? snap?.cwd.flatMap {
+                                                ($0 as NSString).lastPathComponent
+                                            },
+                                        branch: snap?.projectContext?.branch,
+                                        sessionPath: snap?.sessionPath,
+                                        cwd: snap?.cwd,
+                                        isDelta: metered.covered
+                                            && metered.baseline != nil,
+                                        isWindowEstimate: !metered.covered
+                                            && metered.baseline != nil,
+                                        buildTag: SessionHistoryStore
+                                            .currentBuildTag))
+                                recordedFreshFinish = true
+                            }
+                            completionMarks[key] = CompletionMark(
+                                fingerprint: fingerprint, title: title,
+                                tokens: metered.tokens, rowId: rowId,
+                                baseline: metered.baseline,
+                                covered: metered.covered)
+                        }
+                    }
                 }
-                // Ledger-metered sources skip in-memory baselines entirely:
-                // the ledger answers "as of session start" exactly, so short
-                // sessions cannot meter ~0.
-                let ledgerBaseline: (tokens: Int, cost: Double)? =
-                    UsageTracker.ledgerCoveredSources.contains(event.sourceKey)
-                        && OpenCodeUsageAdapter.detect()
-                    ? OpenCodeUsageAdapter.meterAsOf(
-                        beforeMs: Int64(sessionStart.timeIntervalSince1970 * 1000))
-                    : nil
-                let ledgerCurrent: UsageSnapshot? =
-                    ledgerBaseline == nil
-                    ? nil
-                    : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400, maxAge: 0)
-                var baseline = usageBaselineByKey[key]
-                var covered =
-                    baselineCoveredByKey[key]
-                    ?? lifetimeAccrual.covered.contains(event.sourceKey)
-                var currentTokens =
-                    covered
-                    ? (lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0)
-                    : (usage.tokensBySource[event.sourceKey] ?? 0)
-                var currentCost =
-                    covered
-                    ? (lifetimeAccrual.costBySource[event.sourceKey] ?? 0)
-                    : (usage.costBySource[event.sourceKey] ?? 0)
-                if let ledgerBaseline, let ledgerCurrent {
-                    baseline = ledgerBaseline
-                    covered = true
-                    currentTokens = ledgerCurrent.totalTokens
-                    currentCost = ledgerCurrent.costUSD
-                }
-                let snap = self.agents.first {
-                    (event.paneId != nil && $0.paneId == event.paneId)
-                        || $0.source == event.sourceKey
-                }
-                // Covered sources meter against monotonic lifetime counters.
-                // Uncovered sources fall back to the rolling window — an
-                // honest estimate, labeled as one downstream.
-                SessionHistoryStore.shared.addSession(
-                    AgentSessionRecord(
-                        id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",
-                        agentName: event.sourceKey,
-                        title: title,
-                        startTime: sessionStart,
-                        durationSeconds: completionDuration ?? 0,
-                        totalTokens: SessionUsageDelta.tokens(
-                            current: currentTokens,
-                            baseline: baseline?.tokens ?? 0),
-                        costUSD: SessionUsageDelta.cost(
-                            current: currentCost,
-                            baseline: baseline?.cost ?? 0),
-                        status: event.kind == .completed ? "Completed" : "Failed",
-                        project: snap?.projectContext?.project
-                            ?? snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
-                        branch: snap?.projectContext?.branch,
-                        sessionPath: snap?.sessionPath,
-                        cwd: snap?.cwd,
-                        // No baseline means no observed start: the numbers
-                        // are lifetime totals, labeled as such downstream.
-                        isDelta: covered && baseline != nil,
-                        isWindowEstimate: !covered && baseline != nil))
             }
             usageBaselineByKey.removeValue(forKey: key)
             baselineCoveredByKey.removeValue(forKey: key)
@@ -1334,7 +1377,7 @@ extension AgentEventManager {
         baselineCoveredByKey = baselineCoveredByKey.filter {
             liveAgentKeys.contains($0.key)
         }
-        completedFingerprintByKey = completedFingerprintByKey.filter {
+        completionMarks = completionMarks.filter {
             liveAgentKeys.contains($0.key)
         }
         // Tasks stuck in flight on dead panes can never transition again.
@@ -1571,6 +1614,88 @@ extension AgentEventManager {
             return reason
         }
         return nil
+    }
+
+    /// Metered usage for a finished burst: current counters minus the burst
+    /// baseline. Ledger-metered sources use the as-of-start ledger read so
+    /// short sessions cannot meter ~0; everything else uses the in-memory
+    /// burst baseline captured on progress. A nil baseline means no start
+    /// was ever observed: the numbers are unattributable.
+    private struct MeteredCompletion: Sendable {
+        var tokens: Int
+        var cost: Double
+        var baseline: (tokens: Int, cost: Double)?
+        var covered: Bool
+    }
+
+    private func meterCompletion(
+        key: String, sourceKey: String, sessionStart: Date,
+        fixedBaseline: (tokens: Int, cost: Double)? = nil,
+        fixedCovered: Bool? = nil
+    ) -> MeteredCompletion {
+        // The periodic lifetime sweep may be up to 10s behind. A finish is
+        // the one moment the final tokens must land, so accrue transcript
+        // sources once more before metering.
+        if !UsageTracker.ledgerCoveredSources.contains(sourceKey) {
+            lifetimeAccrual = UsageTracker.accrueLifetime(
+                home: NSHomeDirectory(),
+                names: self.agents.map { $0.source },
+                state: lifetimeAccrual)
+        }
+        // Ledger-metered sources skip in-memory baselines entirely: the
+        // ledger answers "as of session start" exactly, so short sessions
+        // cannot meter ~0.
+        let ledgerBaseline: (tokens: Int, cost: Double)? =
+            UsageTracker.ledgerCoveredSources.contains(sourceKey)
+                && OpenCodeUsageAdapter.detect()
+            ? OpenCodeUsageAdapter.meterAsOf(
+                beforeMs: Int64(sessionStart.timeIntervalSince1970 * 1000))
+            : nil
+        let ledgerCurrent: UsageSnapshot? =
+            ledgerBaseline == nil
+            ? nil
+            : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400, maxAge: 0)
+        var baseline = fixedBaseline ?? usageBaselineByKey[key]
+        var covered =
+            fixedCovered ?? baselineCoveredByKey[key]
+            ?? lifetimeAccrual.covered.contains(sourceKey)
+        var currentTokens =
+            covered
+            ? (lifetimeAccrual.tokensBySource[sourceKey] ?? 0)
+            : (usage.tokensBySource[sourceKey] ?? 0)
+        var currentCost =
+            covered
+            ? (lifetimeAccrual.costBySource[sourceKey] ?? 0)
+            : (usage.costBySource[sourceKey] ?? 0)
+        if fixedBaseline != nil {
+            // Upgrade path: the baseline is pinned to record time (the
+            // burst maps were cleared), but current usage re-reads live.
+            // Counters and the ledger only grow, so the upgrade can only
+            // complete the numbers, never shrink them.
+            if UsageTracker.ledgerCoveredSources.contains(sourceKey),
+                OpenCodeUsageAdapter.detect(),
+                let snap = OpenCodeUsageAdapter.snapshot(
+                    since: 30 * 365 * 86400, maxAge: 0)
+            {
+                currentTokens = snap.totalTokens
+                currentCost = snap.costUSD
+            }
+        } else if let ledgerBaseline, let ledgerCurrent {
+            baseline = ledgerBaseline
+            covered = true
+            currentTokens = ledgerCurrent.totalTokens
+            currentCost = ledgerCurrent.costUSD
+        }
+        // Covered sources meter against monotonic lifetime counters.
+        // Uncovered sources fall back to the rolling window — an honest
+        // estimate, labeled as one downstream.
+        return MeteredCompletion(
+            tokens: SessionUsageDelta.tokens(
+                current: currentTokens, baseline: baseline?.tokens ?? 0),
+            cost: SessionUsageDelta.cost(
+                current: currentCost, baseline: baseline?.cost ?? 0),
+            baseline: baseline,
+            covered: covered)
     }
 
     /// A user decision that needs a transport write.

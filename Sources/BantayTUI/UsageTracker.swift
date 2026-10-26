@@ -45,7 +45,7 @@ struct UsageRate: Equatable, Sendable {
 public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
     public let id: String
     public let agentName: String
-    public let title: String
+    public var title: String
     public let startTime: Date
     public var durationSeconds: TimeInterval
     public var totalTokens: Int
@@ -66,6 +66,9 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
     /// delta: the source has no metering evidence (no ledger, no transcript
     /// files). Shown plainly with a "recent" caption, never summed.
     public var isWindowEstimate: Bool
+    /// Metering generation that recorded the row. Rows without the current
+    /// tag predate proven baselines and are quarantined to legacy on load.
+    public var buildTag: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -81,7 +84,8 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         sessionPath: String? = nil,
         cwd: String? = nil,
         isDelta: Bool = false,
-        isWindowEstimate: Bool = false
+        isWindowEstimate: Bool = false,
+        buildTag: String? = nil
     ) {
         self.id = id
         self.agentName = agentName
@@ -97,6 +101,7 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         self.cwd = cwd
         self.isDelta = isDelta
         self.isWindowEstimate = isWindowEstimate
+        self.buildTag = buildTag
     }
 
     public var isFailed: Bool { status == "Failed" }
@@ -120,6 +125,7 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
         isDelta = try c.decodeIfPresent(Bool.self, forKey: .isDelta) ?? false
         isWindowEstimate = try c.decodeIfPresent(Bool.self, forKey: .isWindowEstimate) ?? false
+        buildTag = try c.decodeIfPresent(String.self, forKey: .buildTag)
     }
 }
 
@@ -165,14 +171,41 @@ public enum SessionUsageDelta: Sendable {
 @MainActor
 public final class SessionHistoryStore: ObservableObject {
     public static let shared = SessionHistoryStore()
+
+    /// Metering generation of newly recorded rows. Rows without this tag
+    /// were recorded before proven baselines existed and are quarantined
+    /// to legacy on load instead of summed as deltas.
+    public static let currentBuildTag = "metered-v2"
+
     @Published public private(set) var sessions: [AgentSessionRecord] = []
 
+    private let defaults: UserDefaults
+
     private init() {
+        self.defaults = UserDefaults.standard
         loadDefaults()
     }
 
+    /// Test seam: isolate history from the live defaults domain.
+    public init(defaults: UserDefaults) {
+        self.defaults = defaults
+        loadDefaults()
+    }
+
+    /// Pure quarantine pass: rows from before the metering fix cannot be
+    /// trusted as deltas, so they lose the flag and the summary excludes
+    /// them. Testable without touching disk.
+    public static func rebaselineStale(rows: [AgentSessionRecord]) -> [AgentSessionRecord] {
+        rows.map { row in
+            guard row.buildTag != currentBuildTag, row.isDelta else { return row }
+            var legacy = row
+            legacy.isDelta = false
+            return legacy
+        }
+    }
+
     private func loadDefaults() {
-        if let data = UserDefaults.standard.data(forKey: "bantay_session_history"),
+        if let data = defaults.data(forKey: "bantay_session_history"),
             let decoded = try? JSONDecoder().decode([AgentSessionRecord].self, from: data)
         {
             // Remove the three demo rows that older builds seeded on first
@@ -187,13 +220,22 @@ public final class SessionHistoryStore: ObservableObject {
             // per-session deltas (no baselines were ever captured, and the
             // first delta build stamped lifetime totals as deltas). Mark
             // them all legacy so the summary excludes them from sums.
-            if !UserDefaults.standard.bool(forKey: "bantay_session_delta_migrated") {
+            if !defaults.bool(forKey: "bantay_session_delta_migrated") {
                 sessions = sessions.map { row in
                     var legacy = row
                     legacy.isDelta = false
                     return legacy
                 }
-                UserDefaults.standard.set(true, forKey: "bantay_session_delta_migrated")
+                defaults.set(true, forKey: "bantay_session_delta_migrated")
+                save()
+            }
+            // One-time migration: rows recorded before proven baselines
+            // (baseless and zero-token completions recorded, phantom pairs
+            // from cross-title refires) cannot be trusted as deltas even
+            // when flagged so. Quarantine them the same way.
+            if !defaults.bool(forKey: "bantay_session_rebaselined_v2") {
+                sessions = Self.rebaselineStale(rows: sessions)
+                defaults.set(true, forKey: "bantay_session_rebaselined_v2")
                 save()
             }
         } else {
@@ -207,6 +249,25 @@ public final class SessionHistoryStore: ObservableObject {
         if sessions.count > 50 {
             sessions = Array(sessions.prefix(50))
         }
+        save()
+    }
+
+    /// Row lookup for the completion-upgrade path.
+    public func session(withId id: String) -> AgentSessionRecord? {
+        sessions.first { $0.id == id }
+    }
+
+    /// A refire of the same finish recomputed larger numbers (more of the
+    /// session landed after the first record). Update in place so the row
+    /// keeps its identity and position instead of doubling.
+    public func updateSessionNumbers(
+        id: String, tokens: Int, cost: Double, duration: TimeInterval, title: String
+    ) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[index].totalTokens = tokens
+        sessions[index].costUSD = cost
+        sessions[index].durationSeconds = duration
+        sessions[index].title = title
         save()
     }
 
@@ -226,7 +287,7 @@ public final class SessionHistoryStore: ObservableObject {
 
     private func save() {
         if let encoded = try? JSONEncoder().encode(sessions) {
-            UserDefaults.standard.set(encoded, forKey: "bantay_session_history")
+            defaults.set(encoded, forKey: "bantay_session_history")
         }
     }
 }

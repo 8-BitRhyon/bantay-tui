@@ -3374,12 +3374,28 @@ struct LogicCheckMain {
                     .appendingPathComponent("lc-l38-\(UUID().uuidString).jsonl"),
                 capture: false)
             manager.setActive(false)
+            // Recording requires an attributable burst: seed a baseline
+            // counter, open the burst with progress, move the counter,
+            // then finish. Baseless completions are not sessions and
+            // contribute no recents.
             for index in 0..<7 {
+                let source = "agent-\(index)"
+                let pane = "p\(index)"
+                manager.setLifetimeCounterForTesting(
+                    source: source, tokens: 1000, cost: 1.0)
                 manager.publishEventForTesting(
                     AgentEvent(
-                        source: "agent-\(index)",
+                        source: source, kind: .progress,
+                        title: "working \(index)", message: nil, paneId: pane,
+                        workspaceId: nil, variance: nil, choices: nil,
+                        playSound: false, persistent: true))
+                manager.setLifetimeCounterForTesting(
+                    source: source, tokens: 2000, cost: 2.0)
+                manager.publishEventForTesting(
+                    AgentEvent(
+                        source: source,
                         kind: index.isMultiple(of: 2) ? .completed : .failed,
-                        title: "result \(index)", message: nil, paneId: "p\(index)",
+                        title: "result \(index)", message: nil, paneId: pane,
                         workspaceId: nil, variance: nil, choices: nil,
                         playSound: false, persistent: false))
             }
@@ -3395,6 +3411,15 @@ struct LogicCheckMain {
             // working-burst start for the pane and reports createdAt − start.
             let start = Date()
             manager.recordStartForTesting(pane: "dur", at: start.addingTimeInterval(-90))
+            manager.setLifetimeCounterForTesting(
+                source: "dur-agent", tokens: 1000, cost: 1.0)
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "dur-agent", kind: .progress, title: "working",
+                    message: nil, paneId: "dur", workspaceId: nil, variance: nil,
+                    choices: nil, playSound: false, persistent: true))
+            manager.setLifetimeCounterForTesting(
+                source: "dur-agent", tokens: 1500, cost: 1.5)
             manager.publishEventForTesting(
                 AgentEvent(
                     source: "dur-agent", kind: .completed, title: "done", message: nil,
@@ -3464,24 +3489,35 @@ struct LogicCheckMain {
             // The shared history store persists across harness runs: diff
             // against the baseline so stale rows cannot mask the assertions.
             let baseRows = rows().count
+            // Baseless completions carry no attributable usage: no row,
+            // no recent, never a lifetime total stamped as a session.
             finish("Same finish")
+            finish("Same finish")
+            finish("Same finish")
+            check(rows().count - baseRows == 0, "baseless completions record no rows")
+            check(recents() == 0, "baseless completions push no recents")
+            // An attributable burst records once; identical heartbeats
+            // after it record nothing more.
+            dup.setLifetimeCounterForTesting(
+                source: "dupe-agent", tokens: 5000, cost: 5.0)
+            work()
+            dup.setLifetimeCounterForTesting(
+                source: "dupe-agent", tokens: 5500, cost: 5.5)
             finish("Same finish")
             finish("Same finish")
             check(rows().count - baseRows == 1, "heartbeat dupes record one row")
             check(recents() == 1, "heartbeat dupes push one recent")
             check(
-                rows().first?.isDelta == false,
-                "no-baseline rows are legacy-marked, never fake deltas")
+                rows().first?.isDelta == true,
+                "attributable rows are true deltas")
             // Session ids carry one-second resolution: space the next burst
             // so the id guard cannot mask the fingerprint re-arm.
             Thread.sleep(forTimeInterval: 1.2)
             work()
+            dup.setLifetimeCounterForTesting(
+                source: "dupe-agent", tokens: 6000, cost: 6.0)
             finish("Same finish")
             check(rows().count - baseRows == 2, "new burst after progress records again")
-            check(
-                rows().first?.isWindowEstimate == true
-                    && rows().first?.isDelta == false,
-                "uncovered sources fall back to window estimates")
             // Covered sources meter true deltas against lifetime counters.
             dup.setLifetimeCounterForTesting(
                 source: "metered-agent", tokens: 10_000, cost: 1.00)
@@ -9862,6 +9898,139 @@ struct LogicCheckMain {
             proofMissingOutcome == false,
             "PROOF missing tmux binary reports transport failure")
 
+        // SESSIONS correctness: every row must be an attributable session.
+        // Baseless completions and zero-token completions are not recorded;
+        // failures always keep their error signal; same-session refires with
+        // different titles collapse into one row with the best numbers.
+        func proofCleanupSuite(_ suite: String) {
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/\(suite).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
+        func proofSessionStore() -> (SessionHistoryStore, String) {
+            let suite = "bantay-proof-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            return (SessionHistoryStore(defaults: defaults), suite)
+        }
+        func proofSessionManager(store: SessionHistoryStore) -> AgentEventManager {
+            let file = proofDir.appendingPathComponent(
+                "sess-events-\(UUID().uuidString).jsonl")
+            FileManager.default.createFile(atPath: file.path, contents: nil)
+            return AgentEventManager(
+                eventsFileURL: file, capture: false, sessionStore: store)
+        }
+        func proofSessionAgent(
+            paneId: String, title: String? = nil, sessionPath: String? = nil
+        ) -> AgentSnapshot {
+            AgentSnapshot(
+                id: "proof-session", source: "proofagent", kind: .accessRequest,
+                title: title, message: nil, paneId: paneId,
+                workspaceId: "w9", cwd: nil, variance: nil, choices: nil,
+                startedAt: nil, projectContext: nil, sessionPath: sessionPath)
+        }
+        func proofSessionEvent(
+            kind: AgentEventKind, paneId: String, title: String? = "Whatever"
+        ) -> AgentEvent {
+            AgentEvent(
+                source: "proofagent", kind: kind, title: title,
+                message: nil, paneId: paneId, workspaceId: nil,
+                variance: nil, choices: nil, playSound: false, persistent: true)
+        }
+
+        let (sessStore1, sessSuite1) = proofSessionStore()
+        let sessManager1 = proofSessionManager(store: sessStore1)
+        sessManager1.publishEventForTesting(
+            proofSessionEvent(kind: .completed, paneId: "w9:p9"))
+        check(
+            sessStore1.sessions.isEmpty,
+            "SESS baseless completed is not recorded as a session")
+        sessManager1.stop()
+        proofCleanupSuite(sessSuite1)
+
+        let (sessStore2, sessSuite2) = proofSessionStore()
+        let sessManager2 = proofSessionManager(store: sessStore2)
+        sessManager2.setAgentsForTesting([proofSessionAgent(paneId: "w9:p9")])
+        sessManager2.publishEventForTesting(
+            proofSessionEvent(kind: .progress, paneId: "w9:p9"))
+        sessManager2.publishEventForTesting(
+            proofSessionEvent(kind: .completed, paneId: "w9:p9"))
+        check(
+            sessStore2.sessions.isEmpty,
+            "SESS zero-token completed is not recorded as a session")
+        sessManager2.stop()
+        proofCleanupSuite(sessSuite2)
+
+        let (sessStore3, sessSuite3) = proofSessionStore()
+        let sessManager3 = proofSessionManager(store: sessStore3)
+        sessManager3.publishEventForTesting(
+            proofSessionEvent(kind: .failed, paneId: "w9:p9", title: "Boom"))
+        check(
+            sessStore3.sessions.count == 1
+                && sessStore3.sessions.first?.totalTokens == 0
+                && sessStore3.sessions.first?.isDelta == false,
+            "SESS failed without baseline keeps its error signal honestly")
+        sessManager3.stop()
+        proofCleanupSuite(sessSuite3)
+
+        let (sessStore4, sessSuite4) = proofSessionStore()
+        let sessManager4 = proofSessionManager(store: sessStore4)
+        sessManager4.setAgentsForTesting([
+            proofSessionAgent(
+                paneId: "w9:p9", title: "Proof Title",
+                sessionPath: "ses_proofpair")
+        ])
+        sessManager4.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1000, cost: 0.5)
+        sessManager4.publishEventForTesting(
+            proofSessionEvent(kind: .progress, paneId: "w9:p9"))
+        sessManager4.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1500, cost: 0.75)
+        sessManager4.publishEventForTesting(
+            proofSessionEvent(kind: .failed, paneId: "w9:p9", title: "A"))
+        sessManager4.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1900, cost: 0.9)
+        sessManager4.publishEventForTesting(
+            proofSessionEvent(kind: .failed, paneId: "w9:p9", title: "B"))
+        check(
+            sessStore4.sessions.count == 1,
+            "SESS same-session pair records one row (got \(sessStore4.sessions.count))")
+        check(
+            sessStore4.sessions.first?.totalTokens == 900,
+            "SESS same-session pair keeps the most complete numbers")
+        sessManager4.stop()
+        proofCleanupSuite(sessSuite4)
+
+        let (sessStore5, sessSuite5) = proofSessionStore()
+        let sessManager5 = proofSessionManager(store: sessStore5)
+        sessManager5.setAgentsForTesting([
+            proofSessionAgent(paneId: "w9:p9", title: "Proof Title")
+        ])
+        sessManager5.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1000, cost: 0.5)
+        sessManager5.publishEventForTesting(
+            proofSessionEvent(kind: .progress, paneId: "w9:p9"))
+        sessManager5.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1500, cost: 0.75)
+        sessManager5.publishEventForTesting(
+            proofSessionEvent(kind: .completed, paneId: "w9:p9", title: nil))
+        check(
+            sessStore5.sessions.first?.title == "Proof Title"
+                && sessStore5.sessions.first?.totalTokens == 500,
+            "SESS titleless completion falls back to the roster title")
+        sessManager5.stop()
+        proofCleanupSuite(sessSuite5)
+
+        let staleRow = AgentSessionRecord(
+            agentName: "proofagent", title: "Old", isDelta: true)
+        let freshRow = AgentSessionRecord(
+            agentName: "proofagent", title: "New", isDelta: true,
+            buildTag: SessionHistoryStore.currentBuildTag)
+        let rebaselined = SessionHistoryStore.rebaselineStale(rows: [staleRow, freshRow])
+        check(
+            rebaselined[0].isDelta == false && rebaselined[1].isDelta == true,
+            "SESS migration quarantines rows from before the metering fix")
+
         try? FileManager.default.removeItem(at: proofDir)
 
         // LEDGER loading states: the spend tab must never run SQLite on the
@@ -9892,10 +10061,10 @@ struct LogicCheckMain {
         try? FileManager.default.removeItem(atPath: ledgerEmptyHome)
 
         let ledgerFirst = awaitLedger {
-            await LedgerSnapshotCache.shared.snapshot()
+            await LedgerSnapshotCache.shared.snapshot(home: ledgerEmptyHome)
         }
         let ledgerSecond = awaitLedger {
-            await LedgerSnapshotCache.shared.snapshot()
+            await LedgerSnapshotCache.shared.snapshot(home: ledgerEmptyHome)
         }
         check(
             ledgerFirst != nil && ledgerFirst == ledgerSecond,
