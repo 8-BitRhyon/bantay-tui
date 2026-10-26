@@ -45,8 +45,27 @@ public enum IslandMetrics: Sendable {
     public static let expandedCornerRadius: CGFloat = 24
     public static let pillHeight: CGFloat = 36
     public static let notificationHeight: CGFloat = 82
+    /// Approval cards carry the command, file path, or prompt text, so they
+    /// need room for several wrapped lines plus the action row.
+    public static let approvalNotificationHeight: CGFloat = 160
+    /// Two-column labeled toggle grid for multi-select popups: one row per
+    /// pair of options, so buttons never collide with the footer. Capped at
+    /// six options with the rest behind the inbox overflow.
+    public static let multiOptionRowHeight: CGFloat = 28
+    public static func multiOptionsExtraHeight(optionCount: Int, cap: Int = 6) -> CGFloat {
+        let shown = min(max(optionCount, 0), max(cap, 1))
+        guard shown > 0 else { return 0 }
+        let rows = (shown + 1) / 2
+        return CGFloat(rows) * multiOptionRowHeight + CGFloat(max(rows - 1, 0)) * 6
+    }
     public static let notificationWidth: CGFloat = 432
+    /// Room below the last inbox row so a full row can clear the bottom
+    /// fade instead of being cut by the panel edge.
+    public static let rosterBottomClearance: CGFloat = 8
     public static let notificationCornerRadius: CGFloat = 20
+    /// Clearance between the physical notch and a closed notification card.
+    /// Without it the card's top row renders inside the notch cutout.
+    public static let notificationTopGap: CGFloat = 8
     public static let headerHeight: CGFloat = 40
     public static let rowHeight: CGFloat = 26
     public static let taskRowHeight: CGFloat = 34
@@ -168,8 +187,22 @@ public enum IslandMetrics: Sendable {
     /// Height of one approval-queue card. Reserves room for the optional live
     /// "peek" tail (captureTail) that drops in below the controls on hover.
     public static let queueCardHeight: CGFloat = 56
-    /// Shelf tab bar height (Agents/Shelf switcher).
-    public static let shelfTabBarHeight: CGFloat = 22
+    /// Height of one expanded inbox approval card: request summary plus a
+    /// full-height action row. Used by the v2 roster layout math.
+    public static let approvalCardHeight: CGFloat = 152
+    /// Extra height for each visible choice row inside an approval card.
+    public static let approvalChoiceRowHeight: CGFloat = 34
+    /// Height of one active/working agent row: project line plus humanized
+    /// activity line. Used by the v2 roster layout math.
+    public static let workingRowHeight: CGFloat = 48
+    /// Height of one idle/standby agent row. Used by the v2 roster layout math.
+    public static let idleRowHeight: CGFloat = 34
+    /// Height of the inline reply composer reserved while composing.
+    public static let replyComposerHeight: CGFloat = 76
+    /// Height of the dismissible while-away recap card.
+    public static let awayDigestHeight: CGFloat = 64
+    /// Shelf tab bar height (Inbox/Tasks/History + utility pills).
+    public static let shelfTabBarHeight: CGFloat = 26
     /// Divider between the header/tabs and the list.
     public static let dividerHeight: CGFloat = 1
     /// "+N more waiting" overflow row height.
@@ -273,6 +306,80 @@ public enum IslandMetrics: Sendable {
 
         let h = topInset + contentH
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+    }
+
+    /// Structured v2 roster layout. Replaces flat `agentCount * rowHeight`
+    /// math so approval cards, working rows, and idle rows can each have
+    /// their own height without clipping the panel.
+    public struct RosterLayoutMetrics: Equatable, Sendable {
+        public let approvalCardCount: Int
+        public let approvalChoiceRowCount: Int
+        public let workingRowCount: Int
+        public let idleRowCount: Int
+        public let groupCount: Int
+        public let isComposing: Bool
+        public let hasAwayDigest: Bool
+
+        public init(
+            approvalCardCount: Int = 0,
+            approvalChoiceRowCount: Int = 0,
+            workingRowCount: Int = 0,
+            idleRowCount: Int = 0,
+            groupCount: Int = 0,
+            isComposing: Bool = false,
+            hasAwayDigest: Bool = false
+        ) {
+            self.approvalCardCount = approvalCardCount
+            self.approvalChoiceRowCount = approvalChoiceRowCount
+            self.workingRowCount = workingRowCount
+            self.idleRowCount = idleRowCount
+            self.groupCount = groupCount
+            self.isComposing = isComposing
+            self.hasAwayDigest = hasAwayDigest
+        }
+    }
+
+    /// Natural roster height for structured v2 rows.
+    public static func rosterHeight(_ roster: RosterLayoutMetrics) -> CGFloat {
+        CGFloat(max(roster.approvalCardCount, 0)) * approvalCardHeight
+            + CGFloat(max(roster.approvalChoiceRowCount, 0)) * approvalChoiceRowHeight
+            + CGFloat(max(roster.workingRowCount, 0)) * workingRowHeight
+            + CGFloat(max(roster.idleRowCount, 0)) * idleRowHeight
+            + CGFloat(max(roster.groupCount, 0)) * sectionHeaderHeight
+            + (roster.isComposing ? replyComposerHeight : 0)
+            + (roster.hasAwayDigest ? awayDigestHeight : 0)
+    }
+
+    /// Expanded panel height from structured v2 roster rows. The legacy
+    /// flat-count overload below stays untouched for current callers.
+    public static func expandedSize(
+        topInset: CGFloat, roster: RosterLayoutMetrics,
+        shelfTabVisible: Bool = false, overflowCount: Int = 0,
+        headerHeight: CGFloat = headerHeight, footerVisible: Bool = true
+    ) -> CGSize {
+        let chrome =
+            (shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0)
+            + CGFloat(max(overflowCount, 0)) * overflowRowHeight
+        let contentH =
+            headerHeight + chrome + rosterHeight(roster)
+            + (footerVisible ? footerHeight : 0) + contentSpacing
+        let h = topInset + contentH
+        return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
+    }
+
+    /// Desktop strip hotkeys use Control + Option only. Space toggles the
+    /// Desktop HUD; the existing strip letter shortcuts stay untouched.
+    public enum DesktopHotkeyAction: Sendable, Equatable {
+        case toggleDesktopHUD
+    }
+
+    public static func desktopHotkeyAction(
+        keyCode: UInt16, modifiers: NSEvent.ModifierFlags
+    ) -> DesktopHotkeyAction? {
+        let flags = modifiers.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.control), flags.contains(.option) else { return nil }
+        guard !flags.contains(.shift), !flags.contains(.command) else { return nil }
+        return keyCode == 49 ? .toggleDesktopHUD : nil
     }
 
     // MARK: - Multi-monitor placement
@@ -415,6 +522,39 @@ public enum IslandMetrics: Sendable {
             !inFullScreen || showInFullScreen
         }
 
+        /// The strip is a window-management mode, not an always-on HUD.
+        /// Suspend its overlays and tiling whenever the active app is full
+        /// screen, even if the island itself stays visible.
+        static func shouldShowStrip(
+            isEnabled: Bool, inFullScreen: Bool
+        ) -> Bool {
+            isEnabled && !inFullScreen
+        }
+
+        /// Converts an AppKit screen frame (origin bottom-left) into the
+        /// global window-server frame (origin top-left of the primary display).
+        static func cgScreenRect(
+            appKitFrame: CGRect, primaryMaxY: CGFloat
+        ) -> CGRect {
+            CGRect(
+                x: appKitFrame.origin.x,
+                y: primaryMaxY - appKitFrame.maxY,
+                width: appKitFrame.width,
+                height: appKitFrame.height
+            )
+        }
+
+        /// True when a window covers an entire display, within a small
+        /// tolerance for rounded corners and backing-scale rounding.
+        static func coversScreen(
+            windowFrame: CGRect, screenFrame: CGRect, tolerance: CGFloat = 2.0
+        ) -> Bool {
+            abs(windowFrame.minX - screenFrame.minX) <= tolerance
+                && abs(windowFrame.minY - screenFrame.minY) <= tolerance
+                && abs(windowFrame.width - screenFrame.width) <= tolerance
+                && abs(windowFrame.height - screenFrame.height) <= tolerance
+        }
+
         /// Delay (seconds) before re-anchoring after a full-screen or space
         /// transition — lets the WindowServer settle the new frame.
         static let transitionSettleDelay: TimeInterval = 0.35
@@ -525,6 +665,152 @@ public enum IslandMetrics: Sendable {
         static func selectionNumbers(_ selection: Set<Int>) -> [Int] {
             selection.sorted()
         }
+
+        /// Multi-select Submit is valid only with at least one option
+        /// picked. Sending an empty selection pushes a blank line into the
+        /// agent's terminal, so every Submit button gates on this.
+        static func canSubmitMulti(selection: Set<Int>) -> Bool {
+            !selection.isEmpty
+        }
+    }
+
+    /// Whether a live pane excerpt reads like a real prompt. Pane tails
+    /// usually hold whatever scrolled by (chat transcripts, build logs),
+    /// not the question — without a prompt signal the card must fall
+    /// back to Review instead of showing random transcript text.
+    /// Keywords match whole words only, so "confirming the render" never
+    /// counts but "confirm deploy" does. Numbered options match `1.` / `2)`
+    /// at a line start only, so version strings like `1.3` never count.
+    static func looksLikePrompt(_ text: String) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        if text.contains("?") { return true }
+        let lower = text.lowercased()
+        let phraseSignals = [
+            "allow once", "(y/n)", "[y/n]", " y/n ", "press ",
+            "❯", "›", "»",
+        ]
+        if phraseSignals.contains(where: { lower.contains($0) }) { return true }
+        let words = lower.components(separatedBy: CharacterSet.alphanumerics.inverted)
+        let wordSet = Set(words.filter { !$0.isEmpty })
+        let keywords: Set<String> = [
+            "approve", "approves", "deny", "denies", "allow", "allows",
+            "confirm", "confirms", "pick", "picks", "choose", "chooses",
+            "select", "selects", "option", "options", "answer", "answers",
+        ]
+        if !wordSet.isDisjoint(with: keywords) { return true }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for line in trimmed.components(separatedBy: "\n") {
+            let line = line.trimmingCharacters(in: .whitespaces)
+            guard let first = line.first, first.isNumber else { continue }
+            let rest = line.drop(while: { $0.isNumber })
+            if rest.hasPrefix(". ") || rest.hasPrefix(") ") { return true }
+        }
+        return false
+    }
+
+    /// What a blocked event asks of the user. Options always win: when an
+    /// event carries two or more choices it is a question, even if the
+    /// underlying kind is an approval — answering directly beats blanket
+    /// approval, and approving a question answers nothing. `actionable`
+    /// means this surface would otherwise offer Allow/Deny (the existing
+    /// concreteness gate lives with the caller).
+    enum PromptSurfaceKind: Sendable, Equatable {
+        case permission
+        case question
+        case waiting
+    }
+
+    static func promptSurfaceKind(
+        eventKind: AgentEventKind, actionable: Bool, choiceCount: Int
+    ) -> PromptSurfaceKind {
+        if choiceCount >= 2 { return .question }
+        if eventKind == .accessRequest && actionable { return .permission }
+        return .waiting
+    }
+
+    /// Risky prompts that may require a second click when the user opts in.
+    /// Patterns are case-insensitive substrings.
+    public static let defaultRiskyPromptPatterns = [
+        "git push", "deploy", "rm -rf", "sudo", "migrate", "force",
+    ]
+
+    /// Normalizes the Settings pattern editor: one pattern per line,
+    /// trimmed, empty lines dropped, case-insensitive duplicates removed.
+    public static func normalizedRiskyPatterns(_ raw: String) -> [String] {
+        var seen = Set<String>()
+        return raw.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0.lowercased()).inserted }
+    }
+
+    public static func requiresSecondaryConfirm(
+        text: String, patterns: [String]
+    ) -> Bool {
+        guard !patterns.isEmpty else { return false }
+        let lower = text.lowercased()
+        return patterns.contains {
+            !$0.isEmpty && lower.contains($0.lowercased())
+        }
+    }
+
+    /// Questions always accept free text: choices must never trap an answer.
+    static func promptAcceptsFreeText(surface: PromptSurfaceKind) -> Bool {
+        surface == .question
+    }
+
+    /// Maximum stacked closed-notification cards. New events never silently
+    /// replace older ones; overflow drops the lowest-priority oldest first.
+    static let maxNotificationQueueCount = 5
+
+    /// Priority rank for closed-notification queue order. Approvals and
+    /// questions outrank failure and completion notices; ties break oldest
+    /// first so the queue is first-come, first-served within a rank.
+    static func notificationQueueRank(_ kind: AgentEventKind) -> Int {
+        switch kind {
+        case .accessRequest: return 0
+        case .waiting: return 1
+        case .failed: return 2
+        case .completed: return 3
+        case .progress, .started: return 4
+        case .idle, .cancelled, .clear: return 5
+        }
+    }
+
+    /// Insert an event into the closed-notification queue: same-id replaces
+    /// in place (content refresh, never a duplicate), otherwise appends,
+    /// sorts by rank then age, and caps the length.
+    static func notificationQueueInsert(
+        _ queue: [AgentEvent], event: AgentEvent, cap: Int = maxNotificationQueueCount
+    ) -> [AgentEvent] {
+        var next = queue.filter { $0.id != event.id }
+        next.append(event)
+        next.sort {
+            let left = notificationQueueRank($0.kind)
+            let right = notificationQueueRank($1.kind)
+            if left != right { return left < right }
+            return $0.createdAt < $1.createdAt
+        }
+        if next.count > max(cap, 1) {
+            next = Array(next.prefix(max(cap, 1)))
+        }
+        return next
+    }
+
+    /// Remove one event from the queue by id. No-op when absent.
+    static func notificationQueueRemove(
+        _ queue: [AgentEvent], id: UUID
+    ) -> [AgentEvent] {
+        queue.filter { $0.id != id }
+    }
+
+    /// Clamp a selected queue index after insert/remove so the stepper never
+    /// points past the end.
+    static func notificationQueueClampIndex(_ index: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return min(max(index, 0), count - 1)
     }
 
     // MARK: - Peripheral-vision & speed snacks
@@ -549,10 +835,181 @@ public enum IslandMetrics: Sendable {
         return remMinutes > 0 ? "\(hours)h\(remMinutes)m" : "\(hours)h"
     }
 
+    /// Compact token counts for session rows: 950 -> "950", 38_400 ->
+    /// "38.4k", 118_000_000 -> "118M". Raw counts are unreadable at scale.
+    public static func compactTokenCount(_ count: Int) -> String {
+        let n = max(count, 0)
+        if n < 1_000 { return "\(n)" }
+        if n < 1_000_000 {
+            let k = Double(n) / 1_000.0
+            return k >= 100 ? "\(Int(k.rounded()))k" : String(format: "%.1fk", k)
+        }
+        if n < 1_000_000_000 {
+            let m = Double(n) / 1_000_000.0
+            return m >= 100 ? "\(Int(m.rounded()))M" : String(format: "%.1fM", m)
+        }
+        let b = Double(n) / 1_000_000_000.0
+        return b >= 100 ? "\(Int(b.rounded()))B" : String(format: "%.1fB", b)
+    }
+
+    /// Day-bucket label for session grouping. Today and Yesterday read
+    /// instantly; older days show the weekday and date.
+    public static func sessionDayLabel(for date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+            calendar.isDate(date, inSameDayAs: yesterday)
+        {
+            return "Yesterday"
+        }
+        return date.formatted(
+            .dateTime.weekday(.wide).month(.abbreviated).day())
+    }
+
+    /// Contribution-streak math over active day-starts. Current counts
+    /// consecutive active days ending today (or yesterday when today is
+    /// quiet); longest is the best run anywhere. Zero gap tolerance, like
+    /// every streak clone since GitHub removed native streaks.
+    public static func usageStreak(
+        activeDays: [Date], now: Date = Date()
+    ) -> (current: Int, longest: Int) {
+        let calendar = Calendar.current
+        let days = Set(activeDays.map { calendar.startOfDay(for: $0) })
+        guard !days.isEmpty else { return (0, 0) }
+        let today = calendar.startOfDay(for: now)
+        var day: Date? =
+            days.contains(today)
+            ? today : calendar.date(byAdding: .day, value: -1, to: today)
+        var current = 0
+        while let active = day, days.contains(active) {
+            current += 1
+            day = calendar.date(byAdding: .day, value: -1, to: active)
+        }
+        var longest = 0
+        for day in days {
+            guard
+                let prev = calendar.date(byAdding: .day, value: -1, to: day),
+                !days.contains(prev)
+            else {
+                continue
+            }
+            var run = 0
+            var cursor = day
+            while days.contains(cursor) {
+                run += 1
+                guard
+                    let next = calendar.date(byAdding: .day, value: 1, to: cursor)
+                else {
+                    break
+                }
+                cursor = next
+            }
+            longest = max(longest, run)
+        }
+        return (current, longest)
+    }
+
+    /// Bounded, thread-safe memo for pure string cleanup. Transcript tails and
+    /// SwiftUI renders ask for the same headlines repeatedly, and the cleaner
+    /// runs roughly eighteen regex passes per call.
+    private final class HUDCleanCache: @unchecked Sendable {
+        static let shared = HUDCleanCache()
+        private struct Key: Hashable {
+            let limit: Int
+            let text: String
+        }
+
+        private let lock = NSLock()
+        private var values: [Key: String] = [:]
+        private var order: [Key] = []
+
+        func value(limit: Int, text: String) -> String? {
+            let key = Key(limit: limit, text: text)
+            lock.lock()
+            defer { lock.unlock() }
+            return values[key]
+        }
+
+        func store(_ value: String, limit: Int, text: String) {
+            let key = Key(limit: limit, text: text)
+            lock.lock()
+            defer { lock.unlock() }
+            if values.updateValue(value, forKey: key) == nil {
+                order.append(key)
+            }
+            while order.count > 768 {
+                values.removeValue(forKey: order.removeFirst())
+            }
+        }
+    }
+
+    /// Bounded memo for the garbage/suppression predicate, which is queried
+    /// both directly and at the end of every clean pass.
+    private final class HUDSuppressionCache: @unchecked Sendable {
+        static let shared = HUDSuppressionCache()
+        private let lock = NSLock()
+        private var values: [String: Bool] = [:]
+        private var order: [String] = []
+
+        func value(for text: String) -> Bool? {
+            lock.lock()
+            defer { lock.unlock() }
+            return values[text]
+        }
+
+        func store(_ value: Bool, for text: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if values.updateValue(value, forKey: text) == nil {
+                order.append(text)
+            }
+            while order.count > 768 {
+                values.removeValue(forKey: order.removeFirst())
+            }
+        }
+    }
+
+    /// Precompiled expressions for the cleaner. NSRegularExpression matching is
+    /// thread-safe; compiling the same pattern on every call is not free.
+    private final class HUDRegexes: @unchecked Sendable {
+        static let shared = HUDRegexes()
+        let bareSyslog = try? NSRegularExpression(
+            pattern:
+                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+$",
+            options: [])
+        let leadingDate = try? NSRegularExpression(
+            pattern: "^\\d{4}-\\d{2}-\\d{2}", options: [])
+        let markdownLink = try? NSRegularExpression(
+            pattern: "\\[([^\\]]+)\\]\\([^\\)]+\\)", options: [])
+        let pathWithExtension = try? NSRegularExpression(
+            pattern: "/(?:[^\\s/]+/)+([^\\s/]+\\.[a-zA-Z0-9_]+)", options: [])
+    }
+
+    private static let maxCachedTextBytes = 2048
+
     /// Strips ANSI escape sequences, control characters, braille spinners, log envelopes,
     /// markdown links, and paths to format clean single-line HUD strings.
     /// Suppresses raw JSON blobs, diff chunks, hostnames, and internal daemon pings.
     public static func cleanHUDText(_ text: String, maxCharacters: Int = 60) -> String {
+        let cacheable = text.utf8.count <= maxCachedTextBytes
+        if cacheable,
+            let hit = HUDCleanCache.shared.value(limit: maxCharacters, text: text)
+        {
+            return hit
+        }
+        let result = cleanHUDTextUncached(text, maxCharacters: maxCharacters)
+        if cacheable {
+            HUDCleanCache.shared.store(result, limit: maxCharacters, text: text)
+        }
+        return result
+    }
+
+    private static func cleanHUDTextUncached(
+        _ text: String, maxCharacters: Int
+    ) -> String {
+        if isBareSyslog(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return ""
+        }
         // 1. Strip ANSI escape sequences, control characters, and braille spinner patterns
         var s = LogFormatter.stripControlCharacters(text)
             .replacingOccurrences(of: "\\n", with: " ")
@@ -603,9 +1060,25 @@ public enum IslandMetrics: Sendable {
             with: "",
             options: .regularExpression)
 
-        // 4. Strip bare ISO timestamps (\d{4}-\d{2}-\d{2}T...) and relative time (+40ms)
+        // 4. Strip bare ISO and syslog timestamps (\d{4}-\d{2}-\d{2}[ T]...) and relative time (+40ms)
+        // Syslog lines often carry a process prefix after the timestamp
+        // ("2026-10-16 09:12:48.169514-0500 bantay: Running task"). Drop the
+        // timestamp and the process name together so the status text remains.
         s = s.replacingOccurrences(
-            of: "\\b\\d{4}-\\d{2}-\\d{2}T[0-9:.]+Z?\\b\\s*",
+            of:
+                "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+:\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "\\b\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "\\b\\d{4}-\\d{2}-\\d{2}\\b\\s*",
+            with: "",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "^[a-zA-Z0-9_.-]+\\[\\d+(?::\\d+)?\\]:\\s*",
             with: "",
             options: .regularExpression)
         s = s.replacingOccurrences(
@@ -620,8 +1093,7 @@ public enum IslandMetrics: Sendable {
             options: .regularExpression)
 
         // 6. Strip markdown links: [text](url) -> text
-        let mdLinkPattern = "\\[([^\\]]+)\\]\\([^\\)]+\\)"
-        if let regex = try? NSRegularExpression(pattern: mdLinkPattern, options: []) {
+        if let regex = HUDRegexes.shared.markdownLink {
             let range = NSRange(location: 0, length: s.utf16.count)
             s = regex.stringByReplacingMatches(
                 in: s, options: [], range: range, withTemplate: "$1")
@@ -631,8 +1103,7 @@ public enum IslandMetrics: Sendable {
         s = s.replacingOccurrences(of: "file:///[^\\s)]+", with: "", options: .regularExpression)
 
         // 8. Replace absolute filesystem paths with their last component (basename)
-        let pathWithExtPattern = "/(?:[^\\s/]+/)+([^\\s/]+\\.[a-zA-Z0-9_]+)"
-        if let regex = try? NSRegularExpression(pattern: pathWithExtPattern, options: []) {
+        if let regex = HUDRegexes.shared.pathWithExtension {
             let range = NSRange(location: 0, length: s.utf16.count)
             s = regex.stringByReplacingMatches(
                 in: s, options: [], range: range, withTemplate: "$1")
@@ -646,6 +1117,8 @@ public enum IslandMetrics: Sendable {
         s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
+        // A syslog timestamp plus a lone process name carries no status.
+        if isBareSyslog(trimmed) { return "" }
 
         // 11. Reject unparsed JSON, diff markers, compiler trace noise, hostnames, and shell fallbacks
         if isSuppressedGarbage(trimmed) {
@@ -659,11 +1132,33 @@ public enum IslandMetrics: Sendable {
         return trimmed
     }
 
+    /// True for a syslog timestamp followed by a lone process name:
+    /// `2026-10-16 09:12:48.169514-0500 bantay`. Such a line has no status.
+    private static func isBareSyslog(_ text: String) -> Bool {
+        guard let regex = HUDRegexes.shared.bareSyslog else { return false }
+        return regex.firstMatch(
+            in: text, options: [], range: NSRange(location: 0, length: text.utf16.count)
+        ) != nil
+    }
+
     /// True if the string is raw unparsed JSON, a diff chunk, internal daemon noise,
     /// or a multiplexer hostname/shell fallback.
     public static func isSuppressedGarbage(_ text: String) -> Bool {
+        let cacheable = text.utf8.count <= maxCachedTextBytes
+        if cacheable, let hit = HUDSuppressionCache.shared.value(for: text) {
+            return hit
+        }
+        let result = isSuppressedGarbageUncached(text)
+        if cacheable {
+            HUDSuppressionCache.shared.store(result, for: text)
+        }
+        return result
+    }
+
+    private static func isSuppressedGarbageUncached(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return true }
+        if isBareSyslog(trimmed) { return true }
         let lower = trimmed.lowercased()
 
         // Unparsed JSON blobs or brackets
@@ -675,11 +1170,12 @@ public enum IslandMetrics: Sendable {
             return true
         }
 
-        // Git diff chunks or compiler trace markers
+        // Git diff chunks, compiler trace markers, or raw syslog dates
         if trimmed.hasPrefix("@@") || trimmed.hasPrefix("diff --git")
             || trimmed.hasPrefix("[diff_block") || trimmed.hasPrefix("::error")
             || trimmed.hasPrefix("Created At:") || trimmed.hasPrefix("File Path:")
             || trimmed.hasPrefix("Completed At:")
+            || hasLeadingISODate(trimmed)
         {
             return true
         }
@@ -726,25 +1222,34 @@ public enum IslandMetrics: Sendable {
         return false
     }
 
+    private static func hasLeadingISODate(_ text: String) -> Bool {
+        guard let regex = HUDRegexes.shared.leadingDate else { return false }
+        return regex.firstMatch(
+            in: text, options: [], range: NSRange(location: 0, length: text.utf16.count)
+        ) != nil
+    }
+
     /// Whether the roster should react to single-key shortcuts (Y/N/digits).
     /// Requires the island window to be key (clicked/global hotkey focus).
     public static func shortcutKey(for char: Character) -> ApprovalShortcut? {
         switch char.lowercased() {
         case "y": return .approve
         case "n": return .deny
+        case "r": return .reply
         case "0"..."9": return .option(Int(String(char)) ?? 0)
         default: return nil
         }
     }
 
     /// Global ⌥-key actions dispatched from the key-down monitor. Physical
-    /// keyCodes are layout-independent: Space=toggle, Y=approve, N=deny,
-    /// S=snooze.
+    /// keyCodes are layout-independent: Y=approve, N=deny, S=snooze.
+    /// There is no island toggle shortcut: Option+Space belongs to launchers,
+    /// so the island toggles through hover and the menu bar instead.
     public enum HotkeyAction: Sendable {
-        case toggleIsland
         case approveTop
         case denyTop
         case snooze15
+        case openSettings
     }
 
     /// Map a key-down event to a global hotkey action. Requires Option and
@@ -761,10 +1266,10 @@ public enum IslandMetrics: Sendable {
             || modifiers.contains(.command)
         guard hasOption, !extraModifier else { return nil }
         switch keyCode {
-        case 49: return .toggleIsland
         case 16: return .approveTop
         case 45: return .denyTop
         case 1: return .snooze15
+        case 43: return .openSettings
         default: return nil
         }
     }
@@ -808,6 +1313,7 @@ public enum IslandMetrics: Sendable {
     public enum ApprovalShortcut: Equatable {
         case approve
         case deny
+        case reply
         case option(Int)
     }
 
@@ -825,14 +1331,30 @@ public enum IslandMetrics: Sendable {
     /// trimming to just topInset cut off the bottom of the taller approval
     /// pill.
     public static func closedSize(
-        topInset: CGFloat, notchWidth: CGFloat, hasNotification: Bool = false
+        topInset: CGFloat, notchWidth: CGFloat, hasNotification: Bool = false,
+        cardHeight: CGFloat = notificationHeight
     ) -> CGSize {
         if hasNotification {
             return CGSize(
                 width: min(max(notchWidth, notificationWidth), expandedWidth),
-                height: topInset + notificationHeight)
+                height: topInset + notificationTopGap + cardHeight)
         }
         return CGSize(width: min(max(notchWidth, 0), expandedWidth), height: topInset + pillHeight)
+    }
+
+    /// Card height for a notification. Approvals get the taller detail card;
+    /// completion and failure notices keep the compact height.
+    static func notificationCardHeight(for kind: AgentEventKind?) -> CGFloat {
+        switch kind {
+        case .accessRequest, .waiting: return approvalNotificationHeight
+        default: return notificationHeight
+        }
+    }
+
+    /// Content origin for a closed notification: below the notch plus a small
+    /// gap, never inside the notch cutout.
+    public static func notificationTopOffset(topInset: CGFloat) -> CGFloat {
+        topInset + notificationTopGap
     }
 
     /// The expanded roster content size, height-capped.
@@ -843,7 +1365,8 @@ public enum IslandMetrics: Sendable {
     public static func contentHeight(
         isExpanded: Bool, topInset: CGFloat, agentCount: Int, queueCount: Int = 0,
         shelfTabVisible: Bool = false, overflowCount: Int = 0, groupCount: Int = 0,
-        footerVisible: Bool = true, hasNotification: Bool = false
+        footerVisible: Bool = true, hasNotification: Bool = false,
+        cardHeight: CGFloat = notificationHeight
     ) -> CGFloat {
         if isExpanded {
             return expandedSize(
@@ -853,7 +1376,7 @@ public enum IslandMetrics: Sendable {
             ).height - topInset
         }
         if hasNotification {
-            return notificationHeight
+            return cardHeight
         }
         return pillHeight
     }
@@ -974,6 +1497,24 @@ public enum IslandMetrics: Sendable {
         hovering
     }
 
+    /// Hover-expansion is suppressed while a notification popup is on screen.
+    /// Otherwise the panel morphs out from under the pointer before the
+    /// popup's Approve/Deny buttons can be clicked.
+    public static func shouldExpandOnHover(
+        hovering: Bool, isExpanded: Bool, hasPopup: Bool
+    ) -> Bool {
+        hovering && !isExpanded && !hasPopup
+    }
+
+    /// Stable pane identity used by every approval surface. Standalone agents
+    /// have no multiplexer pane id, so the synthetic `standalone:<source>` id
+    /// keeps the notch, Notification Center, and menu-bar actions in agreement.
+    public static func actionablePaneId(paneId: String?, source: String?) -> String? {
+        if let paneId, !paneId.isEmpty { return paneId }
+        guard let source, !source.isEmpty else { return nil }
+        return "standalone:\(source)"
+    }
+
     public static func shouldCollapse(isExpanded: Bool, hasAgents: Bool) -> Bool {
         isExpanded && !hasAgents
     }
@@ -1050,7 +1591,78 @@ public enum IslandMetrics: Sendable {
     }
 
     public static func requiresApproval(_ kind: String) -> Bool {
-        kind == "accessRequest" || kind == "access_request"
+        kind == "accessRequest" || kind == "access_request" || kind == "waiting"
+    }
+
+    /// Clean an approval prompt without destroying what the user is deciding
+    /// on. The HUD cleaner shortens absolute paths and rejects JSON, which is
+    /// the opposite of what a security prompt needs; this keeps the command,
+    /// file path, or question intact and only removes terminal control codes
+    /// and excess whitespace.
+    public static func cleanApprovalDetail(
+        _ text: String, maxCharacters: Int = 360
+    ) -> String {
+        var s = LogFormatter.stripControlCharacters(text)
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = s.split(
+            separator: "\n", omittingEmptySubsequences: false
+        ).map { line in
+            String(line)
+                .replacingOccurrences(
+                    of: "[\\t ]+", with: " ", options: .regularExpression
+                )
+                .trimmingCharacters(in: .whitespaces)
+        }
+        s = lines.joined(separator: "\n")
+        s = s.replacingOccurrences(
+            of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return "" }
+        guard maxCharacters > 0, s.count > maxCharacters else { return s }
+        let prefix = String(s.prefix(maxCharacters - 3))
+        return prefix.trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
+
+    /// True when a title or message says only that an agent is blocked, with
+    /// no command, path, tool, or question attached. Generic text must not
+    /// displace the live pane excerpt.
+    public static func isGenericApprovalText(_ text: String?) -> Bool {
+        guard let text else { return true }
+        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return true }
+        let generic: Set<String> = [
+            "needs input", "needs approval", "agent requires input",
+            "agent needs input", "agent needs approval", "approval required",
+            "permission required", "waiting", "blocked",
+            "claude needs approval", "claude needs your input",
+            "claude needs your approval", "opencode needs approval",
+        ]
+        if generic.contains(lower) { return true }
+        return lower.hasPrefix("agent requires input")
+    }
+
+    /// Distill a terminal pane tail into a short approval excerpt. Blank
+    /// lines, separator rules, and status-bar chrome drop out; the last few
+    /// meaningful lines (usually the prompt itself) stay.
+    public static func approvalExcerpt(from raw: String, maxLines: Int = 4) -> String {
+        guard !raw.isEmpty else { return "" }
+        let cleaned = LogFormatter.cleanedTail(
+            raw, maxLines: 18, maxLineLength: 200)
+        let meaningful = cleaned.filter { line in
+            let stripped = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !stripped.isEmpty else { return false }
+            let lower = stripped.lowercased()
+            if lower.contains("esc to interrupt") { return false }
+            if lower.hasPrefix("press ") && lower.contains(" to ") { return false }
+            if lower.hasPrefix("tokens:") || lower.hasPrefix("context:") {
+                return false
+            }
+            return stripped.unicodeScalars.contains {
+                CharacterSet.alphanumerics.contains($0)
+            }
+        }
+        return meaningful.suffix(max(maxLines, 1)).joined(separator: "\n")
     }
 
     // MARK: - Diff-stat cache (plan 016 1a)
@@ -1109,6 +1721,17 @@ public enum IslandMetrics: Sendable {
 
     /// Gap between the island edge and a peek panel docked beside it.
     public static let peekGap: CGFloat = 8
+
+    /// Convert a SwiftUI `.global` frame (window content space, top-left
+    /// origin) into AppKit screen coordinates (bottom-left origin). The island
+    /// panel is borderless, so its content fills the window frame.
+    public static func screenRect(fromGlobalRect rect: CGRect, windowFrame: CGRect) -> CGRect {
+        CGRect(
+            x: windowFrame.minX + rect.minX,
+            y: windowFrame.maxY - rect.maxY,
+            width: rect.width,
+            height: rect.height)
+    }
 
     /// Calculates the peek panel frame docked beside or below the island.
     public static func peekFrame(

@@ -66,6 +66,17 @@ if [[ "$PACKAGE" == "yes" ]]; then
     <true/>
     <key>NSRemindersUsageDescription</key>
     <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>com.bantay-tui.automation</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>bantay</string>
+        </array>
+      </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -146,7 +157,13 @@ chmod 600 "$EVENTS_FILE"
 
 echo "bantay-tui: data directory ready at $DATA_DIR"
 
-BINARY="$(cd "$(dirname "$0")/.." && pwd)/.build/debug/bantay"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BINARY="$ROOT/.build/release/bantay"
+if [[ -f "$ROOT/.build/debug/bantay" && (! -f "$BINARY" || "$ROOT/.build/debug/bantay" -nt "$BINARY") ]]; then
+  BINARY="$ROOT/.build/debug/bantay"
+elif [[ ! -x "$BINARY" ]]; then
+  BINARY="$ROOT/.build/debug/bantay"
+fi
 if [[ ! -x "$BINARY" ]]; then
   echo "bantay-tui: binary not found at $BINARY -- build with 'swift build' first"
   echo "bantay-tui: skipping launch agent install"
@@ -201,25 +218,78 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSRemindersUsageDescription</key>
     <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>com.bantay-tui.automation</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>bantay</string>
+        </array>
+      </dict>
+    </array>
 </dict>
 </plist>
 PLIST
 
-# Sign bundle with designated requirement so TCC permissions persist across restarts.
-SIGN_IDENTITY="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "Bantay"; then
-  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep "Bantay" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')"
+# Sign the bundle with a stable identity so macOS TCC grants survive rebuilds.
+# Ad-hoc signatures pin the designated requirement to a per-build cdhash, so
+# every rebuild looks like a new app and prompts again. The local self-signed
+# identity anchors the requirement to the certificate instead.
+#
+# Ad-hoc is opt-in: silently falling back to it is what makes grants flap, so
+# this script refuses unless BANTAY_ALLOW_ADHOC=1 is set.
+SIGN_IDENTITY=""
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  SIGN_IDENTITY="$CODESIGN_IDENTITY"
+elif DEV_IDENTITY="$(bash "$ROOT/scripts/ensure-dev-signing-identity.sh")"; then
+  SIGN_IDENTITY="$DEV_IDENTITY"
 fi
-echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui (identity: $SIGN_IDENTITY)"
-codesign --force --deep --sign "$SIGN_IDENTITY" -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
-
-# Ensure TCC uses the designated identifier requirement.
-if command -v sqlite3 >/dev/null 2>&1; then
-  TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
-  if [[ -w "$TCC_DB" ]]; then
-    sqlite3 "$TCC_DB" "UPDATE access SET csreq = X'fade0c000000002400000001000000020000000e636f6d2e62616e7461792d7475690000' WHERE client='com.bantay-tui' AND service='kTCCServiceReminders' AND hex(csreq) LIKE '%0000000800000014%';" 2>/dev/null || true
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  if [[ "${BANTAY_ALLOW_ADHOC:-0}" == "1" ]]; then
+    SIGN_IDENTITY="-"
+    echo "bantay-tui: no signing identity; using ad-hoc (BANTAY_ALLOW_ADHOC=1)." >&2
+    echo "bantay-tui: permissions will reset on every rebuild." >&2
+  else
+    echo "bantay-tui: no stable signing identity available." >&2
+    echo "bantay-tui: run scripts/ensure-dev-signing-identity.sh, then retry." >&2
+    echo "bantay-tui: set BANTAY_ALLOW_ADHOC=1 to accept ad-hoc signing." >&2
+    exit 1
   fi
 fi
+echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  echo "bantay-tui: signed-with: ad-hoc (permissions reset on rebuild)"
+  codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
+else
+  # Unlock the dedicated dev-signing keychain non-interactively so codesign
+  # never blocks on a GUI authorization dialog, and add it to the search list
+  # only for this call: codesign does not reliably resolve --keychain for
+  # identity lookup, and a same-named certificate elsewhere wins silently.
+  DEV_KEYCHAIN="${BANTAY_DEV_KEYCHAIN:-$HOME/.config/bantay/signing.keychain-db}"
+  DEV_PW_FILE="$HOME/.config/bantay/.signing-keychain-pass"
+  if [[ -f "$DEV_KEYCHAIN" && -f "$DEV_PW_FILE" ]]; then
+    security unlock-keychain -p "$(cat "$DEV_PW_FILE")" "$DEV_KEYCHAIN" >/dev/null 2>&1 || true
+    ORIGINAL_KEYCHAINS="$(security list-keychains -d user | sed 's/^ *//; s/"//g')"
+    # shellcheck disable=SC2086
+    restore_keychains() { security list-keychains -d user -s $ORIGINAL_KEYCHAINS; }
+    trap restore_keychains EXIT
+    security list-keychains -d user -s "$DEV_KEYCHAIN" $ORIGINAL_KEYCHAINS
+    codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+    restore_keychains
+    trap - EXIT
+  else
+    codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
+  fi
+  echo "bantay-tui: signed-with: $SIGN_IDENTITY (permissions survive rebuilds)"
+fi
+
+# TCC grants are keyed to the signed requirement, not the bundle ID. Writing
+# TCC.db directly is blocked by SIP, so this script never attempts it. If a
+# grant looks stale after switching signing identities, reset it once:
+#   tccutil reset Accessibility com.bantay-tui
+#   tccutil reset Reminders com.bantay-tui
 
 cat > "$AGENTS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -237,6 +307,13 @@ cat > "$AGENTS_PLIST" <<PLIST
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BANTAY_DEBUG</key>
+        <string>1</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>$DATA_DIR/bantay.log</string>
     <key>StandardErrorPath</key>
@@ -246,7 +323,23 @@ cat > "$AGENTS_PLIST" <<PLIST
 PLIST
 
 launchctl bootout gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) "$AGENTS_PLIST" 2>/dev/null || \
-  launchctl load "$AGENTS_PLIST" 2>/dev/null || true
+# bootout is asynchronous. Bootstrap can fail with "service already loaded"
+# or an I/O error while the old job is still exiting; retry, then kickstart so
+# a successful install never leaves the agent unloaded.
+for _ in 1 2 3 4 5; do
+  if launchctl bootstrap gui/$(id -u) "$AGENTS_PLIST" 2>/dev/null; then
+    break
+  fi
+  if launchctl kickstart -k gui/$(id -u)/com.bantay-tui.agent 2>/dev/null; then
+    break
+  fi
+  sleep 0.5
+done
+launchctl kickstart -k gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || \
+  launchctl start com.bantay-tui.agent 2>/dev/null || true
+
+if [[ -d "$HOME/.local/bin" ]]; then
+  ln -sf "$LAUNCH_BIN" "$HOME/.local/bin/bantay"
+fi
 
 echo "bantay-tui: launch agent installed at $AGENTS_PLIST (binary: $INSTALLED_BIN)"

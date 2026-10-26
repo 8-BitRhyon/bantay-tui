@@ -82,16 +82,21 @@ public final class TaskDispatcher: ObservableObject {
         return (agent: canonical, reroutedFrom: nil)
     }
 
-    /// Dispatches a task to its assigned agent and returns the linked pane/target ID if successful.
+    /// Dispatches a task to its assigned agent and returns the linked
+    /// pane/target ID plus who actually received it (differs from the
+    /// assignment when quota routing diverted it; nil pane means delivery
+    /// failed, never silent success).
     @discardableResult
-    public func dispatch(task: BantayTask) -> String? {
+    public func dispatch(task: BantayTask) -> (paneID: String?, actualAgent: String?) {
         if !Self.isDispatchAllowed(
             cost: AgentEventManager.shared.usage.costUSD,
             budget: NotchHUDConfig.shared.dailyBudgetUSD,
             enforceLimit: NotchHUDConfig.shared.enforceBudgetLimit
         ) {
-            return nil
+            return (nil, nil)
         }
+        // NOTE: every failure return below keeps `resolution.agent`: callers
+        // and harnesses can see who WOULD have received the task.
 
         let rawAgent =
             task.assignedAgent
@@ -116,13 +121,13 @@ public final class TaskDispatcher: ObservableObject {
         // 1. If task already had a linked pane, verify that it is still alive in the active roster
         if let previousPane = task.linkedPaneID, !previousPane.isEmpty {
             if let liveAgent = activeAgents.first(where: { $0.paneId == previousPane }) {
-                dispatchToPane(
+                let delivered = dispatchToPane(
                     paneId: previousPane,
                     agentName: agentName,
                     promptText: promptText,
                     cwd: liveAgent.cwd
                 )
-                return previousPane
+                return delivered ? (previousPane, resolution.agent) : (nil, resolution.agent)
             }
             // Previous pane died/closed; fall through to resolve a live target
         }
@@ -133,9 +138,10 @@ public final class TaskDispatcher: ObservableObject {
         }
 
         let targetPaneID: String?
+        let delivered: Bool
         if let paneId = matchingSnapshot?.paneId, !paneId.isEmpty {
             targetPaneID = paneId
-            dispatchToPane(
+            delivered = dispatchToPane(
                 paneId: paneId,
                 agentName: agentName,
                 promptText: promptText,
@@ -144,35 +150,49 @@ public final class TaskDispatcher: ObservableObject {
         } else if agentName == "antigravity" || agentName == "codex" || agentName == "cursor"
             || agentName == "cloudcode" || agentName == "windsurf"
         {
-            targetPaneID = "app:\(agentName)"
-            StandaloneAgentDispatcher.dispatchPrompt(
+            // Linked as the canonical standalone id so later pane events
+            // (`standalone:<agent>:<project>`) match this task back.
+            targetPaneID = "standalone:\(agentName)"
+            delivered = StandaloneAgentDispatcher.dispatchPrompt(
                 agentName: agentName, text: promptText, cwd: matchingSnapshot?.cwd, autoSend: true
             )
         } else {
             // Fallback to standalone dispatcher for plain terminals
             targetPaneID = "standalone:\(agentName)"
-            StandaloneAgentDispatcher.dispatchPrompt(
+            delivered = StandaloneAgentDispatcher.dispatchPrompt(
                 agentName: agentName, text: promptText, cwd: matchingSnapshot?.cwd, autoSend: true
             )
         }
 
-        return targetPaneID
+        return delivered ? (targetPaneID, resolution.agent) : (nil, resolution.agent)
+    }
+
+    /// A pane event belongs to a linked task when the ids match exactly or
+    /// the event pane extends the link (`standalone:antigravity` matches
+    /// `standalone:antigravity:Portfolio`). Pure for harness coverage.
+    nonisolated public static func paneMatches(linked: String, paneId: String) -> Bool {
+        guard !linked.isEmpty, !paneId.isEmpty else { return false }
+        if linked == paneId { return true }
+        return paneId.hasPrefix(linked + ":") || paneId.hasPrefix(linked + "/")
     }
 
     /// Dispatches prompt text to a designated pane, routing through active multiplexer or desktop agent.
+    /// Returns false when delivery failed (dead pane, no Accessibility,
+    /// unreachable app) so tasks never read dispatched on a silent no-op.
+    @discardableResult
     func dispatchToPane(
         paneId: String,
         agentName: String,
         promptText: String,
         cwd: String?
-    ) {
+    ) -> Bool {
         if paneId.hasPrefix("standalone:") {
             let clean = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
-            StandaloneAgentDispatcher.dispatchPrompt(
+            return StandaloneAgentDispatcher.dispatchPrompt(
                 agentName: clean, text: promptText, cwd: cwd, autoSend: true
             )
         } else if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            StandaloneAgentDispatcher.dispatchPrompt(
+            return StandaloneAgentDispatcher.dispatchPrompt(
                 agentName: "opencode", text: promptText, cwd: cwd, autoSend: true
             )
         } else {
@@ -181,6 +201,7 @@ public final class TaskDispatcher: ObservableObject {
             if NotchHUDConfig.shared.focusTerminalOnDispatch {
                 activeAdapter.focusPane(paneId: paneId)
             }
+            return true
         }
     }
 

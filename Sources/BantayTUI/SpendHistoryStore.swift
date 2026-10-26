@@ -60,10 +60,11 @@ final class SpendHistoryStore: ObservableObject {
 
     /// Key for date string (YYYY-MM-DD).
     static func dateKey(for date: Date = Date()) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = .current
-        return formatter.string(from: date)
+        let components = Calendar.current.dateComponents(
+            [.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
     /// Records a usage snapshot into today's spend ledger.
@@ -73,7 +74,8 @@ final class SpendHistoryStore: ObservableObject {
         date: Date = Date()
     ) {
         let key = Self.dateKey(for: date)
-        var record = dailyRecords[key] ?? DailySpendRecord(dateKey: key)
+        let previous = dailyRecords[key]
+        var record = previous ?? DailySpendRecord(dateKey: key)
 
         record.totalCostUSD = max(record.totalCostUSD, snapshot.costUSD)
         record.totalTokens = max(record.totalTokens, snapshot.totalTokens)
@@ -87,6 +89,10 @@ final class SpendHistoryStore: ObservableObject {
             record.costByAgent[source] = max(record.costByAgent[source] ?? 0.0, cost)
         }
 
+        // Every usage poll reaches this point. Saving an identical record
+        // forces an atomic JSON rewrite for no data change; keep the main
+        // thread off the disk when the gauges are steady.
+        guard record != previous else { return }
         dailyRecords[key] = record
         pruneAndSave(now: date)
     }

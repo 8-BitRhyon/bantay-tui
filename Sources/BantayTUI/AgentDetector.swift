@@ -36,6 +36,153 @@ struct DetectedAgent: Equatable, Sendable {
 /// The manager scans processes, this type decides what is an agent and where
 /// its activity lives.
 enum AgentDetector {
+    /// Precompiled command token matchers. The previous path built 26 regexes
+    /// for every process sample on every scan.
+    private final class CommandTokenMatcher: @unchecked Sendable {
+        struct Token {
+            let name: String
+            let regex: NSRegularExpression
+        }
+
+        static let shared = CommandTokenMatcher()
+        let tokens: [Token]
+
+        private init() {
+            let raw: [(needle: String, name: String)] = [
+                ("antigravity", "antigravity"),
+                ("antigravity-ide", "antigravity"),
+                ("agy", "antigravity"),
+                ("kilo", "kilo"),
+                ("freebuff", "freebuff"),
+                ("herdr", "herdr"),
+                ("claude", "claude"),
+                ("codex", "codex"),
+                ("cloudcode", "cloudcode"),
+                ("cloud-code", "cloudcode"),
+                ("google-cloud-code", "cloudcode"),
+                ("gemini", "gemini"),
+                ("cursor", "cursor"),
+                ("opencode", "opencode"),
+                ("aider", "aider"),
+                ("pi", "pi"),
+                ("windsurf", "windsurf"),
+                ("cascade", "windsurf"),
+                ("goose", "goose"),
+                ("cline", "cline"),
+                ("roo-code", "roo-code"),
+                ("roocode", "roo-code"),
+                ("cody", "cody"),
+                ("openhands", "openhands"),
+                ("continue", "continue"),
+            ]
+            tokens = raw.map { needle, name in
+                let pattern = "(?:^|[^a-z0-9])\(needle)(?:[^a-z0-9]|$)"
+                // The patterns are generated from fixed alphanumeric tokens.
+                let regex = try! NSRegularExpression(pattern: pattern, options: [])
+                return Token(name: name, regex: regex)
+            }
+        }
+    }
+
+    /// Process classification is pure and the same command lines reappear on
+    /// every ps sweep. Cache the whole decision, including negative results.
+    private final class ProcessClassificationCache: @unchecked Sendable {
+        struct Entry {
+            let name: String?
+        }
+
+        private struct Key: Hashable {
+            let nameHash: Int
+            let commandHash: Int
+            let commandLength: Int
+        }
+
+        static let shared = ProcessClassificationCache()
+        private let lock = NSLock()
+        private var entries: [Key: Entry] = [:]
+        private var order: [Key] = []
+
+        func value(for name: String, command: String) -> Entry? {
+            let key = Key(
+                nameHash: name.hashValue,
+                commandHash: command.hashValue,
+                commandLength: command.utf8.count)
+            lock.lock()
+            defer { lock.unlock() }
+            return entries[key]
+        }
+
+        func store(_ entry: Entry, for name: String, command: String) {
+            let key = Key(
+                nameHash: name.hashValue,
+                commandHash: command.hashValue,
+                commandLength: command.utf8.count)
+            lock.lock()
+            defer { lock.unlock() }
+            if entries.updateValue(entry, forKey: key) == nil {
+                order.append(key)
+            }
+            while order.count > 2048 {
+                entries.removeValue(forKey: order.removeFirst())
+            }
+        }
+    }
+
+    private static let lookalikeSuffixes: Set<String> = [
+        "search", "daemon", "fs-watch", "fs_watch", "watch", "ctl", "agent-",
+    ]
+
+    /// Classifies one process sample. Helper and daemon subprocesses are
+    /// rejected before the agent token scan; both outcomes are cached.
+    static func classifyProcess(name: String, command: String) -> String? {
+        if let cached = ProcessClassificationCache.shared.value(
+            for: name, command: command)
+        {
+            return cached.name
+        }
+        let procLower = name.lowercased()
+        let cmdLower = command.lowercased()
+        let result: String?
+        if procLower.contains("helper") || procLower.contains("renderer")
+            || procLower.contains("gpu")
+            || procLower.contains("plugin") || procLower.contains("crashpad")
+            || procLower.contains("utility")
+            || cmdLower.contains("helper") || cmdLower.contains("renderer")
+            || cmdLower.contains("gpu")
+            || cmdLower.contains("plugin") || cmdLower.contains("crashpad")
+            || cmdLower.contains("utility")
+            || cmdLower.contains(" serve") || cmdLower.contains("serve ")
+            || cmdLower.contains("--port")
+            || cmdLower.contains("/extensions/") || cmdLower.contains(".vscode/extensions")
+            || cmdLower.contains(".antigravity-ide/extensions")
+            || cmdLower.contains("language-server") || cmdLower.contains("daemon")
+        {
+            result = nil
+        } else {
+            result =
+                canonicalName(forProcess: name)
+                ?? canonicalNameFromCommand(command)
+        }
+        ProcessClassificationCache.shared.store(
+            ProcessClassificationCache.Entry(name: result),
+            for: name, command: command)
+        return result
+    }
+
+    /// Heavy data trees that never hold a conversation transcript. The
+    /// opencode data root stores snapshots, shells, tool output, and repos
+    /// beside its log; walking them on every scan dominated the detector.
+    static func isNonTranscriptTree(_ path: String) -> Bool {
+        guard
+            path.contains("/.local/share/opencode/")
+                || path.contains("/.opencode/")
+        else { return false }
+        return path.contains("/snapshot")
+            || path.contains("/shell")
+            || path.contains("/tool-output")
+            || path.contains("/repos")
+    }
+
     /// Transcript files per agent family, newest-first. Used to peek the
     /// latest activity line without requiring a multiplexer.
     static func transcriptSearchPaths(home: String, name: String) -> [String] {
@@ -237,64 +384,31 @@ enum AgentDetector {
         {
             return nil
         }
-        let tokens: [(String, String)] = [
-            ("antigravity", "antigravity"),
-            ("antigravity-ide", "antigravity"),
-            ("agy", "antigravity"),
-            ("kilo", "kilo"),
-            ("freebuff", "freebuff"),
-            ("herdr", "herdr"),
-            ("claude", "claude"),
-            ("codex", "codex"),
-            ("cloudcode", "cloudcode"),
-            ("cloud-code", "cloudcode"),
-            ("google-cloud-code", "cloudcode"),
-            ("gemini", "gemini"),
-            ("cursor", "cursor"),
-            ("opencode", "opencode"),
-            ("aider", "aider"),
-            ("pi", "pi"),
-            ("windsurf", "windsurf"),
-            ("cascade", "windsurf"),
-            ("goose", "goose"),
-            ("cline", "cline"),
-            ("roo-code", "roo-code"),
-            ("roocode", "roo-code"),
-            ("cody", "cody"),
-            ("openhands", "openhands"),
-            ("continue", "continue"),
-        ]
         // Lookalike suffixes that are NOT the agent CLI (e.g. claude-searchd,
         // kilo-daemon, herdr-fs-watch) must not match.
-        let skipSuffixes = ["search", "daemon", "fs-watch", "fs_watch", "watch", "ctl", "agent-"]
-        for (needle, name) in tokens {
+        let range = NSRange(location: 0, length: lower.utf16.count)
+        for token in CommandTokenMatcher.shared.tokens {
             // Word boundary both sides so "kilobytes" / "claude-searchd" /
             // "cursor" inside a path don't match unless it's the agent token.
-            let pattern = "(?:^|[^a-z0-9])\(needle)(?:[^a-z0-9]|$)"
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-                regex.firstMatch(
-                    in: lower, options: [],
-                    range: NSRange(location: 0, length: lower.utf16.count)) != nil
+            guard
+                let match = token.regex.firstMatch(
+                    in: lower, options: [], range: range)
+            else { continue }
+            // Exclude when immediately followed by a known lookalike suffix.
+            if let matchRange = Range(match.range, in: lower),
+                matchRange.upperBound < lower.endIndex
             {
-                // Exclude when immediately followed by a known lookalike suffix.
-                if let match = regex.firstMatch(
-                    in: lower, options: [],
-                    range: NSRange(location: 0, length: lower.utf16.count)),
-                    let range = Range(match.range, in: lower),
-                    range.upperBound < lower.endIndex
-                {
-                    // Strip leading non-alphanumerics so a lookalike like
-                    // "herdr-fs-watch" leaves remainder "fs-watch" (not
-                    // "-fs-watch") and still matches the skip suffix.
-                    let remainder = String(lower[range.upperBound...]).lowercased()
-                    let stripped = remainder.trimmingCharacters(
-                        in: CharacterSet.alphanumerics.inverted)
-                    if skipSuffixes.contains(where: { stripped.hasPrefix($0) }) {
-                        continue
-                    }
+                // Strip leading non-alphanumerics so a lookalike like
+                // "herdr-fs-watch" leaves remainder "fs-watch" (not
+                // "-fs-watch") and still matches the skip suffix.
+                let remainder = String(lower[matchRange.upperBound...]).lowercased()
+                let stripped = remainder.trimmingCharacters(
+                    in: CharacterSet.alphanumerics.inverted)
+                if lookalikeSuffixes.contains(where: { stripped.hasPrefix($0) }) {
+                    continue
                 }
-                return name
             }
+            return token.name
         }
         return nil
     }
@@ -389,28 +503,106 @@ enum AgentDetector {
         let date: Date
     }
 
+    /// Memoizes the parse of one transcript line. A live file appends a line
+    /// or two per poll, but the tail still re-reads the same eighty lines.
+    /// Hashing the raw line is far cheaper than JSON decoding plus the HUD
+    /// cleaner's regex passes.
+    private final class LineInsightCache: @unchecked Sendable {
+        struct Entry {
+            let activity: String?
+            let cwd: String?
+        }
+
+        private struct Key: Hashable {
+            let hash: Int
+            let length: Int
+        }
+
+        static let shared = LineInsightCache()
+        private let lock = NSLock()
+        private var entries: [Key: Entry] = [:]
+        private var order: [Key] = []
+
+        func insight(for line: String, compute: () -> Entry) -> Entry {
+            let key = Key(hash: line.hashValue, length: line.utf8.count)
+            lock.lock()
+            if let hit = entries[key] {
+                lock.unlock()
+                return hit
+            }
+            lock.unlock()
+            let entry = compute()
+            lock.lock()
+            if entries.updateValue(entry, forKey: key) == nil {
+                order.append(key)
+            }
+            while order.count > 4096 {
+                entries.removeValue(forKey: order.removeFirst())
+            }
+            lock.unlock()
+            return entry
+        }
+    }
+
+    /// Parsed tail of one session file. Transcript tails are re-read on every
+    /// poll; caching by file stamp keeps idle sessions off the CPU while the
+    /// one live file still refreshes.
+    private final class SessionTailCache: @unchecked Sendable {
+        struct Entry {
+            let date: Date
+            let size: Int
+            let maxBytes: Int
+            let activity: String?
+            let cwd: String?
+        }
+
+        static let shared = SessionTailCache()
+        private let lock = NSLock()
+        private var entries: [String: Entry] = [:]
+        private var order: [String] = []
+
+        func entry(for path: String) -> Entry? {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries[path]
+        }
+
+        func store(_ entry: Entry, for path: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if entries[path] == nil { order.append(path) }
+            entries[path] = entry
+            while order.count > 512 {
+                let evicted = order.removeFirst()
+                entries.removeValue(forKey: evicted)
+            }
+        }
+    }
+
     /// Discovers all active agent sessions under `root` modified recently.
     /// Groups transcripts by their top-level conversation directory (e.g. Antigravity brain UUID,
     /// Claude project hash, or Goose session folder) so multi-window sessions are not collapsed.
     static func activeSessionsInfo(
-        root: String, maxBytes: Int = 32768, recentThreshold: TimeInterval = 600
+        root: String, maxBytes: Int = 16384, recentThreshold: TimeInterval = 600
     ) -> [ActiveSession] {
         let canonicalRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath()
         let rootComps = canonicalRoot.pathComponents
         guard
             let enumerator = FileManager.default.enumerator(
                 at: canonicalRoot,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                includingPropertiesForKeys: [
+                    .contentModificationDateKey, .isRegularFileKey, .fileSizeKey,
+                ],
                 options: []
             )
         else {
             return []
         }
-        var sessionFiles: [String: (url: URL, date: Date)] = [:]
+        var sessionFiles: [String: (url: URL, date: Date, size: Int)] = [:]
         for case let url as URL in enumerator {
             let path = url.path
             if path.contains("/.git/") || path.contains("/node_modules/")
-                || path.contains("/.Trash/")
+                || path.contains("/.Trash/") || isNonTranscriptTree(path)
             {
                 enumerator.skipDescendants()
                 continue
@@ -430,7 +622,7 @@ enum AgentDetector {
             let name = url.lastPathComponent.lowercased()
             guard
                 let values = try? url.resourceValues(
-                    forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                    forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]),
                 values.isRegularFile == true,
                 ext == "jsonl" || ext == "log" || ext == "json" || ext == "txt"
                     || name.contains("log")
@@ -438,6 +630,7 @@ enum AgentDetector {
                 continue
             }
             let date = values.contentModificationDate ?? .distantPast
+            let size = values.fileSize ?? 0
             let sessionKey: String
             if relComponents.count > 1, let firstComp = relComponents.first {
                 sessionKey = canonicalRoot.appendingPathComponent(firstComp).path
@@ -447,10 +640,10 @@ enum AgentDetector {
 
             if let existing = sessionFiles[sessionKey] {
                 if date > existing.date {
-                    sessionFiles[sessionKey] = (url, date)
+                    sessionFiles[sessionKey] = (url, date, size)
                 }
             } else {
-                sessionFiles[sessionKey] = (url, date)
+                sessionFiles[sessionKey] = (url, date, size)
             }
         }
 
@@ -467,37 +660,68 @@ enum AgentDetector {
 
         var results: [ActiveSession] = []
         for (sessionPath, fileInfo) in activeEntries {
-            guard let handle = try? FileHandle(forReadingFrom: fileInfo.url) else { continue }
-            defer { try? handle.close() }
-            let end = (try? handle.seekToEnd()) ?? 0
-            let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
-            try? handle.seek(toOffset: start)
-            let data = handle.readDataToEndOfFile()
-            let text = String(decoding: data, as: UTF8.self)
-            let lines = text.split(whereSeparator: \.isNewline)
             let isRecent = now.timeIntervalSince(fileInfo.date) <= recentThreshold
-            var foundActivity: String? = nil
-            var fallbackActivity: String? = nil
-            var foundCwd: String? = nil
-            for line in lines.reversed() {
-                let lineStr = String(line)
-                if foundCwd == nil {
-                    foundCwd = Self.extractCwd(lineStr)
-                }
-                if let readable = Self.readableLine(lineStr) {
-                    if !readable.hasPrefix("{") {
-                        if foundActivity == nil {
-                            foundActivity = readable
+            let stamp = SessionTailCache.Entry(
+                date: fileInfo.date, size: fileInfo.size, maxBytes: maxBytes,
+                activity: nil, cwd: nil)
+            var activity: String?
+            var foundCwd: String?
+            if let cached = SessionTailCache.shared.entry(for: fileInfo.url.path),
+                cached.date == stamp.date, cached.size == stamp.size,
+                cached.maxBytes == maxBytes
+            {
+                activity = cached.activity
+                foundCwd = cached.cwd
+            } else {
+                guard let handle = try? FileHandle(forReadingFrom: fileInfo.url) else { continue }
+                defer { try? handle.close() }
+                let end = (try? handle.seekToEnd()) ?? 0
+                let start = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
+                try? handle.seek(toOffset: start)
+                let data = handle.readDataToEndOfFile()
+                let text = String(decoding: data, as: UTF8.self)
+                let lines = text.split(whereSeparator: \.isNewline)
+                var foundActivity: String? = nil
+                var fallbackActivity: String? = nil
+                var scanned = 0
+                for line in lines.reversed() {
+                    scanned += 1
+                    if scanned > 80 { break }
+                    let lineStr = String(line)
+                    let insight = LineInsightCache.shared.insight(for: lineStr) {
+                        LineInsightCache.Entry(
+                            activity: Self.readableLine(lineStr),
+                            cwd: Self.extractCwd(lineStr))
+                    }
+                    if foundCwd == nil {
+                        foundCwd = insight.cwd
+                    }
+                    if let readable = insight.activity {
+                        if !readable.hasPrefix("{") {
+                            if foundActivity == nil {
+                                foundActivity = readable
+                            }
+                        } else if fallbackActivity == nil {
+                            fallbackActivity = readable
                         }
-                    } else if fallbackActivity == nil {
-                        fallbackActivity = readable
+                    }
+                    if foundActivity != nil && foundCwd != nil {
+                        break
                     }
                 }
-                if foundActivity != nil && foundCwd != nil {
-                    break
+                activity = foundActivity ?? fallbackActivity
+                if foundCwd == nil {
+                    // Older lines may carry the cwd even when the newest tail
+                    // does not. Reuse the last answer instead of rescanning.
+                    foundCwd = SessionTailCache.shared.entry(for: fileInfo.url.path)?.cwd
                 }
+                SessionTailCache.shared.store(
+                    SessionTailCache.Entry(
+                        date: fileInfo.date, size: fileInfo.size, maxBytes: maxBytes,
+                        activity: activity, cwd: foundCwd),
+                    for: fileInfo.url.path)
             }
-            guard let activity = foundActivity ?? fallbackActivity else { continue }
+            guard let activity else { continue }
             results.append(
                 ActiveSession(
                     sessionPath: sessionPath,
@@ -1021,28 +1245,12 @@ enum StandaloneAgentScanner {
     /// processes that are not known agent CLIs.
     static func detect(samples: [ProcessSample], home: String) -> [DetectedAgent] {
         var raw: [DetectedAgent] = []
+        // Several processes can share one agent transcript root; scan it once.
+        var sessionsByRoot: [String: [AgentDetector.ActiveSession]] = [:]
         for sample in samples {
-            let procLower = sample.name.lowercased()
-            let cmdLower = sample.command.lowercased()
-            if procLower.contains("helper") || procLower.contains("renderer")
-                || procLower.contains("gpu")
-                || procLower.contains("plugin") || procLower.contains("crashpad")
-                || procLower.contains("utility")
-                || cmdLower.contains("helper") || cmdLower.contains("renderer")
-                || cmdLower.contains("gpu")
-                || cmdLower.contains("plugin") || cmdLower.contains("crashpad")
-                || cmdLower.contains("utility")
-                || cmdLower.contains(" serve") || cmdLower.contains("serve ")
-                || cmdLower.contains("--port")
-                || cmdLower.contains("/extensions/") || cmdLower.contains(".vscode/extensions")
-                || cmdLower.contains(".antigravity-ide/extensions")
-                || cmdLower.contains("language-server") || cmdLower.contains("daemon")
-            {
-                continue
-            }
             guard
-                let name = AgentDetector.canonicalName(forProcess: sample.name)
-                    ?? AgentDetector.canonicalNameFromCommand(sample.command)
+                let name = AgentDetector.classifyProcess(
+                    name: sample.name, command: sample.command)
             else {
                 continue
             }
@@ -1052,7 +1260,14 @@ enum StandaloneAgentScanner {
             let roots = AgentDetector.transcriptSearchPaths(home: home, name: name)
             var sessions: [AgentDetector.ActiveSession] = []
             for root in roots {
-                let found = AgentDetector.activeSessionsInfo(root: root)
+                let found: [AgentDetector.ActiveSession]
+                if let memo = sessionsByRoot[root] {
+                    found = memo
+                } else {
+                    let scan = AgentDetector.activeSessionsInfo(root: root)
+                    sessionsByRoot[root] = scan
+                    found = scan
+                }
                 if !found.isEmpty {
                     sessions.append(contentsOf: found)
                 }

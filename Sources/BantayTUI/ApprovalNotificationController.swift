@@ -10,11 +10,15 @@ final class ApprovalNotificationController: NSObject,
 
     static let categoryID = "BANTAY_APPROVAL"
     static let choiceCategoryID = "BANTAY_APPROVAL_CHOICE"
+    static let questionCategoryID = "BANTAY_QUESTION"
+    static let multiCategoryID = "BANTAY_MULTI"
+    static let reviewCategoryID = "BANTAY_REVIEW"
     static let completedCategoryID = "BANTAY_COMPLETED"
     static let failedCategoryID = "BANTAY_FAILED"
 
     static let approveActionID = "BANTAY_APPROVE"
     static let denyActionID = "BANTAY_DENY"
+    static let answerActionID = "BANTAY_ANSWER"
     static let choiceActionIDPrefix = "BANTAY_CHOICE_"
     static let viewSessionActionID = "BANTAY_VIEW_SESSION"
     static let focusActionID = "BANTAY_FOCUS"
@@ -23,6 +27,10 @@ final class ApprovalNotificationController: NSObject,
     /// Fixed number of numbered choice actions registered up front so action
     /// sets never go stale across posts (the category is global).
     private static let maxChoiceActions = 4
+    /// Banner ceiling: a category may register four actions total. Question
+    /// banners spend one on Answer, permission banners two on Approve/Deny.
+    private static let questionChoiceCount = 3
+    private static let permissionChoiceCount = 2
 
     private override init() {
         super.init()
@@ -52,11 +60,24 @@ final class ApprovalNotificationController: NSObject,
             identifier: Self.denyActionID, title: "Deny",
             options: [.destructive, .authenticationRequired])
         var choiceActions = [approve, deny]
-        for index in 0..<Self.maxChoiceActions {
+        for index in 0..<Self.permissionChoiceCount {
             choiceActions.append(
                 UNNotificationAction(
                     identifier: Self.choiceActionIDPrefix + String(index),
-                    title: "\(index + 1)…",
+                    title: "Choice \(index + 1)",
+                    options: [.authenticationRequired]))
+        }
+        let answer = UNNotificationAction(
+            identifier: Self.answerActionID, title: "Answer",
+            options: [.foreground])
+        // Questions never offer Approve/Deny: answering directly is the only
+        // safe quick action, plus Answer to open the full question.
+        var questionActions = [answer]
+        for index in 0..<Self.questionChoiceCount {
+            questionActions.append(
+                UNNotificationAction(
+                    identifier: Self.choiceActionIDPrefix + String(index),
+                    title: "Choice \(index + 1)",
                     options: [.authenticationRequired]))
         }
         let viewSession = UNNotificationAction(
@@ -77,6 +98,15 @@ final class ApprovalNotificationController: NSObject,
                 identifier: Self.choiceCategoryID, actions: choiceActions,
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
+                identifier: Self.questionCategoryID, actions: questionActions,
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
+                identifier: Self.multiCategoryID, actions: [answer, focus],
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
+                identifier: Self.reviewCategoryID, actions: [focus, dismiss],
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
                 identifier: Self.completedCategoryID, actions: [viewSession, dismiss],
                 intentIdentifiers: [], options: []),
             UNNotificationCategory(
@@ -89,19 +119,40 @@ final class ApprovalNotificationController: NSObject,
         }
     }
 
-    /// Post an approval notification for a blocked event.
+    /// Post an approval notification for a blocked event. Events carrying
+    /// two or more choices are questions, not permissions: they get an
+    /// Answer action and numbered choices, never Approve/Deny.
+    /// Multi-select prompts cannot be answered from a banner (buttons have
+    /// no toggle state, and one tap must never partial-answer a pick-several
+    /// question), so they get Answer plus Focus and the body lists options.
     func postApproval(
         source: String, paneId: String?, title: String?, choices: [String]?,
-        cwd: String? = nil, sessionPath: String? = nil
+        cwd: String? = nil, sessionPath: String? = nil, isMulti: Bool = false
     ) {
         guard let paneId, hasBundleProxy else { return }
         install()
         let content = UNMutableNotificationContent()
-        content.title = "\(source) needs approval"
-        content.body = approvalBody(title: title, choices: choices)
-        content.sound = .default
         let hasChoices = choices?.isEmpty == false
-        content.categoryIdentifier = hasChoices ? Self.choiceCategoryID : Self.categoryID
+        let isQuestion = (choices?.count ?? 0) >= 2
+        let concrete = isConcreteApprovalTitle(title)
+        content.title =
+            isMulti
+            ? "\(source) has a multi-part question"
+            : (isQuestion
+                ? "\(source) has a question"
+                : (concrete || hasChoices ? "\(source) needs approval" : "\(source) is waiting"))
+        content.body =
+            concrete || hasChoices
+            ? approvalBody(title: title, choices: choices)
+            : "Open Bantay to review the request before deciding."
+        content.sound = .default
+        content.categoryIdentifier =
+            isMulti
+            ? Self.multiCategoryID
+            : (isQuestion
+                ? Self.questionCategoryID
+                : (hasChoices
+                    ? Self.choiceCategoryID : (concrete ? Self.categoryID : Self.reviewCategoryID)))
         var info: [String: String] = ["paneId": paneId, "source": source]
         if let cwd { info["cwd"] = cwd }
         if let sessionPath { info["sessionPath"] = sessionPath }
@@ -114,6 +165,19 @@ final class ApprovalNotificationController: NSObject,
                 NSLog("approval-notify: %@ failed: %@", paneId, String(describing: error))
             }
         }
+    }
+
+    /// A notification may offer Approve and Deny only when it names the exact
+    /// request. Status-only blocked heartbeats get Review/Focus actions.
+    private func isConcreteApprovalTitle(_ title: String?) -> Bool {
+        guard let title else { return false }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let generic: Set<String> = [
+            "blocked", "waiting", "needs input", "needs approval",
+            "agent requires input", "approval required", "permission required",
+        ]
+        return !generic.contains(trimmed.lowercased())
     }
 
     /// Post a completion notification with actionable "View in Browser" button.
@@ -252,12 +316,23 @@ final class ApprovalNotificationController: NSObject,
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.performAction(paneId: paneId) { $0.approve(paneId: paneId) }
+                manager.approve(paneId: paneId)
             case Self.denyActionID:
                 guard let paneId else { return }
                 let manager = AgentEventManager.shared
                 guard !manager.isResolving(paneId: paneId) else { return }
-                manager.performAction(paneId: paneId) { $0.deny(paneId: paneId) }
+                manager.deny(paneId: paneId)
+            case Self.answerActionID:
+                // Questions open where they can be answered: focus the exact
+                // terminal pane and expand the inbox. Never resolves anything.
+                if let paneId, paneId.hasPrefix("standalone:") {
+                    let agent = AgentEventManager.shared.agents.first { $0.paneId == paneId }
+                    TerminalFocusser.focusStandalone(source: source, cwd: cwd ?? agent?.cwd)
+                } else if let paneId {
+                    let manager = AgentEventManager.shared
+                    manager.performAction(paneId: paneId) { $0.focusPane(paneId: paneId) }
+                }
+                NotificationCenter.default.post(name: .notchExpandRequested, object: nil)
             case Self.viewSessionActionID:
                 let slug = cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? source
                 RichSessionViewer.openInBrowser(
@@ -288,9 +363,7 @@ final class ApprovalNotificationController: NSObject,
                         Self.choiceActionIDPrefix.count)
                     guard let index = Int(indexString) else { return }
                     let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-                    manager.performAction(paneId: paneId) {
-                        $0.approveChoice(paneId: paneId, choice: number)
-                    }
+                    manager.approveChoice(paneId: paneId, choice: number)
                 }
             }
         }

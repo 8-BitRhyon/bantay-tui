@@ -11,6 +11,22 @@ enum ControlGateway {
         case sendKeys
         case focus
         case prompt
+        case openSettings
+        case stripToggle
+        case stripFocus
+        case stripCenter
+        case stripWidth
+        case stripApproval
+        case stripStatus
+        case stripOverview
+        case stripReorder
+        case stripAutochain
+        case stripPin
+        case stripSendDisplay
+        case stripStack
+        case stripUnstack
+        case stripTabbed
+        case stripHud
         case unknown
     }
 
@@ -64,8 +80,16 @@ enum ControlGateway {
             "pane.send_keys", "pane.focus", "agent.prompt",
         ]
 
+        static let stripCatalog: [String] = [
+            "strip.toggle", "strip.focus", "strip.center",
+            "strip.width", "strip.approval", "strip.status",
+            "strip.overview", "strip.reorder", "strip.autochain",
+            "strip.pin", "strip.sendDisplay", "strip.stack", "strip.unstack", "strip.tabbed",
+            "strip.hud",
+        ]
+
         static func isKnown(_ method: String) -> Bool {
-            catalog.contains(method)
+            catalog.contains(method) || method == "settings.open" || stripCatalog.contains(method)
         }
     }
 
@@ -102,6 +126,22 @@ enum ControlGateway {
         case "pane.send_keys": return .sendKeys
         case "pane.focus": return .focus
         case "agent.prompt": return .prompt
+        case "settings.open": return .openSettings
+        case "strip.toggle": return .stripToggle
+        case "strip.focus": return .stripFocus
+        case "strip.center": return .stripCenter
+        case "strip.width": return .stripWidth
+        case "strip.approval": return .stripApproval
+        case "strip.status": return .stripStatus
+        case "strip.overview": return .stripOverview
+        case "strip.reorder": return .stripReorder
+        case "strip.autochain": return .stripAutochain
+        case "strip.pin": return .stripPin
+        case "strip.sendDisplay": return .stripSendDisplay
+        case "strip.stack": return .stripStack
+        case "strip.unstack": return .stripUnstack
+        case "strip.tabbed": return .stripTabbed
+        case "strip.hud": return .stripHud
         default: return .unknown
         }
     }
@@ -229,6 +269,183 @@ final class ControlGatewayServer: @unchecked Sendable {
             return handleFocus(id: request.id, params: request.params)
         case .prompt:
             return handlePrompt(id: request.id, params: request.params)
+        case .openSettings:
+            let route = stringParam(request.params, "route")
+            DispatchQueue.main.async {
+                var info: [String: Any] = [:]
+                if let route { info["route"] = route }
+                NotificationCenter.default.post(
+                    name: .openSettingsRequested, object: nil, userInfo: info)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["opened": true])
+        case .stripToggle:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripToggleRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["toggled": true])
+        case .stripFocus:
+            let direction = stringParam(request.params, "direction") ?? "right"
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripFocusRequested,
+                    object: nil,
+                    userInfo: ["direction": direction])
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["focused": direction])
+        case .stripCenter:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripCenterRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["centered": true])
+        case .stripWidth:
+            let mode = stringParam(request.params, "mode") ?? "cycle"
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripWidthRequested,
+                    object: nil,
+                    userInfo: ["mode": mode])
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["mode": mode])
+        case .stripApproval:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripApprovalRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["jumped": true])
+        case .stripStatus:
+            let snapshot: StripStatusSnapshot?
+            if Thread.isMainThread {
+                snapshot = MainActor.assumeIsolated {
+                    StripStatusProvider.current?()
+                }
+            } else {
+                snapshot = DispatchQueue.main.sync {
+                    MainActor.assumeIsolated {
+                        StripStatusProvider.current?()
+                    }
+                }
+            }
+            let result =
+                snapshot?.jsonObject
+                ?? [
+                    "enabled": false,
+                    "columns": [],
+                    "accessibility": false,
+                ]
+            return ControlGateway.GatewayResponse.ok(id: request.id, result: result)
+        case .stripOverview:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripOverviewRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["toggled": true])
+        case .stripReorder:
+            let from = intParam(request.params, "from", default: 0)
+            let to = intParam(request.params, "to", default: 1)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripReorderRequested,
+                    object: nil,
+                    userInfo: ["from": from, "to": to]
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["reordered": true, "from": from, "to": to])
+        case .stripAutochain:
+            let slug = stringParam(request.params, "slug")
+            DispatchQueue.main.async {
+                var info: [String: Any] = [:]
+                if let slug { info["slug"] = slug }
+                NotificationCenter.default.post(
+                    name: .stripAutochainRequested,
+                    object: nil,
+                    userInfo: info
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["autochained": true])
+        case .stripSendDisplay:
+            // The manager is UI-only; the app target owns the call.
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripSendDisplayRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["queued": true])
+        case .stripPin:
+            let col = optionalIntParam(request.params, "columnIndex")
+            DispatchQueue.main.async {
+                var info: [String: Any] = [:]
+                if let col { info["columnIndex"] = col }
+                NotificationCenter.default.post(
+                    name: .stripPinRequested,
+                    object: nil,
+                    userInfo: info
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["pinned": true])
+        case .stripStack:
+            let direction = stringParam(request.params, "direction") ?? "right"
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripStackRequested,
+                    object: nil,
+                    userInfo: ["direction": direction]
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["stacked": direction])
+        case .stripUnstack:
+            let toRight = boolParam(request.params, "toRight") ?? true
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .stripUnstackRequested,
+                    object: nil,
+                    userInfo: ["toRight": toRight]
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["unstacked": true])
+        case .stripTabbed:
+            let col = optionalIntParam(request.params, "columnIndex")
+            DispatchQueue.main.async {
+                var info: [String: Any] = [:]
+                if let col { info["columnIndex"] = col }
+                NotificationCenter.default.post(
+                    name: .stripTabbedRequested,
+                    object: nil,
+                    userInfo: info
+                )
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["tabbed": true])
+        case .stripHud:
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .stripHudRequested, object: nil)
+            }
+            return ControlGateway.GatewayResponse.ok(
+                id: request.id,
+                result: ["toggled": true])
         case .unknown:
             return ControlGateway.GatewayResponse.error(
                 id: request.id, code: "unknown_method", message: request.method)
@@ -302,9 +519,20 @@ final class ControlGatewayServer: @unchecked Sendable {
         return defaultValue
     }
 
+    private func optionalIntParam(_ params: [String: Any]?, _ key: String) -> Int? {
+        if let value = params?[key] as? Int { return value }
+        if let value = params?[key] as? Double { return Int(value) }
+        if let value = params?[key] as? NSNumber { return value.intValue }
+        return nil
+    }
+
+    private func boolParam(_ params: [String: Any]?, _ key: String) -> Bool? {
+        params?[key] as? Bool
+    }
+
     /// The adapter's `captureTail` is async; the responder is sync
     /// (one line in, one line out), so the call is awaited on a detached
-    /// task with a bounded wait — the same seam `HerdrSocketAdapter.listPanes`
+    /// task with a bounded wait: the same seam `HerdrSocketAdapter.listPanes`
     /// uses for its sync protocol method.
     private func captureTail(paneId: String, lines: Int) -> String {
         final class Box: @unchecked Sendable {
@@ -357,27 +585,42 @@ final class ControlGatewayServer: @unchecked Sendable {
         return state.live
     }
 
+    private static func log(_ message: String) {
+        guard getenv("BANTAY_DEBUG") != nil else { return }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let line = "[bantay] [\(pid)] \(message)\n"
+        fputs(line, stderr)
+        fflush(stderr)
+    }
+
     private static func accept(_ connection: NWConnection, server: ControlGatewayServer) {
-        // Request handling can block on subprocess verbs, so the connection
-        // runs on its own queue rather than the main actor.
+        log("gateway: accept starting connection")
         connection.start(queue: DispatchQueue(label: "bantay.control.connection"))
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             data, _, isComplete, error in
+            let byteCount = data?.count ?? 0
+            let errDesc = String(describing: error)
+            log("gateway: receive called, bytes=\(byteCount) err=\(errDesc)")
             if error != nil && !isComplete {
                 connection.cancel()
                 return
             }
             guard let data, let line = ControlGateway.extractLines(from: data).first else {
+                log("gateway: extractLines failed")
                 connection.cancel()
                 return
             }
+            log("gateway: handling line: \(line)")
             guard let response = server.handle(line: line) else {
+                log("gateway: server.handle returned nil")
                 connection.cancel()
                 return
             }
+            log("gateway: sending response: \(response)")
             connection.send(
                 content: Data((response + "\n").utf8),
-                completion: .contentProcessed { _ in
+                completion: .contentProcessed { err in
+                    log("gateway: send completed, err=\(String(describing: err))")
                     connection.cancel()
                 })
         }

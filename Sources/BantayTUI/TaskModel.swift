@@ -70,6 +70,9 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var completedAt: Date?
     public var externalID: String?
+    /// Who actually received the task when quota routing diverted it from
+    /// `assignedAgent`. Nil when delivered as assigned. Shown as `→ agent`.
+    public var routedAgent: String?
 
     public init(
         id: UUID = UUID(),
@@ -84,7 +87,8 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         isCompleted: Bool = false,
         createdAt: Date = Date(),
         completedAt: Date? = nil,
-        externalID: String? = nil
+        externalID: String? = nil,
+        routedAgent: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -99,6 +103,7 @@ public struct BantayTask: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.completedAt = completedAt
         self.externalID = externalID
+        self.routedAgent = routedAgent
     }
 
     /// Computes category dynamically based on completion and dueDate relative to today.

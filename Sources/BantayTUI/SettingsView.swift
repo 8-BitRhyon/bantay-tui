@@ -8,8 +8,9 @@ struct SettingsView: View {
     /// category with matches shows all its (matching) sections.
     private enum Category: String, CaseIterable, Identifiable {
         case general = "General"
-        case appearance = "Appearance"
         case agents = "Agents"
+        case notch = "Notch"
+        case desktop = "Desktop"
         case notifications = "Notifications"
         case integrations = "Integrations"
         case advanced = "Advanced"
@@ -19,11 +20,25 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .general: "gearshape"
-            case .appearance: "paintbrush"
             case .agents: "terminal"
+            case .notch: "laptopcomputer"
+            case .desktop: "rectangle.split.3x1"
             case .notifications: "bell"
             case .integrations: "link"
             case .advanced: "wrench.and.screwdriver"
+            }
+        }
+
+        /// Maps a settings deep-link route to its sidebar category.
+        static func from(route: SettingsRoute) -> Category {
+            switch route {
+            case .general: return .general
+            case .agents, .approvals: return .agents
+            case .notch: return .notch
+            case .desktop: return .desktop
+            case .notifications: return .notifications
+            case .integrations: return .integrations
+            case .advanced: return .advanced
             }
         }
     }
@@ -38,6 +53,7 @@ struct SettingsView: View {
     @State private var autoClearTTL = Int(NotchHUDConfig.shared.autoClearTTL)
     @State private var stickyTTL = Int(NotchHUDConfig.shared.stickyApprovalTTL)
     @State private var launchAtLogin = false
+    @State private var isRefreshingConfig = false
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
     @State private var showIslandWhenIdle = NotchHUDConfig.shared.showIslandWhenIdle
     @State private var muteInTerminal = NotchHUDConfig.shared.muteInTerminal
@@ -45,7 +61,9 @@ struct SettingsView: View {
     @State private var idleStyle = NotchHUDConfig.shared.idleStyle.rawValue
     @State private var idleMaxChips = NotchHUDConfig.shared.clampedIdleMaxChips
     @State private var expandedGroupByState = NotchHUDConfig.shared.expandedGroupByState
-    @State private var hotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
+    @State private var hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
+    @State private var hotkeyDeny = NotchHUDConfig.shared.globalHotkeyDenyEnabled
+    @State private var hotkeySnooze = NotchHUDConfig.shared.globalHotkeySnoozeEnabled
     @State private var keyboardShortcuts = NotchHUDConfig.shared.keyboardShortcuts
     @State private var edgeGlow = NotchHUDConfig.shared.edgeGlowEnabled
     @State private var showElapsed = NotchHUDConfig.shared.showElapsedTime
@@ -55,6 +73,10 @@ struct SettingsView: View {
     @State private var dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
     @State private var notifyOnBudgetThresholds = NotchHUDConfig.shared.notifyOnBudgetThresholds
     @State private var notifyOnHighBurnRate = NotchHUDConfig.shared.notifyOnHighBurnRate
+    @State private var confirmRiskyPrompts = NotchHUDConfig.shared.confirmRiskyPrompts
+    @State private var riskyPatternsText = NotchHUDConfig.shared.riskyPromptPatterns
+        .joined(separator: "\n")
+    @State private var highBurnThresholdTPM = NotchHUDConfig.shared.highBurnThresholdTPM
     @State private var enforceBudgetLimit = NotchHUDConfig.shared.enforceBudgetLimit
     @State private var enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
     @State private var showNotchMascot = NotchHUDConfig.shared.showNotchMascot
@@ -64,7 +86,6 @@ struct SettingsView: View {
     @State private var mascotLevel = NotchHUDConfig.shared.mascotLevel
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
-    @State private var showShelf = NotchHUDConfig.shared.showShelfTab
     @State private var shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
     @State private var shelfKeepDuration = NotchHUDConfig.shared.shelfKeepDuration
     @State private var followMouse = NotchHUDConfig.shared.followMouseScreen
@@ -97,13 +118,34 @@ struct SettingsView: View {
     @State private var showNotesTab = NotchHUDConfig.shared.showNotesTab
     @State private var hoverSensitivity = NotchHUDConfig.shared.hoverSensitivityPreset
     @State private var enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
-    @State private var globalHotkeyEnabled = NotchHUDConfig.shared.globalHotkeyEnabled
+    @State private var quotaBadgeThreshold = NotchHUDConfig.shared.quotaBadgeThresholdPercent
+    @State private var desktopHUDAutoHide = NotchHUDConfig.shared.desktopHUDAutoHideSeconds
     @State private var soundThemePreset = NotchHUDConfig.shared.soundThemePreset
     @State private var approvalSoundName = NotchHUDConfig.shared.approvalSoundName
     @State private var completionSoundName = NotchHUDConfig.shared.completionSoundName
     @State private var errorSoundName = NotchHUDConfig.shared.errorSoundName
+    @State private var workingSoundName = NotchHUDConfig.shared.workingSoundName
     @State private var autoDispatchTasks = NotchHUDConfig.shared.autoDispatchTasks
     @State private var focusTerminalOnDispatch = NotchHUDConfig.shared.focusTerminalOnDispatch
+
+    @State private var stripEnabled = StripConfiguration.load().isEnabled
+    @State private var stripGap = StripConfiguration.load().gap
+    @State private var stripInset = StripConfiguration.load().inset
+    @State private var stripAutoCenter = StripConfiguration.load().autoCenterOnApproval
+    @State private var stripHalos = StripConfiguration.load().statusHalosEnabled
+    @State private var stripHotkeys = StripConfiguration.load().hotkeysEnabled
+    @State private var stripWidthPreset = StripConfiguration.load().defaultWidthPreset
+    @State private var stripSpringOmega = StripConfiguration.load().springOmega
+    @State private var stripDimInactive = StripConfiguration.load().dimInactive
+    @State private var stripChevrons = StripConfiguration.load().showNavigationChevrons
+    @State private var stripIndicator = StripConfiguration.load().showStripIndicator
+    @State private var stripKeepHeight = StripConfiguration.load().keepOriginalHeight
+    @State private var stripFloatFixed = StripConfiguration.load().floatFixedSizeWindows
+    @State private var stripFloatStubborn = StripConfiguration.load().floatStubbornWindows
+    @State private var stripDisabledDisplays = StripConfiguration.load().disabledDisplayKeys
+    @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
+    @State private var openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
+    @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
 
     private static let sectionKeywords: [String: [String]] = [
         "Startup": [
@@ -137,8 +179,26 @@ struct SettingsView: View {
         "Muted sources": [
             "mute", "muted sources", "hide source", "unmute",
         ],
+        "Approval safety": [
+            "approval", "approve", "deny", "risk", "policy", "allow once",
+            "permission prompt", "risky patterns", "second click", "confirm",
+        ],
+        "Desktop HUD": [
+            "desktop hud", "pin desktop", "auto-hide", "bottom dock", "spatial",
+        ],
         "Tasks & Dispatching": [
             "auto-run tasks", "dispatch", "focus terminal or app", "reminders", "apple reminders",
+        ],
+        "Infinite Strip": [
+            "strip", "canvas", "scrolling", "window manager", "tiling", "paperwm",
+            "niri", "chainyourmac", "halos", "columns", "hotkeys", "shortcuts",
+            "approval", "jump", "stack", "unstack", "gap", "inset", "spring",
+        ],
+        "Strip Canvas": [
+            "strip", "gap", "margin", "inset", "width", "columns", "tiling", "canvas",
+        ],
+        "Navigation & Shortcuts": [
+            "hotkey", "shortcut", "h", "l", "f", "r", "c", "a", "vim", "navigation",
         ],
         "Shelf": [
             "shelf tab", "clipboard history", "dropped files", "shelf limit", "expire", "duration",
@@ -186,6 +246,16 @@ struct SettingsView: View {
             return keywords.contains { $0.localizedCaseInsensitiveContains(searchText) }
         }
         return false
+    }
+
+    private var activeRiskyPatternCount: Int {
+        IslandMetrics.normalizedRiskyPatterns(riskyPatternsText).count
+    }
+
+    private func saveRiskyPatterns() {
+        let patterns = IslandMetrics.normalizedRiskyPatterns(riskyPatternsText)
+        guard patterns != NotchHUDConfig.shared.riskyPromptPatterns else { return }
+        NotchHUDConfig.shared.riskyPromptPatterns = patterns
     }
 
     /// Sidebar row: icon + label, styled with BantayTheme tokens.
@@ -291,24 +361,28 @@ struct SettingsView: View {
                 ForEach(Category.allCases) { category in
                     sidebarRow(
                         category,
-                        matches: categoryHasMatch(category))
+                        matches: categoryHasMatch(category)
+                    )
+                    .padding(.horizontal, 8)
                 }
                 Spacer(minLength: 0)
             }
             .frame(width: 195)
-            .padding(.top, 14)
+            .padding(.top, 40)
             .background(BantayTheme.sidebarBackground)
 
             Divider()
                 .overlay(BantayTheme.borderSubtle)
 
             // Right content panel.
-            ScrollView {
+            Group {
                 if searchText.isEmpty || categoryHasMatch(selectedCategory) {
                     Form {
                         settingsSections
                     }
                     .formStyle(.grouped)
+                    .scrollContentBackground(.hidden)
+                    .padding(.top, 16)
                 } else {
                     VStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
@@ -318,20 +392,36 @@ struct SettingsView: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(BantayTheme.textSecondary)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 320)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(maxWidth: .infinity)
-            .background(BantayTheme.deepBackground)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(BantayTheme.panelBackground)
         }
         .frame(width: 760, height: 620)
         .preferredColorScheme(.dark)
-        .background(BantayTheme.deepBackground)
-        .onAppear { refreshFromConfig() }
+        .background(BantayTheme.panelBackground)
+        .onAppear {
+            AppDelegate.dbg("SettingsView.onAppear")
+            refreshFromConfig()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWillOpen)) { _ in
-            // Defer state refresh to avoid modifying state during view update.
+            AppDelegate.dbg("SettingsView: settingsWillOpen received")
             DispatchQueue.main.async { refreshFromConfig() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsRouteRequested)) { note in
+            guard let raw = note.userInfo?["route"] as? String,
+                let route = SettingsRoute(rawValue: raw)
+            else { return }
+            DispatchQueue.main.async { applyRoute(route) }
+        }
+    }
+
+    /// Deep-link navigation for the single shared modal: select the route's
+    /// category and filter to its section via the existing search.
+    private func applyRoute(_ route: SettingsRoute) {
+        selectedCategory = Category.from(route: route)
+        searchText = route.sectionTitle ?? ""
     }
 
     /// Whether any section in a category matches the current search.
@@ -344,11 +434,13 @@ struct SettingsView: View {
     private func sectionTitles(for category: Category) -> [String] {
         switch category {
         case .general:
-            ["Startup", "Quick actions", "Displays"]
-        case .appearance:
-            ["Pill behavior", "Expanded panel", "Displays", "Mascot & Pet Companion"]
+            ["Startup", "Quick actions", "Displays", "Welcome"]
+        case .notch:
+            ["Pill behavior", "Expanded panel", "Mascot & Pet Companion", "Shelf"]
         case .agents:
-            ["Muted sources", "Tasks & Dispatching", "Shelf", "Expanded panel"]
+            ["Approval safety", "Muted sources", "Tasks & Dispatching"]
+        case .desktop:
+            ["Infinite Strip", "Strip Canvas", "Navigation & Shortcuts", "Desktop HUD"]
         case .notifications:
             ["Alerts", "Push notifications (ntfy.sh)", "Quiet hours", "tmux status bar"]
         case .integrations:
@@ -357,7 +449,7 @@ struct SettingsView: View {
                 "Remote ingest (SSH bridge)",
             ]
         case .advanced:
-            ["Capture", "Remote ingest (SSH bridge)", "Quick actions"]
+            ["Capture"]
         }
     }
     /// All settings sections, gated by the selected sidebar category and
@@ -414,6 +506,17 @@ struct SettingsView: View {
                     .onChange(of: dailyBudgetUSD) { newValue in
                         NotchHUDConfig.shared.dailyBudgetUSD = Double(newValue)
                     }
+                    Stepper(
+                        "Go monthly allowance: $\(Int(openCodeGoAllowanceUSD))",
+                        value: $openCodeGoAllowanceUSD, in: 10...1000, step: 10
+                    )
+                    .help(
+                        "Bundled OpenCode Go monthly pool. Bantay meters every Go model against it. Match the figure on your console usage page."
+                    )
+                    .onChange(of: openCodeGoAllowanceUSD) { newValue in
+                        NotchHUDConfig.shared.openCodeGoAllowanceUSD = newValue
+                        Task { await QuotaMonitor.shared.refresh(force: true) }
+                    }
                     Toggle(
                         "Notify at 80% and 100% budget thresholds",
                         isOn: $notifyOnBudgetThresholds
@@ -425,7 +528,7 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.notifyOnBudgetThresholds = newValue
                     }
                     Toggle(
-                        "Alert on high token burn rate (⚡ > 2,500 tpm)",
+                        "Alert on high token burn rate (⚡ > \(highBurnThresholdTPM) tpm)",
                         isOn: $notifyOnHighBurnRate
                     )
                     .help(
@@ -433,6 +536,14 @@ struct SettingsView: View {
                     )
                     .onChange(of: notifyOnHighBurnRate) { newValue in
                         NotchHUDConfig.shared.notifyOnHighBurnRate = newValue
+                    }
+                    Stepper(
+                        "High burn threshold: \(highBurnThresholdTPM) tpm",
+                        value: $highBurnThresholdTPM, in: 500...20_000, step: 250
+                    )
+                    .help("Token rate that counts as a high-burn alert.")
+                    .onChange(of: highBurnThresholdTPM) { newValue in
+                        NotchHUDConfig.shared.highBurnThresholdTPM = newValue
                     }
                     Toggle(
                         "Enforce budget limit (block task dispatch)",
@@ -442,6 +553,70 @@ struct SettingsView: View {
                     .onChange(of: enforceBudgetLimit) { newValue in
                         NotchHUDConfig.shared.enforceBudgetLimit = newValue
                     }
+                }
+            }
+
+            if selectedCategory == .agents && matchesSearch("Approval safety") {
+                Section("Approval safety") {
+                    Text(
+                        "Every approval shows the exact command, file, or question before it runs. Allow Once approves a single request; Deny blocks it. Nothing auto-approves."
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    Text("Risk tiers: High (destructive shell, remote scripts, deploys).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Medium (edits, pushes, permission changes). Low (reads, status checks).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Divider()
+                    Toggle("Ask twice for risky approvals", isOn: $confirmRiskyPrompts)
+                        .help(
+                            "Adds a second Confirm click when the request matches one of the patterns below."
+                        )
+                        .onChange(of: confirmRiskyPrompts) { newValue in
+                            NotchHUDConfig.shared.confirmRiskyPrompts = newValue
+                        }
+                    if confirmRiskyPrompts {
+                        Text("Patterns (one per line, case-insensitive substrings).")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextEditor(text: $riskyPatternsText)
+                            .font(.system(size: 11, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .foregroundColor(.primary)
+                            .frame(minHeight: 72, maxHeight: 110)
+                            .padding(4)
+                            .background(Color.black.opacity(0.16))
+                            .cornerRadius(6)
+                            .onChange(of: riskyPatternsText) { _ in
+                                saveRiskyPatterns()
+                            }
+                        HStack {
+                            Text("\(activeRiskyPatternCount) active")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Reset to defaults") {
+                                riskyPatternsText =
+                                    IslandMetrics.defaultRiskyPromptPatterns
+                                    .joined(separator: "\n")
+                                saveRiskyPatterns()
+                            }
+                            .controlSize(.small)
+                        }
+                        if activeRiskyPatternCount == 0 {
+                            Text("No patterns: risky approvals use one click.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    Button("Open Agents inbox") {
+                        NotificationCenter.default.post(
+                            name: .notchExpandRequested, object: nil)
+                    }
+                    .buttonStyle(.link)
+                    .help("Expand the notch to the Agents inbox.")
                 }
             }
 
@@ -588,13 +763,8 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .agents && matchesSearch("Shelf") {
+            if selectedCategory == .notch && matchesSearch("Shelf") {
                 Section("Shelf") {
-                    Toggle("Shelf tab in expanded view", isOn: $showShelf)
-                        .help("Clipboard history + dropped files next to agents.")
-                        .onChange(of: showShelf) { newValue in
-                            NotchHUDConfig.shared.showShelfTab = newValue
-                        }
                     Stepper("Shelf limit: \(shelfLimit)", value: $shelfLimit, in: 1...50)
                         .onChange(of: shelfLimit) { newValue in
                             NotchHUDConfig.shared.shelfLimit = newValue
@@ -609,6 +779,256 @@ struct SettingsView: View {
                         NotchHUDConfig.shared.shelfKeepDuration = newValue
                         ShelfStore.shared.cleanExpired()
                     }
+                }
+            }
+
+            if selectedCategory == .notch && matchesSearch("Roster") {
+                Section("Roster") {
+                    Toggle(
+                        "Group agents by execution state",
+                        isOn: $expandedGroupByState
+                    )
+                    .help("Groups the roster into Working, Waiting, and Done sections.")
+                    .onChange(of: expandedGroupByState) { newValue in
+                        NotchHUDConfig.shared.expandedGroupByState = newValue
+                    }
+                    Toggle("Show token rate", isOn: $showTokenRate)
+                        .help("Shows tokens per minute in the header.")
+                        .onChange(of: showTokenRate) { newValue in
+                            NotchHUDConfig.shared.showTokenRate = newValue
+                        }
+                }
+            }
+
+            if selectedCategory == .desktop && matchesSearch("Strip Canvas") {
+                Section("Strip Canvas (Infinite Scrolling)") {
+                    Toggle("Enable infinite strip layout", isOn: $stripEnabled)
+                        .help(
+                            "Tiles all active windows side-by-side on an endless horizontal strip without shrinking."
+                        )
+                        .onChange(of: stripEnabled) { newValue in
+                            stripEnabled = newValue
+                            updateStripConfig()
+                            StripWindowManager.shared.toggle(enabled: newValue)
+                        }
+
+                    if !hasAccessibility {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.yellow)
+                            Text("Accessibility permissions required to move and tile windows.")
+                                .font(.system(size: 11))
+                            Spacer()
+                            Button("Grant Access") {
+                                StripWindowRegistry.promptAccessibilityPermission()
+                                hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                        .padding(8)
+                        .background(Color.yellow.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+
+                    Stepper(
+                        "Window gap: \(Int(stripGap)) pt", value: $stripGap, in: 0...48, step: 2
+                    )
+                    .onChange(of: stripGap) { _ in updateStripConfig() }
+
+                    Stepper(
+                        "Edge margins: \(Int(stripInset)) pt", value: $stripInset, in: 0...64,
+                        step: 2
+                    )
+                    .onChange(of: stripInset) { _ in updateStripConfig() }
+
+                    Picker("Default column width", selection: $stripWidthPreset) {
+                        Text("33% (One Third)").tag(1.0 / 3.0)
+                        Text("50% (Half Screen)").tag(0.5)
+                        Text("66% (Two Thirds)").tag(2.0 / 3.0)
+                        Text("100% (Full Display)").tag(1.0)
+                    }
+                    .onChange(of: stripWidthPreset) { _ in updateStripConfig() }
+
+                    Stepper(
+                        "Spring physics omega: \(Int(stripSpringOmega))", value: $stripSpringOmega,
+                        in: 8...26, step: 1
+                    )
+                    .help("Stiffness of the smooth spring animation when scrolling.")
+                    .onChange(of: stripSpringOmega) { _ in updateStripConfig() }
+                }
+            }
+
+            if selectedCategory == .desktop && matchesSearch("Infinite Strip") {
+                Section("Agent Awareness & Halos") {
+                    Toggle("Agent status border halos", isOn: $stripHalos)
+                        .help(
+                            "Displays floating border halos: Amber for approval, Cyan for working, Green for finished."
+                        )
+                        .onChange(of: stripHalos) { _ in updateStripConfig() }
+
+                    Toggle("Auto-jump to agent when approval needed (⌃⌥A)", isOn: $stripAutoCenter)
+                        .help(
+                            "Smoothly spring-scrolls the viewport directly to the blocked agent window."
+                        )
+                        .onChange(of: stripAutoCenter) { _ in updateStripConfig() }
+                }
+            }
+
+            if selectedCategory == .desktop && matchesSearch("Navigation & Shortcuts") {
+                Section("Navigation & Shortcuts (hold ⌃⌥)") {
+                    Toggle("Enable strip global hotkeys", isOn: $stripHotkeys)
+                        .onChange(of: stripHotkeys) { _ in updateStripConfig() }
+                    let conflicts = StripConflictDetector.running()
+                    if !conflicts.isEmpty {
+                        Text(
+                            "Also running: \(conflicts.joined(separator: ", ")). "
+                                + "Two window managers can fight over the same window."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                    ForEach(displayOptions, id: \.key) { display in
+                        Toggle(
+                            "Tile windows on \(display.name)",
+                            isOn: Binding(
+                                get: { !stripDisabledDisplays.contains(display.key) },
+                                set: { enabled in
+                                    if enabled {
+                                        stripDisabledDisplays.removeAll { $0 == display.key }
+                                    } else if !stripDisabledDisplays.contains(display.key) {
+                                        stripDisabledDisplays.append(display.key)
+                                    }
+                                    updateStripConfig()
+                                })
+                        )
+                        .help("Turning this off leaves every window on that display alone.")
+                    }
+                    Toggle("Keep each window's original height", isOn: $stripKeepHeight)
+                        .help("Windows keep the height they opened with, aligned to the top.")
+                        .onChange(of: stripKeepHeight) { _ in updateStripConfig() }
+                    Toggle("Float fixed-size windows", isOn: $stripFloatFixed)
+                        .help("Calculator, palettes, and dialogs stay where the app puts them.")
+                        .onChange(of: stripFloatFixed) { _ in updateStripConfig() }
+                    Toggle("Float windows that refuse resizing", isOn: $stripFloatStubborn)
+                        .help("Stops fighting an app that keeps snapping its window back.")
+                        .onChange(of: stripFloatStubborn) { _ in updateStripConfig() }
+                    Toggle("Show strip indicator while navigating", isOn: $stripIndicator)
+                        .help(
+                            "Hold Control-Option to keep it on screen. Click a tile to jump, drag to reorder."
+                        )
+                        .onChange(of: stripIndicator) { _ in updateStripConfig() }
+                    Toggle("Show edge navigation chevrons", isOn: $stripChevrons)
+                        .help("Show clickable left and right arrows at the screen edges.")
+                        .onChange(of: stripChevrons) { _ in updateStripConfig() }
+                    Toggle("Dim inactive windows", isOn: $stripDimInactive)
+                        .help("Darken windows outside the active column.")
+                        .onChange(of: stripDimInactive) { _ in updateStripConfig() }
+
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                        GridRow {
+                            Text("⌃⌥← / ⌃⌥→ (or H / L)").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Focus previous / next column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥↑ / ⌃⌥↓").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Focus previous / next window in the active column")
+                                .foregroundColor(
+                                    .secondary
+                                )
+                        }
+                        GridRow {
+                            Text("⌃⌥Home / ⌃⌥End").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Jump to the first / last column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥1 … ⌃⌥9").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Jump directly to a column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥⇧← / ⌃⌥⇧→ (or ⇧H / ⇧L)").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Move column left / right").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥R").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Cycle column width (25% → 33% → 50% → 67% → 75% → 100%)")
+                                .foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥F").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Toggle full width / restored width").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥C").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Center current column in display").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥A").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Jump directly to agent requesting approval").foregroundColor(
+                                .secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥M").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Chain every open window into the active project").foregroundColor(
+                                .secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥P").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Pin / unpin the active column").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥⇧T").font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Toggle tabbed stacking for the active column").foregroundColor(
+                                .secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥] / ⌃⌥[").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Stack the active window right / left").foregroundColor(.secondary)
+                        }
+                        GridRow {
+                            Text("⌃⌥⇧] / ⌃⌥⇧[").font(
+                                .system(size: 11, weight: .bold, design: .monospaced))
+                            Text("Pop the active window out right / left").foregroundColor(
+                                .secondary
+                            )
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .padding(.vertical, 4)
+                }
+            }
+
+            if selectedCategory == .desktop && matchesSearch("Desktop HUD") {
+                Section("Desktop HUD") {
+                    Toggle("Pin Desktop HUD open", isOn: $desktopHUDPinned)
+                        .help("Pinned HUD never auto-hides when the pointer leaves.")
+                        .onChange(of: desktopHUDPinned) { newValue in
+                            DesktopHUDController.shared.isPinned = newValue
+                        }
+                    Stepper(
+                        "Auto-hide after \(String(format: "%.1f", desktopHUDAutoHide)) s",
+                        value: $desktopHUDAutoHide, in: 0.5...10, step: 0.5
+                    )
+                    .help("Delay before the HUD hides after the pointer leaves, unless pinned.")
+                    .onChange(of: desktopHUDAutoHide) { newValue in
+                        NotchHUDConfig.shared.desktopHUDAutoHideSeconds = newValue
+                    }
+                    Text(
+                        "Bottom-center window map. Never appears in full screen."
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    Button("Open Desktop HUD") {
+                        DesktopHUDController.shared.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .help("Toggle the Desktop strip HUD (⌃⌥Space).")
                 }
             }
 
@@ -632,6 +1052,8 @@ struct SettingsView: View {
                         .help("Stay visible over full-screen apps; re-anchors after transitions.")
                         .onChange(of: showInFullScreen) { newValue in
                             NotchHUDConfig.shared.showInFullScreen = newValue
+                            AppDelegate.applyFullScreenPolicy(
+                                isFullScreen: FullScreenMonitor.shared.isFullScreen)
                         }
                     Toggle("Avoid menu-bar icons", isOn: $avoidMenuBar)
                         .help(
@@ -690,6 +1112,7 @@ struct SettingsView: View {
                             approvalSoundName = NotchHUDConfig.shared.approvalSoundName
                             completionSoundName = NotchHUDConfig.shared.completionSoundName
                             errorSoundName = NotchHUDConfig.shared.errorSoundName
+                            workingSoundName = NotchHUDConfig.shared.workingSoundName
                         }
                     }
 
@@ -757,6 +1180,28 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Preview error sound")
+                    }
+
+                    HStack {
+                        Picker("Working Sound", selection: $workingSoundName) {
+                            ForEach(
+                                [
+                                    "Glass", "Hero", "Ping", "Pop", "Tink", "Submarine", "Purr",
+                                    "Morse", "Blow", "Funk", "Basso", "Sosumi", "Bottle", "Frog",
+                                ], id: \.self
+                            ) { sound in
+                                Text(sound).tag(sound)
+                            }
+                        }
+                        .onChange(of: workingSoundName) { newValue in
+                            NotchHUDConfig.shared.workingSoundName = newValue
+                            if soundThemePreset != "Custom" { soundThemePreset = "Custom" }
+                        }
+                        Button("▶ Test") {
+                            NSSound(named: workingSoundName)?.play()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Preview working sound")
                     }
 
                     Toggle("Mute while in Terminal", isOn: $muteInTerminal)
@@ -894,7 +1339,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .appearance && matchesSearch("Pill behavior") {
+            if selectedCategory == .notch && matchesSearch("Pill behavior") {
                 Section("Pill behavior") {
                     Stepper("Auto-clear after \(autoClearTTL) s", value: $autoClearTTL, in: 1...30)
                         .onChange(of: autoClearTTL) { newValue in
@@ -910,7 +1355,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .appearance && matchesSearch("Mascot & Pet Companion") {
+            if selectedCategory == .notch && matchesSearch("Mascot & Pet Companion") {
                 Section("Mascot & Pet Companion") {
                     Toggle("Show Mascot on Notch", isOn: $showNotchMascot)
                         .help(
@@ -1023,6 +1468,7 @@ struct SettingsView: View {
                     Toggle("Launch at login", isOn: $launchAtLogin)
                         .help("Runs the app at login; installs the launch agent on first enable.")
                         .onChange(of: launchAtLogin) { newValue in
+                            guard !isRefreshingConfig else { return }
                             if !LaunchAgent.setLaunchAtLogin(newValue) {
                                 launchAtLogin = false
                                 let alert = NSAlert()
@@ -1084,7 +1530,7 @@ struct SettingsView: View {
                 }
             }
 
-            if selectedCategory == .appearance && matchesSearch("Expanded panel") {
+            if selectedCategory == .notch && matchesSearch("Expanded panel") {
                 Section("Expanded panel & Modular tabs") {
                     Toggle("🤖 Agents Roster tab", isOn: $showAgentsTab)
                         .help("Enable or disable AI agent monitoring and roster in notch.")
@@ -1141,27 +1587,43 @@ struct SettingsView: View {
                         .onChange(of: enableQuotaAxiGauge) { newValue in
                             NotchHUDConfig.shared.enableQuotaAxiGauge = newValue
                         }
-                    Toggle("⌨️ Global Hotkey (⌥Space)", isOn: $globalHotkeyEnabled)
-                        .help("Press Option+Space from anywhere to toggle the Dynamic Island.")
-                        .onChange(of: globalHotkeyEnabled) { newValue in
-                            NotchHUDConfig.shared.globalHotkeyEnabled = newValue
-                            GlobalHotkeyManager.shared.registerGlobalHotkey()
-                        }
+                    Stepper(
+                        "Quota badge below \(Int(quotaBadgeThreshold))%",
+                        value: $quotaBadgeThreshold, in: 5...100, step: 5
+                    )
+                    .help(
+                        "Header quota badge appears only when remaining quota drops below this percent."
+                    )
+                    .onChange(of: quotaBadgeThreshold) { newValue in
+                        NotchHUDConfig.shared.quotaBadgeThresholdPercent = newValue
+                    }
                 }
             }
 
             if selectedCategory == .general && matchesSearch("Quick actions") {
                 Section("Quick actions") {
-                    Toggle("Global shortcut ⌥Space", isOn: $hotkeyEnabled)
-                        .help("Show/hide the island from any app.")
-                        .onChange(of: hotkeyEnabled) { newValue in
-                            NotchHUDConfig.shared.globalHotkeyEnabled = newValue
-                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
-                        }
                     Toggle("Keyboard shortcuts in roster", isOn: $keyboardShortcuts)
-                        .help("With the island focused: Y approve, N deny, 1-9 choose.")
+                        .help("With the island focused: Y approve, N deny, R reply, 1-9 choose.")
                         .onChange(of: keyboardShortcuts) { newValue in
                             NotchHUDConfig.shared.keyboardShortcuts = newValue
+                        }
+                    Toggle("Global approve hotkey (⌥Y)", isOn: $hotkeyApprove)
+                        .help("Approve the top approval from any app.")
+                        .onChange(of: hotkeyApprove) { newValue in
+                            NotchHUDConfig.shared.globalHotkeyApproveEnabled = newValue
+                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
+                        }
+                    Toggle("Global deny hotkey (⌥N)", isOn: $hotkeyDeny)
+                        .help("Deny the top approval from any app.")
+                        .onChange(of: hotkeyDeny) { newValue in
+                            NotchHUDConfig.shared.globalHotkeyDenyEnabled = newValue
+                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
+                        }
+                    Toggle("Global snooze hotkey (⌥S)", isOn: $hotkeySnooze)
+                        .help("Snooze the island for 15 minutes from any app.")
+                        .onChange(of: hotkeySnooze) { newValue in
+                            NotchHUDConfig.shared.globalHotkeySnoozeEnabled = newValue
+                            AppDelegate.shared?.updateGlobalHotkeyMonitor()
                         }
                     Toggle("Edge glow on pending approvals", isOn: $edgeGlow)
                         .help("Pulsing amber border when agents need you.")
@@ -1194,20 +1656,87 @@ struct SettingsView: View {
     /// status, hook installs) so a persisted Settings window never shows
     /// stale toggles.
     private func refreshFromConfig() {
+        isRefreshingConfig = true
         captureEnabled = NotchHUDConfig.shared.captureEnabled
         enableAlerts = NotchHUDConfig.shared.enableAgentAlerts
+        confirmRiskyPrompts = NotchHUDConfig.shared.confirmRiskyPrompts
+        riskyPatternsText = NotchHUDConfig.shared.riskyPromptPatterns
+            .joined(separator: "\n")
         notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
         quietHoursEnabled = NotchHUDConfig.shared.quietHoursEnabled
         mutedSources = NotchHUDConfig.shared.mutedSources
         claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled
         herdrPluginInstalled = HerdrPluginInstaller.isInstalled(
             manifestPath: Self.herdrManifestPath)
+        let stripCfg = StripConfiguration.load()
+        stripEnabled = stripCfg.isEnabled
+        stripGap = stripCfg.gap
+        stripInset = stripCfg.inset
+        stripAutoCenter = stripCfg.autoCenterOnApproval
+        stripHalos = stripCfg.statusHalosEnabled
+        stripHotkeys = stripCfg.hotkeysEnabled
+        stripWidthPreset = stripCfg.defaultWidthPreset
+        stripSpringOmega = stripCfg.springOmega
+        stripDimInactive = stripCfg.dimInactive
+        stripChevrons = stripCfg.showNavigationChevrons
+        stripIndicator = stripCfg.showStripIndicator
+        stripKeepHeight = stripCfg.keepOriginalHeight
+        stripFloatFixed = stripCfg.floatFixedSizeWindows
+        stripFloatStubborn = stripCfg.floatStubbornWindows
+        stripDisabledDisplays = stripCfg.disabledDisplayKeys
+        desktopHUDPinned = DesktopHUDController.shared.isPinned
+        openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
+        hotkeyApprove = NotchHUDConfig.shared.globalHotkeyApproveEnabled
+        hotkeyDeny = NotchHUDConfig.shared.globalHotkeyDenyEnabled
+        hotkeySnooze = NotchHUDConfig.shared.globalHotkeySnoozeEnabled
+        quotaBadgeThreshold = NotchHUDConfig.shared.quotaBadgeThresholdPercent
+        desktopHUDAutoHide = NotchHUDConfig.shared.desktopHUDAutoHideSeconds
+        hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
+        DispatchQueue.main.async {
+            isRefreshingConfig = false
+        }
         // `launchctl print` is slow; probe off the main thread so opening
         // Settings can never beachball.
         Task.detached(priority: .utility) {
             let loaded = LaunchAgent.isLoaded()
-            await MainActor.run { launchAtLogin = loaded }
+            await MainActor.run {
+                if launchAtLogin != loaded {
+                    isRefreshingConfig = true
+                    launchAtLogin = loaded
+                    DispatchQueue.main.async {
+                        isRefreshingConfig = false
+                    }
+                }
+            }
         }
+    }
+
+    /// One row per display, keyed by the stable display id.
+    private var displayOptions: [(key: String, name: String)] {
+        NSScreen.screens.map {
+            (key: StripDisplayPlanner.displayKey(for: $0), name: $0.localizedName)
+        }
+    }
+
+    private func updateStripConfig() {
+        var cfg = StripConfiguration.load()
+        cfg.isEnabled = stripEnabled
+        cfg.gap = stripGap
+        cfg.inset = stripInset
+        cfg.autoCenterOnApproval = stripAutoCenter
+        cfg.statusHalosEnabled = stripHalos
+        cfg.hotkeysEnabled = stripHotkeys
+        cfg.defaultWidthPreset = stripWidthPreset
+        cfg.springOmega = stripSpringOmega
+        cfg.dimInactive = stripDimInactive
+        cfg.showNavigationChevrons = stripChevrons
+        cfg.showStripIndicator = stripIndicator
+        cfg.keepOriginalHeight = stripKeepHeight
+        cfg.floatFixedSizeWindows = stripFloatFixed
+        cfg.floatStubbornWindows = stripFloatStubborn
+        cfg.disabledDisplayKeys = stripDisabledDisplays
+        cfg.save()
+        StripWindowManager.shared.config = cfg
     }
 
     private func terminalLabel(_ bundleID: String) -> String {
@@ -1377,7 +1906,9 @@ struct WelcomeView: View {
     /// so probe it off the main thread and default to off until it resolves —
     /// a beachball on the welcome screen is a non-starter.
     @State private var launchAtLogin = false
+    @State private var isRefreshingConfig = false
     @State private var hideAtStartup = NotchHUDConfig.shared.hideAtStartup
+    @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -1393,12 +1924,53 @@ struct WelcomeView: View {
                     + "island feeds live agent events.")
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { newValue in
+                    guard !isRefreshingConfig else { return }
                     LaunchAgent.setLaunchAtLogin(newValue)
                 }
             Toggle("Hide island at startup", isOn: $hideAtStartup)
                 .onChange(of: hideAtStartup) { newValue in
                     NotchHUDConfig.shared.hideAtStartup = newValue
                 }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(
+                        systemName: hasAccessibility
+                            ? "checkmark.circle.fill" : "circle.dashed"
+                    )
+                    .foregroundColor(hasAccessibility ? .green : .secondary)
+                    Text(
+                        hasAccessibility
+                            ? "Accessibility granted"
+                            : "Accessibility (optional)"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if !hasAccessibility {
+                        Button("Grant…") {
+                            StripWindowRegistry.promptAccessibilityPermission()
+                            StripWindowRegistry.openAccessibilitySettings()
+                            hasAccessibility =
+                                StripWindowRegistry.hasAccessibilityPermission()
+                        }
+                        Button("Check again") {
+                            hasAccessibility =
+                                StripWindowRegistry.hasAccessibilityPermission()
+                        }
+                        .buttonStyle(.link)
+                    }
+                }
+                Text(
+                    hasAccessibility
+                        ? "Bantay can focus terminals, type into apps, and move the Desktop strip."
+                        : "Lets Bantay focus terminals, type into apps, and move the Desktop strip. The notch inbox and pane approvals work without it."
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .background(Color.white.opacity(0.05))
+            .cornerRadius(8)
             HStack {
                 Spacer()
                 Button("Done") {
@@ -1415,7 +1987,15 @@ struct WelcomeView: View {
         .onAppear {
             Task.detached(priority: .utility) {
                 let loaded = LaunchAgent.isLoaded()
-                await MainActor.run { launchAtLogin = loaded }
+                await MainActor.run {
+                    if launchAtLogin != loaded {
+                        isRefreshingConfig = true
+                        launchAtLogin = loaded
+                        DispatchQueue.main.async {
+                            isRefreshingConfig = false
+                        }
+                    }
+                }
             }
         }
     }

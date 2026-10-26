@@ -1,77 +1,50 @@
 # Bantay-TUI Development Plan
 
-Roadmap for taking the notch control plane from working prototype to a polished, reliable, distributable macOS app. Tracks against the current architecture ([ARCHITECTURE.md](ARCHITECTURE.md)).
+Roadmap and current state for the Bantay-TUI macOS agentic control plane and workspace manager. Tracks against the architecture defined in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Current State
 
 | Area | Status |
 |---|---|
-| Island | Full control plane: idle agent strip beside the notch (names/dots/summary, density pin, menu-bar clearance) + clean expanded panel (counts header, single-list roster with inline approvals, Recent section, shelf tab) |
-| Approvals | In-UI execution of yes/no, numbered choices, and multi-select — no terminal needed; approval heartbeat kills phantom prompts |
-| Pipeline | herdr push event stream (real-time) + standalone process scan (any CLI, no multiplexer) + event file / SSH remote ingest; usage aggregation from transcripts |
-| Speed & polish | Global `⌥Space`, `Y/N/1-9` roster keys, edge-glow, menu-bar badge, copy actions, snooze presets, elapsed timers, sound preview |
-| Notifications | ntfy.sh push (approvals/failures/completions), tmux status-bar integration, opt-in Notification Center when hidden |
-| Hard problems | Full-screen/spaces re-anchor, menu-bar collision avoidance, display hot-swap ghost re-anchor, terminal-agnostic focus (5-terminal registry) |
-| Logic core | Pure `IslandMetrics`/pipeline functions; `.kilo/LogicCheck.swift` harness L1–L58 (runs without XCTest) + CI XCTest suite |
-| CI | 5 layers / 7 jobs (format → compile → tests → logic checks → release + secrets + pins), all green; `main` protected (PR + checks + signed commits) |
-| Distribution | `scripts/setup.sh` (install / `--uninstall` / `--package` → release zip); Homebrew cask formula ready; notarization pending |
+| Island HUD | Compact idle strip and expanded control panel. Includes state-grouped roster, inline approvals, and tabbed utilities. |
+| Infinite Strip | Horizontal window manager with spring physics, width presets (35% to 100%), overview zoom mode, and status halos. |
+| Approvals | Execution of yes/no prompts, numbered choices, and multi-select lists directly from HUD rows. Backed by the approval heartbeat. |
+| Agent Dispatch | Keystroke automation for GUI IDEs (using `⌘L` chat focusing) and direct terminal shell pasting. |
+| Telemetry Pipeline | Herdr socket stream for instant state updates, standalone CLI process scanner, and SSH tunnel ingest. |
+| Quota & BYOK | SQLite inspection for Codex and Cursor, Claude Code rate limits, OpenRouter keys, and Ollama failover. |
+| Notifications | Push alerts via ntfy.sh, tmux `status-right` summary, and macOS Notification Center alerts when the HUD is hidden. |
+| Reliability Core | Space and full-screen transition re-anchoring, display hot-swap re-centering, auxiliary menu bar clearance clamping, and ordered terminal registry. |
+| Logic Harness | 153-layer pure-logic verification suite (`.kilo/LogicCheck.swift` running without XCTest) plus CI XCTest suite. |
+| CI / Automation | 7-layer validation pipeline in GitHub Actions (Format, Compile, Tests, Logic Checks L1 to L153, Release build, Launch smoke, and Go TUI verification). |
 
 ## Vision
 
-The notch becomes the primary, glanceable surface for agentic work: one glance shows every agent and what it needs; one click approves, prompts, or focuses — from anywhere on the desktop, regardless of terminal or multiplexer.
+The MacBook notch serves as the primary glanceable surface for AI coding workflows. Users can monitor progress, review code diffs, answer permissions, and organize windows without switching context.
 
-## Done (committed history)
+## Completed Milestones
 
-- **Idle UI**: live agent strip beside the notch, three styles, density pin, pure geometry (`IslandMetrics`).
-- **Expanded control plane**: counts header, clean single-list roster with inline approvals (no queue cards), Recent section, no footer chrome.
-- **Inline approvals**: yes/no, numbered choices, multi-select toggle+submit; `ApprovalControls` model; approval data merged from the event stream.
-- **Speed snacks**: global hotkey, keyboard shortcuts, edge-glow, menu-bar badge, copy menus, snooze presets, elapsed timers, sound preview.
-- **Universal detection**: standalone process scan + transcript tailing (no multiplexer required), herdr-managed dedupe.
-- **Real-time push**: herdr `events.subscribe` stream drives the roster; poll loop is a safety net; per-pane wait processes removed.
-- **Notifications**: ntfy.sh push topic, tmux status-bar helper, drop-files-on-notch shelf.
-- **Claude Code hooks**: `PermissionRequest`, `Notification`, `StopFailure` alongside the legacy `PermissionPrompt`.
-- **Roadmap phases**: usage/rate gauge, SSH remote ingest, file shelf + clipboard tab, multi-monitor + floating pill, Homebrew cask packaging.
-- **Hard challenges**: approval heartbeat (phantom prompts), full-screen/space transitions, menu-bar collision avoidance, display hot-swap re-anchor, terminal-agnostic focus.
-- **Beachball fix**: `ps` pipe deadlock (drain-before-wait) + heavy scans off the main actor.
+- **Notch Island HUD**: Compact idle status pill, expanded control plane, state-grouped roster, and inline approval execution.
+- **Infinite Strip Window Manager**: Continuous horizontal canvas window tiling with damped spring physics, zoom overview, drag reordering, and project auto-chaining.
+- **Universal Agent Support**: Keystroke automation for desktop GUI IDEs (Antigravity IDE, Cursor, Windsurf, Zed, VS Code) and terminal agents.
+- **Interactive Peek Drawer**: Docked quick controls (`^C Abort`, `Approve`, `Deny`, live indicator) alongside live log output and git diff stats.
+- **Rich Session Viewer**: Offline browser-based transcript viewer with turn-by-turn cards.
+- **Multiplexer Integration**: Fully wired adapter provider resolving to Herdr, Tmux, or Zellij.
+- **Barrie Task Management**: Natural language task parsing with Apple Reminders EventKit synchronization.
+- **Speed & Usability**: Global `⌥Space` hotkey, keyboard shortcuts (`Y`, `N`, `1` to `9`), edge-glow alerts, and persistent file shelf.
 
-## Remaining work
+## Remaining Roadmap
 
-> **Superseded by [plan 019](plans/019-fresh-roadmap.md)** (independent audit,
-> 2026-08-06). The reframe: the Mac app must become genuinely usable first
-> (borrowing BoringNotch/NotchDrop/DynamicNotchKit polish), then mobile-first
-> is the flagship priority (don't unlock the Mac to see/act), then
-> differentiation from Claude Code's chat (cross-agent timeline, spend
-> guardrails, ambient awareness). Follow plan 019's Phase 0 (make the
-> baseline true — CI is red on the in-flight branch) → A → B → C.
+### M1. Distribution & Packaging
+1. **Tagged Release**: Build official release artifacts, calculate Homebrew Cask SHA256 hashes, and document Gatekeeper bypass.
+2. **Auto-Update Support**: Evaluate Sparkle framework integration for automatic background updates.
+3. **Homebrew Tap**: Publish the cask formula to the tap repository.
 
-### M1 · Distribution hardening (a one-time event, not a phase)
+### M2. Remote Bridges & Mobile Companions
+1. **Headless Web Dashboard**: Optional lightweight local web dashboard mirroring notch state for secondary monitors or mobile browsers.
+2. **Push Bridge Optimization**: Expand ntfy.sh push payload actions to allow direct approval responses from mobile push notifications.
 
-1. **First tagged release (v0.2.0)** — build release zip, fill the cask `sha256`/`url`, trigger the release workflow, document Gatekeeper bypass. Notarization/Developer ID is already scripted in `scripts/setup.sh`.
-2. **Auto-update (Sparkle)** — deferred to plan 019 B4 (only pays off once there's a tagged release + users who can't rebuild).
-3. **Homebrew cask release** — filled by the tag above; verify `brew install --cask` end-to-end.
+## Technical Risks & Mitigations
 
-### M2 · Multiplexer adapters — SHIPPED, but not wired
-
-`TmuxAdapter`, `ZellijAdapter`, `PaneFocusRouter`, `ControlGateway`, `HookSdk`,
-and the Go TUI all exist and are harness-tested. The missing piece is the
-`AdapterProvider` seam plan 017 WI-4 specified but never built: the runtime
-still hardcodes `HerdrSocketAdapter` in three places. See plan 019 Phase 0 /
-A4 (menu-bar mirror also needs the active-adapter concept).
-
-### M3 · Deeper control plane — mostly shipped
-
-Peek panel, project·branch identity, diff meter, and rate signal landed in
-016/017. Open items are tracked in plan 019: multi-agent timeline (A3),
-spend history + budget alerts (A5), session resume (B3), digest (B5).
-
-### M4 · UX & accessibility — mostly shipped
-
-Snooze/mute/quiet hours, a11y labels, and pin persistence are done. Remaining
-polish is tracked under plan 019's Phases A–C.
-
-## Risks
-
-- **herdr protocol drift** — verbs verified against the installed herdr; keep the CLI adapter as fallback and pin the documented verbs in tests. **Plan 019 0.2** adds the missing wire fixture for the push stream (dot vs underscore event spelling).
-- **Notarization friction** — Developer ID + stapling adds CI secrets and approval flows; budget time in M1 / plan 019 A1.
-- **Test gap** — no local XCTest (CommandLineTools only); the harness is the local gate and must stay in sync with the CI XCTest suite. Harness compile lists in `ci.yml` must include every new source file (currently omits `HerdrEventStream.swift`/`AgentAlertNotifier.swift` — CI is red on the in-flight branch; plan 019 0.1).
-- **tmux/zellij verb drift** — version differences in formatting flags; keep the pure classification/geometry logic adapter-agnostic so adapters stay thin.
+- **WindowServer Transitions**: macOS space switches and display reconfigurations can occasionally strand borderless windows. Mitigated by debounced re-anchoring handlers observing display and space notifications.
+- **Accessibility API Permissions**: Native window tiling and keystroke synthesis require macOS Accessibility permissions. Mitigated by checking `AXIsProcessTrusted` and providing inline permission guidance.
+- **Process Verification**: Background CLIs can exit without triggering socket close events. Mitigated by periodic process sampling and the approval heartbeat.

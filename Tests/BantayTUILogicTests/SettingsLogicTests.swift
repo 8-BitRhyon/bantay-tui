@@ -42,5 +42,41 @@
             _ = controller.view
             #expect(controller.isViewLoaded)
         }
+
+        @Test("Settings window can be created, ordered front, and refreshed")
+        @MainActor
+        func settingsWindowLifecycle() {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                backing: .buffered,
+                defer: false)
+            window.title = "Bantay-TUI Settings"
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isMovableByWindowBackground = true
+            let view = SettingsView()
+            window.contentViewController = NSHostingController(rootView: view)
+            window.isReleasedWhenClosed = false
+            window.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: .settingsWillOpen, object: nil)
+            #expect(window.isVisible)
+            window.close()
+        }
+
+        @Test("settings.open route is recognized by ControlGateway")
+        func settingsGatewayRoute() {
+            #expect(ControlGateway.GatewayRoute.isKnown("settings.open"))
+            #expect(ControlGateway.route(method: "settings.open") == .openSettings)
+        }
+
+        @Test("Option+Comma hotkey maps to openSettings action")
+        func settingsHotkeyAction() {
+            let action = IslandMetrics.hotkeyAction(keyCode: 43, modifiers: .option)
+            #expect(action == .openSettings)
+            let withExtra = IslandMetrics.hotkeyAction(
+                keyCode: 43, modifiers: [.option, .shift])
+            #expect(withExtra == nil)
+        }
     }
 #endif

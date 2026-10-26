@@ -98,8 +98,8 @@ private final class SocketReadState: @unchecked Sendable {
 /// Direct herdr socket client: sends one NDJSON request per connection,
 /// returns the first complete response line. Used by the adapter before
 /// falling back to CLI subprocesses.
-final class HerdrSocketClient {
-    private let socketURL: URL
+final class HerdrSocketClient: Sendable {
+    let socketURL: URL
 
     init(socketURL: URL) {
         self.socketURL = socketURL
@@ -118,15 +118,17 @@ final class HerdrSocketClient {
     /// Standalone socket request so callers can run it from a `Task` closure
     /// that captures only `Sendable` values (no `self`), avoiding the
     /// data-race warning a captured client instance would trigger.
-    private static func perform(
-        socketPath: String, method: String, paramsJSON: String, timeout: TimeInterval
+    static func perform(
+        socketPath: String, method: String, paramsJSON: String = "{}",
+        timeout: TimeInterval = 1.0
     ) async -> HerdrSocketProtocol.Response? {
         let id = "req_\(UUID().uuidString.prefix(8))"
         let line = HerdrSocketProtocol.requestLine(
             id: id, method: method, paramsJSON: paramsJSON)
         let endpoint = NWEndpoint.unix(path: socketPath)
         let connection = NWConnection(to: endpoint, using: .tcp)
-        connection.start(queue: .main)
+        let queue = DispatchQueue(label: "bantay.socket.client", qos: .userInitiated)
+        connection.start(queue: queue)
 
         let state = SocketReadState()
         let response = await withCheckedContinuation { continuation in

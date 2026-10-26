@@ -136,5 +136,25 @@
             #expect(hitTarget.contains(NSPoint(x: 105, y: 5)))
             #expect(!hitTarget.contains(NSPoint(x: 105, y: 100)))
         }
+
+        @Test("FileDropContentView hitTest converts coordinates correctly")
+        @MainActor
+        func fileDropContentViewHitTest() {
+            IslandHitTracker.interactiveRect = NSRect(x: 100, y: 0, width: 300, height: 40)
+            let view = FileDropContentView(rootView: Text("Hello"))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 504, height: 560),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false)
+            view.frame = NSRect(x: 0, y: 0, width: 504, height: 560)
+            window.contentView = view
+            // Near top of window in window coords (y = 540) maps to local y = 20:
+            let topHit = view.hitTest(NSPoint(x: 200, y: 540))
+            #expect(topHit != nil)
+            // Far bottom in window coords (y = 50) maps to local y = 510:
+            let bottomMiss = view.hitTest(NSPoint(x: 200, y: 50))
+            #expect(bottomMiss == nil)
+        }
     }
 #endif

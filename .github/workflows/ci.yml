@@ -89,14 +89,15 @@ jobs:
         run: swift build -c release
 
   # ------------------------------------------------------------------
-  # Legacy path (macOS 13, Intel) — best-effort parallel validation of
-  # the macOS 13 floor. Intel runners are queue-starved on GitHub, so
-  # this chain never blocks the fast path above; it still reports as a
-  # required check when it eventually runs.
+  # Intel architecture path (macos-15-intel) - best-effort parallel
+  # validation of x86_64 builds. The macOS 13 runner images are retired,
+  # so this chain runs on the supported Intel image while Package.swift
+  # keeps the macOS 13 deployment target. It never blocks the fast path
+  # above.
   # ------------------------------------------------------------------
   build13:
-    name: Layer 2 · Compile (macOS 13/Intel)
-    runs-on: macos-13
+    name: Layer 2 · Compile (macOS 15 Intel)
+    runs-on: macos-15-intel
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -104,9 +105,9 @@ jobs:
         run: swift build
 
   test13:
-    name: Layer 3 · Tests (macOS 13/Intel)
+    name: Layer 3 · Tests (macOS 15 Intel)
     needs: build13
-    runs-on: macos-13
+    runs-on: macos-15-intel
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -114,9 +115,9 @@ jobs:
         run: swift test
 
   logic13:
-    name: Layer 3.5 · Logic checks (macOS 13/Intel)
+    name: Layer 3.5 · Logic checks (macOS 15 Intel)
     needs: build13
-    runs-on: macos-13
+    runs-on: macos-15-intel
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

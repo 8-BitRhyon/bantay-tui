@@ -14,14 +14,32 @@ private enum FileDropTypes {
 @MainActor
 public enum IslandHitTracker {
     public static var interactiveRect: NSRect = .zero
+
+    /// The island's interactive bounds in screen coordinates. SwiftUI reports
+    /// `.global` frames in window content space with a top-left origin, while
+    /// AppKit windows use a bottom-left screen origin. Returns nil until the
+    /// island has reported a non-empty frame.
+    public static func interactiveScreenRect(in window: NSWindow) -> NSRect? {
+        let rect = interactiveRect
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        return IslandMetrics.screenRect(
+            fromGlobalRect: rect, windowFrame: window.frame)
+    }
+}
+
+/// Hosting view that takes the first mouse click even when its window is a
+/// non-activating panel. The hit-tested view, not its container, decides
+/// whether a click is delivered, so the override must live here.
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// AppKit drag destination hosting SwiftUI island content.
 final class FileDropContentView<Content: View>: NSView {
-    let hosting: NSHostingView<Content>
+    let hosting: FirstMouseHostingView<Content>
 
     init(rootView: Content) {
-        hosting = NSHostingView(rootView: rootView)
+        hosting = FirstMouseHostingView(rootView: rootView)
         super.init(frame: .zero)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hosting)
@@ -46,11 +64,20 @@ final class FileDropContentView<Content: View>: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// The island is a non-activating panel: without this, the first click
+    /// on a notification button only brings the panel forward and the button
+    /// never fires. Accepting the first mouse makes controls work while the
+    /// terminal or browser stays frontmost.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let activeRect = MainActor.assumeIsolated { IslandHitTracker.interactiveRect }
         guard activeRect != .zero else { return super.hitTest(point) }
+        let localPoint = convert(point, from: superview)
         let hitTarget = activeRect.insetBy(dx: -12, dy: -12)
-        guard hitTarget.contains(point) else { return nil }
+        guard hitTarget.contains(localPoint) else { return nil }
         return super.hitTest(point)
     }
 

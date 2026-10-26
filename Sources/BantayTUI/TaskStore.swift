@@ -235,6 +235,8 @@ public final class TaskStore: ObservableObject {
     }
 
     /// Dispatches an agent task to its target process or multiplexer pane.
+    /// A failed delivery (no Accessibility, unreachable app, dead pane)
+    /// marks the task blocked instead of lying about dispatch.
     public func dispatchTask(_ taskID: UUID) {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
         var task = tasks[index]
@@ -252,22 +254,53 @@ public final class TaskStore: ObservableObject {
             return
         }
 
-        let linkedPane = TaskDispatcher.shared.dispatch(task: task)
+        let result = TaskDispatcher.shared.dispatch(task: task)
+        guard let linkedPane = result.paneID else {
+            task.executionState = .blocked
+            task.linkedPaneID = nil
+            tasks[index] = task
+            save()
+            return
+        }
         task.executionState = .dispatched
         task.linkedPaneID = linkedPane
+        if let actual = result.actualAgent,
+            let assigned = task.assignedAgent,
+            actual.lowercased() != assigned.lowercased()
+        {
+            task.routedAgent = actual
+        } else {
+            task.routedAgent = nil
+        }
         task.dispatchedAt = Date()
         tasks[index] = task
         save()
     }
 
-    /// Updates task states matching an incoming agent event.
+    /// Updates task states matching an incoming agent event. Pane-linked
+    /// tasks transition only on their own pane's events (prefix-aware, so
+    /// `standalone:antigravity` matches `standalone:antigravity:Portfolio`);
+    /// source-name matching applies only to pane-less tasks. One agent's
+    /// completion must never flip every task carrying its name.
     func updateTaskState(paneId: String?, source: String, kind: AgentEventKind) {
         var changed = false
         for index in 0..<tasks.count {
             var task = tasks[index]
             guard !task.isCompleted else { continue }
-            let matchesPane = paneId != nil && task.linkedPaneID == paneId
-            let matchesSource = task.assignedAgent?.lowercased() == source.lowercased()
+            let matchesPane =
+                paneId != nil && task.linkedPaneID != nil
+                && TaskDispatcher.paneMatches(
+                    linked: task.linkedPaneID!, paneId: paneId!)
+            // Standalone and app targets have no multiplexer pane, so their
+            // events arrive with a nil paneId. Source matching must still
+            // work for those links — but never for a real pane link, where
+            // one agent's event would flip every task carrying its name.
+            let standaloneLink =
+                task.linkedPaneID?.hasPrefix("standalone:") == true
+                || task.linkedPaneID?.hasPrefix("app:") == true
+            let matchesSource =
+                (task.linkedPaneID == nil || standaloneLink)
+                && task.assignedAgent?.lowercased() == source.lowercased()
             guard matchesPane || matchesSource else { continue }
 
             let newState: TaskExecutionState
@@ -312,12 +345,17 @@ public final class TaskStore: ObservableObject {
             let extID = task.externalID
             let isDone = task.isCompleted
             Task {
-                let matching = RemindersProvider.shared.reminders.first(where: {
-                    if let extID, $0.calendarItemIdentifier == extID { return true }
-                    return $0.title == targetTitle
-                })
-                if let matching, isDone {
-                    await RemindersProvider.shared.complete(matching)
+                if isDone {
+                    let matching = RemindersProvider.shared.reminders.first(where: {
+                        if let extID, $0.calendarItemIdentifier == extID { return true }
+                        return $0.title == targetTitle
+                    })
+                    if let matching {
+                        await RemindersProvider.shared.complete(matching)
+                    }
+                } else {
+                    await RemindersProvider.shared.reopen(
+                        matchingTitle: targetTitle, externalID: extID)
                 }
             }
         }
@@ -358,6 +396,43 @@ public final class TaskStore: ObservableObject {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
         tasks[index].assignedAgent = agent
         save()
+    }
+
+    /// Test seam: force an execution state and pane link (mirrors dispatch).
+    func overrideExecutionForTesting(
+        taskID: UUID, state: TaskExecutionState, paneID: String?
+    ) {
+        guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
+        tasks[index].executionState = state
+        tasks[index].linkedPaneID = paneID
+    }
+
+    /// Resets tasks stuck in flight on dead panes. A task linked to a pane
+    /// that no longer exists (closed terminal, dead multiplexer) can never
+    /// transition again — without this it reads "working" forever. Returns
+    /// the reset count. Unlinked tasks are untouched: their agent may simply
+    /// not be running yet. Standalone and app targets (`standalone:`,
+    /// `app:`) are not panes and never count as orphaned.
+    @discardableResult
+    public func resetOrphanedTasks(livePaneIDs: Set<String>) -> Int {
+        var reset = 0
+        for index in 0..<tasks.count {
+            var task = tasks[index]
+            guard !task.isCompleted,
+                task.executionState == .working || task.executionState == .blocked,
+                let pane = task.linkedPaneID, !pane.isEmpty,
+                !pane.hasPrefix("standalone:"), !pane.hasPrefix("app:"),
+                !livePaneIDs.contains(pane)
+            else {
+                continue
+            }
+            task.executionState = .pending
+            task.linkedPaneID = nil
+            tasks[index] = task
+            reset += 1
+        }
+        if reset > 0 { save() }
+        return reset
     }
 
     /// Single-pass categorized tasks struct for high-performance rendering.

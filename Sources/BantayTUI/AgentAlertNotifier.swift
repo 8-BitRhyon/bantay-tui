@@ -72,13 +72,18 @@ enum AgentAlertNotifier {
     }
 
     /// Builds the ntfy Actions header string for actionable remote notification buttons.
+    /// Multi-select prompts get no buttons: ntfy http buttons fire once and
+    /// cannot toggle, so a tap would partial-answer a pick-several question.
+    /// Questions get up to three numbered choices and never Deny; only plain
+    /// permissions keep Approve plus Deny.
     static func ntfyActions(
         paneId: String?,
         choices: [String]?,
         callbackBase: String,
-        token: String
+        token: String,
+        isMulti: Bool = false
     ) -> String? {
-        guard let paneId, !paneId.isEmpty else { return nil }
+        guard let paneId, !paneId.isEmpty, !isMulti else { return nil }
         let base = callbackBase.hasSuffix("/") ? String(callbackBase.dropLast()) : callbackBase
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~"))
         guard
@@ -91,16 +96,15 @@ enum AgentAlertNotifier {
         var actions: [String] = []
 
         if let choices, !choices.isEmpty {
-            // Show up to 2 numbered choices plus Deny (keeps <= 3 action buttons for ntfy mobile)
-            for (idx, choiceText) in choices.prefix(2).enumerated() {
+            // Questions: up to 3 numbered choices, no Deny. Denying a
+            // question answers nothing and dismisses it.
+            for (idx, choiceText) in choices.prefix(3).enumerated() {
                 let choiceNum = idx + 1
                 let label = "Choice \(choiceNum): \(choiceText.prefix(20))"
                 let url =
                     "\(base)/choice?token=\(encodedToken)&pane=\(encodedPane)&choice=\(choiceNum)"
                 actions.append("action=http, label=\(label), url=\(url), method=POST, clear=true")
             }
-            let denyURL = "\(base)/deny?token=\(encodedToken)&pane=\(encodedPane)"
-            actions.append("action=http, label=Deny, url=\(denyURL), method=POST, clear=true")
         } else {
             let approveURL = "\(base)/approve?token=\(encodedToken)&pane=\(encodedPane)"
             let denyURL = "\(base)/deny?token=\(encodedToken)&pane=\(encodedPane)"
@@ -132,7 +136,8 @@ enum AgentAlertNotifier {
         choices: [String]? = nil,
         cwd: String? = nil,
         sessionPath: String? = nil,
-        roster: [AgentSnapshot]? = nil
+        roster: [AgentSnapshot]? = nil,
+        isMulti: Bool = false
     ) {
         // Only kinds worth a phone ping — progress/started/idle would turn
         // a busy agent into a notification stream.
@@ -145,7 +150,7 @@ enum AgentAlertNotifier {
         if kind == .accessRequest || kind == .waiting {
             ApprovalNotificationController.shared.postApproval(
                 source: source, paneId: paneId, title: title, choices: choices,
-                cwd: cwd, sessionPath: sessionPath)
+                cwd: cwd, sessionPath: sessionPath, isMulti: isMulti)
         } else if kind == .completed {
             ApprovalNotificationController.shared.postCompletion(
                 source: source, paneId: paneId, title: title, cwd: cwd,
@@ -174,7 +179,8 @@ enum AgentAlertNotifier {
             let callbackBase = NotchHUDConfig.shared.effectiveCallbackURL
             let token = NotchHUDConfig.shared.ingestToken
             if let actionsHeader = ntfyActions(
-                paneId: paneId, choices: choices, callbackBase: callbackBase, token: token
+                paneId: paneId, choices: choices, callbackBase: callbackBase, token: token,
+                isMulti: isMulti
             ) {
                 request.setValue(actionsHeader, forHTTPHeaderField: "Actions")
             }

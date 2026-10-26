@@ -11,6 +11,7 @@ struct UsageSnapshot: Equatable, Sendable {
     var cacheWriteTokens: Int = 0
     var costUSD: Double = 0
     var costBySource: [String: Double] = [:]
+    var tokensBySource: [String: Int] = [:]
 
     /// Legacy alias for the cache-write bucket (transcript parsers use
     /// "cache creation" terminology).
@@ -50,6 +51,21 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
     public var totalTokens: Int
     public var costUSD: Double
     public var status: String
+    /// Project directory name, git branch, transcript path, and working
+    /// directory captured at completion. Nil on rows recorded by older
+    /// builds; the history view degrades to title-only for those.
+    public var project: String?
+    public var branch: String?
+    public var sessionPath: String?
+    public var cwd: String?
+    /// True when tokens/cost are this session's own delta. Rows recorded
+    /// before the delta fix hold the lifetime cumulative total instead and
+    /// must be labeled and summed separately.
+    public var isDelta: Bool
+    /// True when the numbers are a rolling-window estimate, not a lifetime
+    /// delta: the source has no metering evidence (no ledger, no transcript
+    /// files). Shown plainly with a "recent" caption, never summed.
+    public var isWindowEstimate: Bool
 
     public init(
         id: String = UUID().uuidString,
@@ -59,7 +75,13 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         durationSeconds: TimeInterval = 0,
         totalTokens: Int = 0,
         costUSD: Double = 0.0,
-        status: String = "Completed"
+        status: String = "Completed",
+        project: String? = nil,
+        branch: String? = nil,
+        sessionPath: String? = nil,
+        cwd: String? = nil,
+        isDelta: Bool = false,
+        isWindowEstimate: Bool = false
     ) {
         self.id = id
         self.agentName = agentName
@@ -69,6 +91,73 @@ public struct AgentSessionRecord: Identifiable, Equatable, Sendable, Codable {
         self.totalTokens = totalTokens
         self.costUSD = costUSD
         self.status = status
+        self.project = project
+        self.branch = branch
+        self.sessionPath = sessionPath
+        self.cwd = cwd
+        self.isDelta = isDelta
+        self.isWindowEstimate = isWindowEstimate
+    }
+
+    public var isFailed: Bool { status == "Failed" }
+
+    /// Tolerant decoding: every field added after the first release decodes
+    /// with a safe default instead of throwing. A thrown error fails the
+    /// WHOLE array decode and silently wipes stored history on upgrade.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        agentName = try c.decode(String.self, forKey: .agentName)
+        title = try c.decode(String.self, forKey: .title)
+        startTime = try c.decode(Date.self, forKey: .startTime)
+        durationSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .durationSeconds) ?? 0
+        totalTokens = try c.decodeIfPresent(Int.self, forKey: .totalTokens) ?? 0
+        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD) ?? 0
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "Completed"
+        project = try c.decodeIfPresent(String.self, forKey: .project)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        sessionPath = try c.decodeIfPresent(String.self, forKey: .sessionPath)
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
+        isDelta = try c.decodeIfPresent(Bool.self, forKey: .isDelta) ?? false
+        isWindowEstimate = try c.decodeIfPresent(Bool.self, forKey: .isWindowEstimate) ?? false
+    }
+}
+
+/// Summary math for the sessions tab. Legacy rows (pre-delta lifetime
+/// totals) are excluded from token/cost sums — adding them would multiply
+/// one lifetime total by the row count. Reported separately so the header
+/// can say what it left out.
+public enum SessionHistorySummary: Sendable {
+    public struct Totals: Equatable, Sendable {
+        public let count: Int
+        public let tokens: Int
+        public let cost: Double
+        public let failures: Int
+        public let legacyExcluded: Int
+    }
+
+    public static func summarize(_ sessions: [AgentSessionRecord]) -> Totals {
+        let delta = sessions.filter(\.isDelta)
+        return Totals(
+            count: sessions.count,
+            tokens: delta.reduce(0) { $0 + $1.totalTokens },
+            cost: delta.reduce(0) { $0 + $1.costUSD },
+            failures: sessions.filter(\.isFailed).count,
+            legacyExcluded: sessions.count - delta.count)
+    }
+}
+
+/// Per-session usage delta. The live usage snapshot is cumulative per
+/// source, so a finished session records current-minus-baseline (floored at
+/// zero), never the lifetime total. Baselines are captured when the session
+/// starts working.
+public enum SessionUsageDelta: Sendable {
+    public static func tokens(current: Int, baseline: Int) -> Int {
+        max(0, current - baseline)
+    }
+
+    public static func cost(current: Double, baseline: Double) -> Double {
+        max(0, current - baseline)
     }
 }
 
@@ -86,30 +175,52 @@ public final class SessionHistoryStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: "bantay_session_history"),
             let decoded = try? JSONDecoder().decode([AgentSessionRecord].self, from: data)
         {
-            sessions = decoded
+            // Remove the three demo rows that older builds seeded on first
+            // launch. Real sessions are recorded from live completion events.
+            let demo = Set([
+                "Apple Reminders & Antigravity detection",
+                "Settings window crash fix",
+                "Unit test harness suite L64",
+            ])
+            sessions = decoded.filter { !demo.contains($0.title) }
+            // One-time migration: every stored row predates reliable
+            // per-session deltas (no baselines were ever captured, and the
+            // first delta build stamped lifetime totals as deltas). Mark
+            // them all legacy so the summary excludes them from sums.
+            if !UserDefaults.standard.bool(forKey: "bantay_session_delta_migrated") {
+                sessions = sessions.map { row in
+                    var legacy = row
+                    legacy.isDelta = false
+                    return legacy
+                }
+                UserDefaults.standard.set(true, forKey: "bantay_session_delta_migrated")
+                save()
+            }
         } else {
-            sessions = [
-                AgentSessionRecord(
-                    agentName: "antigravity", title: "Apple Reminders & Antigravity detection",
-                    startTime: Date().addingTimeInterval(-1800), durationSeconds: 320,
-                    totalTokens: 14500, costUSD: 0.18, status: "Completed"),
-                AgentSessionRecord(
-                    agentName: "claude", title: "Settings window crash fix",
-                    startTime: Date().addingTimeInterval(-3600), durationSeconds: 410,
-                    totalTokens: 28900, costUSD: 0.42, status: "Completed"),
-                AgentSessionRecord(
-                    agentName: "codex", title: "Unit test harness suite L64",
-                    startTime: Date().addingTimeInterval(-7200), durationSeconds: 190,
-                    totalTokens: 8200, costUSD: 0.12, status: "Completed"),
-            ]
+            sessions = []
         }
     }
 
     public func addSession(_ session: AgentSessionRecord) {
+        guard !sessions.contains(where: { $0.id == session.id }) else { return }
         sessions.insert(session, at: 0)
         if sessions.count > 50 {
             sessions = Array(sessions.prefix(50))
         }
+        save()
+    }
+
+    /// Drop rows recorded before per-session tracking. Their numbers are
+    /// lifetime totals, not their own spend; deleting them loses no real
+    /// per-session data.
+    public func clearLegacy() {
+        sessions.removeAll { !$0.isDelta }
+        save()
+    }
+
+    /// Drop every recorded session, including real deltas.
+    public func clearAll() {
+        sessions = []
         save()
     }
 
@@ -206,8 +317,62 @@ enum UsageParser {
             total.outputTokens += part.outputTokens
             total.cacheReadTokens += part.cacheReadTokens
             total.cacheCreationTokens += part.cacheCreationTokens
+            total.reasoningTokens += part.reasoningTokens
             total.costUSD += part.costUSD
         }
+    }
+
+    /// Stable identity for one metered turn. One API turn fans out to N
+    /// streamed lines repeating identical usage; summing them raw counts
+    /// every turn N times (Claude streamed blocks, subagent double-logs).
+    /// Nil when the line carries no identity — unidentified lines are always
+    /// counted, never silently dropped.
+    static func messageID(jsonLine: String) -> String? {
+        guard let data = jsonLine.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let message = obj["message"] as? [String: Any]
+        let mid =
+            (message?["id"] as? String) ?? (obj["messageId"] as? String)
+            ?? (obj["message_id"] as? String)
+        if let rid = (obj["requestId"] as? String) ?? (obj["request_id"] as? String),
+            !rid.isEmpty
+        {
+            return "\(mid ?? "?"):\(rid)"
+        }
+        if let uuid = (obj["uuid"] as? String) ?? (obj["id"] as? String),
+            !uuid.isEmpty
+        {
+            if let mid, !mid.isEmpty { return "\(mid):\(uuid)" }
+            return uuid
+        }
+        if let mid, !mid.isEmpty { return mid }
+        return nil
+    }
+
+    /// Sum usage while counting each metered turn once. Returns the snapshot
+    /// plus the updated identity set, so incremental tailing stays exact
+    /// across polls. `parseAll` keeps its raw-sum semantics for callers that
+    /// already operate on deduped lines.
+    static func parseAllDeduped(
+        lines: [String], seen: Set<String> = []
+    ) -> (usage: UsageSnapshot, seen: Set<String>) {
+        var next = seen
+        var total = UsageSnapshot.zero
+        for line in lines {
+            if let id = messageID(jsonLine: line) {
+                guard !next.contains(id) else { continue }
+                next.insert(id)
+            }
+            guard let part = parse(jsonLine: line) else { continue }
+            total.inputTokens += part.inputTokens
+            total.outputTokens += part.outputTokens
+            total.cacheReadTokens += part.cacheReadTokens
+            total.cacheCreationTokens += part.cacheCreationTokens
+            total.reasoningTokens += part.reasoningTokens
+            total.costUSD += part.costUSD
+        }
+        return (total, next)
     }
 
     /// Parses ISO-8601 timestamps from transcript lines.
@@ -233,13 +398,16 @@ enum UsageParser {
         return parseISODate(raw)
     }
 
+    /// ISO-8601 with and without fractional seconds. Some Foundation
+    /// versions require the fractional style to actually see a fraction,
+    /// so keep both as value-type parsers (no per-call formatter).
+    private static let isoStyleFractional = Date.ISO8601FormatStyle(
+        includingFractionalSeconds: true)
+    private static let isoStylePlain = Date.ISO8601FormatStyle()
+
     private static func parseISODate(_ raw: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: raw) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
+        (try? Self.isoStyleFractional.parse(raw))
+            ?? (try? Self.isoStylePlain.parse(raw))
     }
 
     private static func int(_ value: Any?) -> Int {
@@ -261,9 +429,13 @@ enum UsageTracker {
             total.outputTokens += part.outputTokens
             total.cacheReadTokens += part.cacheReadTokens
             total.cacheCreationTokens += part.cacheCreationTokens
+            total.reasoningTokens += part.reasoningTokens
             total.costUSD += part.costUSD
             for (source, cost) in part.costBySource {
                 total.costBySource[source, default: 0] += cost
+            }
+            for (source, tokens) in part.tokensBySource {
+                total.tokensBySource[source, default: 0] += tokens
             }
         }
     }
@@ -309,18 +481,11 @@ enum UsageTracker {
         return .normal
     }
 
-    /// Compact token count: "1.2k", "3.4m", "5.6b".
+    /// Compact token count. Delegates to the single formatter so session
+    /// rows, spend headers, and digests never show divergent suffixes
+    /// (`3.4m` vs `3.4M`).
     static func compactTokens(_ count: Int) -> String {
-        if count >= 1_000_000_000 {
-            return String(format: "%.1fb", Double(count) / 1_000_000_000)
-        }
-        if count >= 1_000_000 {
-            return String(format: "%.1fm", Double(count) / 1_000_000)
-        }
-        if count >= 1_000 {
-            return String(format: "%.1fk", Double(count) / 1_000)
-        }
-        return "\(count)"
+        IslandMetrics.compactTokenCount(count)
     }
 
     /// Sum usage across the newest transcript of each agent family.
@@ -329,29 +494,49 @@ enum UsageTracker {
     }
 
     /// Reads usage and token burn rate over recent transcripts in a single pass.
+    /// Transcript usage is attributed per agent family so session records and
+    /// the spend ledger can break tokens and cost down by source.
     static func latestUsageAndRate(
         home: String, names: [String], now: Date, window: TimeInterval
     ) -> (usage: UsageSnapshot, rate: UsageRate) {
-        let roots: Set<String> = Set(
-            names.flatMap { AgentDetector.transcriptSearchPaths(home: home, name: $0) })
+        let lowered = names.map { $0.lowercased() }
+        var rootOwners: [String: [String]] = [:]
+        for name in lowered {
+            for root in AgentDetector.transcriptSearchPaths(home: home, name: name) {
+                rootOwners[root, default: []].append(name)
+            }
+        }
         var combined = UsageSnapshot.zero
         var rateLines: [String] = []
-        for root in roots {
+        for (root, owners) in rootOwners {
             guard let lines = UsageTracker.tailLines(root: root, maxBytes: 32_000) else {
                 continue
             }
             let usage = UsageParser.parseAll(lines: lines)
-            if usage.totalTokens > 0 || usage.costUSD > 0 {
+            // Ledger-covered sources are already counted by their SQLite
+            // snapshot. Tail their log for burn-rate timestamps only.
+            let ledgerOnly = owners.allSatisfy { ledgerCoveredSources.contains($0) }
+            if !ledgerOnly, usage.totalTokens > 0 || usage.costUSD > 0 {
                 combined = aggregate([combined, usage])
+                for owner in owners {
+                    combined.tokensBySource[owner, default: 0] += usage.totalTokens
+                    combined.costBySource[owner, default: 0] += usage.costUSD
+                }
             }
             rateLines.append(contentsOf: lines)
         }
-        if names.contains(where: { $0.lowercased() == "codex" }),
+        if lowered.contains("opencode"),
+            let opencodeSnap = OpenCodeUsageAdapter.snapshot(
+                since: 24 * 3600, now: now, home: home)
+        {
+            combined = aggregate([combined, opencodeSnap])
+        }
+        if lowered.contains("codex"),
             let codexSnap = CodexUsageAdapter.snapshot(since: 24 * 3600, now: now, home: home)
         {
             combined = aggregate([combined, codexSnap])
         }
-        if names.contains(where: { $0.lowercased() == "cursor" }),
+        if lowered.contains("cursor"),
             let cursorSnap = CursorUsageAdapter.snapshot(now: now, home: home)
         {
             combined = aggregate([combined, cursorSnap])
@@ -372,14 +557,14 @@ enum UsageTracker {
         }
         var best: (url: URL, date: Date)?
         for case let url as URL in enumerator {
-            let ext = url.pathExtension.lowercased()
-            let name = url.lastPathComponent.lowercased()
-            guard
+            if AgentDetector.isNonTranscriptTree(url.path) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard isTranscriptFile(url),
                 let values = try? url.resourceValues(
                     forKeys: [.contentModificationDateKey, .isRegularFileKey]),
-                values.isRegularFile == true,
-                ext == "jsonl" || ext == "log" || ext == "json" || ext == "txt"
-                    || name.contains("log")
+                values.isRegularFile == true
             else {
                 continue
             }
@@ -397,6 +582,157 @@ enum UsageTracker {
         let data = handle.readDataToEndOfFile()
         let text = String(decoding: data, as: UTF8.self)
         return text.split(whereSeparator: \.isNewline).map(String.init)
+    }
+
+    /// One file filter for every transcript scan: regular JSONL/log/JSON/TXT
+    /// files or log-named files. Shared so the tail reader, the change
+    /// fingerprint, and the lifetime accrual never disagree on coverage.
+    static func isTranscriptFile(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        let name = url.lastPathComponent.lowercased()
+        return ext == "jsonl" || ext == "log" || ext == "json" || ext == "txt"
+            || name.contains("log")
+    }
+
+    /// Per-file (path, size, mtime) fingerprint of every candidate transcript
+    /// file under `root`. Root-dir mtime alone goes stale: the directory
+    /// entry rarely changes when a nested file grows, so new usage would
+    /// never surface. Staleness must be per file.
+    static func transcriptFingerprint(root: String) -> String {
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: URL(fileURLWithPath: root, isDirectory: true),
+                includingPropertiesForKeys: [
+                    .contentModificationDateKey, .isRegularFileKey, .fileSizeKey,
+                ],
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            return "missing"
+        }
+        var parts: [String] = []
+        for case let url as URL in enumerator {
+            guard isTranscriptFile(url),
+                let values = try? url.resourceValues(
+                    forKeys: [
+                        .contentModificationDateKey, .isRegularFileKey, .fileSizeKey,
+                    ]),
+                values.isRegularFile == true,
+                let size = values.fileSize,
+                let date = values.contentModificationDate
+            else {
+                continue
+            }
+            parts.append("\(url.path)=\(size)@\(Int(date.timeIntervalSince1970))")
+        }
+        return parts.sorted().joined(separator: "|")
+    }
+
+    /// Incremental lifetime accrual state. Byte offsets plus the metered-turn
+    /// identity set make re-reads exact: only appended bytes parse, and each
+    /// turn counts once no matter how often its lines repeat.
+    struct LifetimeAccrualState: Sendable {
+        var sizes: [String: UInt64] = [:]
+        var seen: Set<String> = []
+        var tokensBySource: [String: Int] = [:]
+        var costBySource: [String: Double] = [:]
+        /// Sources with metering evidence: files read, or a ledger snapshot.
+        /// Only covered sources get true per-session deltas; the rest fall
+        /// back to rolling-window values, honestly labeled downstream.
+        var covered: Set<String> = []
+    }
+
+    /// Sources whose lifetime counters come from an authoritative ledger,
+    /// never from transcript tails. Parsing tails for them would double
+    /// count every token.
+    static let ledgerCoveredSources: Set<String> = ["opencode"]
+
+    /// Accrue lifetime per-source usage from transcript files. Reads only
+    /// bytes appended since the last call (full file on first sight, capped
+    /// per file), dedupes metered turns, attributes to every owning source.
+    /// Pure apart from the filesystem reads; the caller keeps `state`.
+    static func accrueLifetime(
+        home: String, names: [String], state: LifetimeAccrualState,
+        maxFirstReadBytes: Int = 1_048_576
+    ) -> LifetimeAccrualState {
+        var next = state
+        let lowered = names.map { $0.lowercased() }
+        var rootOwners: [String: [String]] = [:]
+        for name in lowered where !ledgerCoveredSources.contains(name) {
+            for root in AgentDetector.transcriptSearchPaths(home: home, name: name) {
+                rootOwners[root, default: []].append(name)
+            }
+        }
+        for (root, owners) in rootOwners {
+            guard
+                let enumerator = FileManager.default.enumerator(
+                    at: URL(fileURLWithPath: root, isDirectory: true),
+                    includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                )
+            else {
+                continue
+            }
+            var sawFile = false
+            for case let url as URL in enumerator {
+                guard isTranscriptFile(url),
+                    let values = try? url.resourceValues(
+                        forKeys: [.isRegularFileKey, .fileSizeKey]),
+                    values.isRegularFile == true,
+                    let size = values.fileSize, size > 0
+                else {
+                    continue
+                }
+                let path = url.path
+                let consumed = next.sizes[path] ?? 0
+                let sizeU = UInt64(size)
+                sawFile = true
+                let start: UInt64
+                if consumed > sizeU {
+                    // Rotated or truncated: re-read from zero. Message ids
+                    // still dedupe, so only unidentified lines can recount.
+                    start = 0
+                } else if consumed == 0, sizeU > UInt64(maxFirstReadBytes) {
+                    // First sight of a huge file: skip the ancient head.
+                    // Lifetime starts slightly short rather than stalling poll.
+                    start = sizeU - UInt64(maxFirstReadBytes)
+                } else {
+                    start = consumed
+                }
+                guard start < sizeU,
+                    let handle = try? FileHandle(forReadingFrom: url)
+                else {
+                    next.sizes[path] = sizeU
+                    continue
+                }
+                defer { try? handle.close() }
+                try? handle.seek(toOffset: start)
+                let data = handle.readDataToEndOfFile()
+                next.sizes[path] = sizeU
+                let text = String(decoding: data, as: UTF8.self)
+                let lines = text.split(whereSeparator: \.isNewline).map(String.init)
+                guard !lines.isEmpty else { continue }
+                let (usage, seen) = UsageParser.parseAllDeduped(lines: lines, seen: next.seen)
+                next.seen = seen
+                guard usage.totalTokens > 0 || usage.costUSD > 0 else { continue }
+                for owner in owners {
+                    next.tokensBySource[owner, default: 0] += usage.totalTokens
+                    next.costBySource[owner, default: 0] += usage.costUSD
+                }
+            }
+            if sawFile {
+                for owner in owners {
+                    next.covered.insert(owner)
+                }
+            }
+        }
+        // `seen` only protects a re-read after rotation or truncation; normal
+        // reads are already bounded by `sizes`. Keep the dedupe set from
+        // growing without limit across days of transcripts.
+        if next.seen.count > 50_000 {
+            next.seen = Set(next.seen.prefix(25_000))
+        }
+        return next
     }
 
     /// PERF-2: the transcript root's directory mtime — a cheap sentinel for

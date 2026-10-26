@@ -55,6 +55,11 @@ struct AgentSnapshot: Identifiable, Equatable {
     let projectContext: ProjectContext?
     /// Path to the agent's transcript/session directory on disk if known.
     let sessionPath: String?
+    /// True only when the blocked prompt is a real permission request with a
+    /// concrete request or choices. False means "waiting for you": review the
+    /// terminal instead of blind approve/deny.
+    let approvalActionable: Bool
+    let approvalRisk: AgentRisk
 
     init(
         id: String,
@@ -69,7 +74,9 @@ struct AgentSnapshot: Identifiable, Equatable {
         choices: [String]?,
         startedAt: Date?,
         projectContext: ProjectContext?,
-        sessionPath: String? = nil
+        sessionPath: String? = nil,
+        approvalActionable: Bool = true,
+        approvalRisk: AgentRisk = .low
     ) {
         self.id = id
         self.source = source
@@ -84,6 +91,8 @@ struct AgentSnapshot: Identifiable, Equatable {
         self.startedAt = startedAt
         self.projectContext = projectContext
         self.sessionPath = sessionPath
+        self.approvalActionable = approvalActionable
+        self.approvalRisk = approvalRisk
     }
 
     var approval: IslandMetrics.ApprovalControls {
@@ -107,6 +116,7 @@ struct ProjectContext: Equatable, Sendable {
     nonisolated(unsafe) private static var cache: [String: (context: ProjectContext, at: Date)] =
         [:]
     private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var warming: Set<String> = []
 
     init(project: String, branch: String?, isGit: Bool, diffStat: String? = nil) {
         self.project = project
@@ -139,6 +149,39 @@ struct ProjectContext: Equatable, Sendable {
             self.isGit = false
         }
         Self.store(cwd, self)
+    }
+
+    /// Build a project context without touching disk on the caller's thread.
+    /// The branch arrives on the next poll after a detached warm-up. The
+    /// roster builder runs on the main actor, so a slow or network-backed
+    /// `.git/HEAD` must never block the UI.
+    static func cachedOrPlaceholder(cwd: String) -> ProjectContext {
+        if let hit = Self.cached(cwd) { return hit }
+        let placeholder = ProjectContext(
+            project: (cwd as NSString).lastPathComponent,
+            branch: nil,
+            isGit: false)
+        let alreadyWarming = Self.markWarming(cwd)
+        guard !alreadyWarming else { return placeholder }
+        Task.detached(priority: .utility) {
+            _ = ProjectContext(cwd: cwd)
+            Self.unmarkWarming(cwd)
+        }
+        return placeholder
+    }
+
+    private static func markWarming(_ cwd: String) -> Bool {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if warming.contains(cwd) { return true }
+        warming.insert(cwd)
+        return false
+    }
+
+    private static func unmarkWarming(_ cwd: String) {
+        cacheLock.lock()
+        warming.remove(cwd)
+        cacheLock.unlock()
     }
 
     private static func cached(_ cwd: String) -> ProjectContext? {
@@ -222,6 +265,34 @@ struct RecentCompletion: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Latest approval detail for one pane. The event stream often carries only
+/// a blocked status, so the manager enriches this from the live pane or
+/// transcript before the UI decides to show Allow and Deny.
+struct PendingApproval: Equatable, Sendable {
+    let eventID: UUID
+    let title: String?
+    let message: String?
+    let variance: ApprovalVariance?
+    let choices: [String]?
+    let actionable: Bool
+    let risk: AgentRisk
+    let prompt: ApprovalPrompt?
+
+    var fingerprint: String {
+        if let prompt, !prompt.isEmpty { return prompt.fingerprint }
+        return [
+            title ?? "", message ?? "",
+            (choices ?? []).joined(separator: "|"),
+        ].joined(separator: "|")
+    }
+
+    var needsEnrichment: Bool {
+        guard let prompt else { return true }
+        return prompt.isEmpty
+            || (prompt.actionable && prompt.choices.isEmpty && prompt.variance == nil)
+    }
+}
+
 @MainActor
 final class AgentEventManager: ObservableObject {
     @MainActor static let shared = AgentEventManager()
@@ -262,9 +333,13 @@ final class AgentEventManager: ObservableObject {
     private var lastDetectedAgents: [DetectedAgent] = []
     private var activeScanTask: Task<[DetectedAgent], Never>?
     private var isRefreshingRoster = false
-    private var hasPendingRosterRefresh = false
     /// PERF-2: minimum interval between standalone `ps` scans.
-    static let minScanInterval: TimeInterval = 2.0
+    /// Standalone transcripts have no push channel, but their status does
+    /// not need sub-10s resolution. Each scan is a `ps` spawn plus tail parse.
+    static let minScanInterval: TimeInterval = 10.0
+    /// Standalone discovery can idle slower while no detected agent is
+    /// working; herdr panes still arrive over the push stream.
+    static let idleScanInterval: TimeInterval = 20.0
     /// PERF-2: memoized transcript-root mtimes so unchanged trees skip the
     /// expensive enumeration + read on each poll.
     private var transcriptMtimes: [String: Date] = [:]
@@ -280,11 +355,39 @@ final class AgentEventManager: ObservableObject {
     /// Set when a pane transitions into progress/started; cleared when it
     /// leaves working state.
     private var startedAtByPane: [String: Date] = [:]
-    /// Latest approval prompt shape per pane, decoded from the event stream.
-    /// Merged into roster snapshots so queue cards can render yes/no,
-    /// numbered-choice, and multi-select controls inline.
-    var pendingApprovals: [String: (variance: ApprovalVariance?, choices: [String]?)] =
-        [:]
+    /// Per-source usage snapshot when a session started working. Completion
+    /// records current-minus-baseline so rows show their own spend, never
+    /// the lifetime cumulative total.
+    private var usageBaselineByKey: [String: (tokens: Int, cost: Double)] = [:]
+    /// Monotonic lifetime per-source counters feeding those baselines.
+    /// Rolling-window snapshots slide as old activity ages out, so deltas
+    /// must come from here. Transcripts accrue incrementally; the opencode
+    /// ledger refreshes on file change.
+    private var lifetimeAccrual = UsageTracker.LifetimeAccrualState()
+    private var lifetimeOpencodeRevision: UInt64 = 0
+    /// Full transcript sweeps are expensive; 30s is enough for session
+    /// deltas without burning a core every poll.
+    private let lifetimeAccrualInterval: TimeInterval = 30
+    private var lastLifetimeAccrualAt = Date.distantPast
+    private var lastUsagePollAt = Date.distantPast
+    /// Whether the baseline came from a covered source (true delta) or a
+    /// rolling window (honest estimate). Pruned with the other per-pane maps.
+    private var baselineCoveredByKey: [String: Bool] = [:]
+    /// Last recorded completion fingerprint per pane (kind + title). Kills
+    /// the 48-rows-for-one-finish class: heartbeats with no work between
+    /// completions record once. Cleared by progress/started, pruned with the
+    /// other per-pane maps.
+    private var completedFingerprintByKey: [String: String] = [:]
+    /// Latest approval prompt shape per pane, decoded from the event stream
+    /// and enriched from the live pane when the event is only "blocked".
+    var pendingApprovals: [String: PendingApproval] = [:]
+    /// Panes answered from Bantay recently. Status hooks can repeat the same
+    /// `blocked` line after the answer lands; suppressing that exact
+    /// fingerprint stops the popup from re-asking for a permission the user
+    /// just granted. A non-approval status clears the entry, so a genuinely
+    /// new prompt still shows immediately.
+    private var acknowledgedApprovalFingerprints: [String: Set<String>] = [:]
+    private var approvalEnrichmentTasks: [String: Task<Void, Never>] = [:]
     /// Panes with an in-flight user action to prevent duplicate clicks.
     private var resolvingPanes: Set<String> = []
     /// Caps how long a pane stays in the resolving state if the next poll
@@ -530,7 +633,14 @@ final class AgentEventManager: ObservableObject {
         {
             return
         }
+        if event.kind != .accessRequest && event.kind != .waiting {
+            clearAcknowledgments(for: event)
+        } else if isAcknowledged(event) {
+            return
+        }
         let key = event.identityKey
+        let actionablePaneId = IslandMetrics.actionablePaneId(
+            paneId: event.paneId, source: event.source)
         // ntfy.sh push for events that need attention even away from the
         // terminal: approvals/blocked always; failures and completions too.
         if let source = event.source {
@@ -542,11 +652,12 @@ final class AgentEventManager: ObservableObject {
                 source: source,
                 kind: event.kind,
                 title: event.title ?? event.message,
-                paneId: event.paneId,
+                paneId: actionablePaneId,
                 choices: event.choices,
                 cwd: snap?.cwd,
                 sessionPath: snap?.sessionPath,
-                roster: self.agents
+                roster: self.agents,
+                isMulti: event.variance == .multi
             )
             MultiAgentTimelineStore.shared.recordEvent(
                 agentName: source,
@@ -559,17 +670,50 @@ final class AgentEventManager: ObservableObject {
         TaskStore.shared.updateTaskState(
             paneId: event.paneId, source: event.sourceKey, kind: event.kind)
         if event.kind == .accessRequest || event.kind == .waiting {
-            pendingApprovals[key] = (variance: event.variance, choices: event.choices)
+            let prompt = ApprovalPromptResolver.resolve(
+                rawTail: "",
+                fallbackTitle: event.title,
+                fallbackMessage: event.message,
+                fallbackVariance: event.variance == .yesNo ? .yesNo : nil,
+                kind: event.kind)
+            let explicitChoices = (event.choices ?? []).filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            let actionable =
+                prompt.actionable
+                || (event.kind == .accessRequest && explicitChoices.count >= 2)
+            let variance: ApprovalVariance? =
+                prompt.variance
+                ?? (explicitChoices.count >= 2 ? .choices : event.variance)
+            let pending = PendingApproval(
+                eventID: event.id,
+                title: prompt.detail ?? event.title,
+                message: prompt.detail == nil ? event.message : nil,
+                variance: variance,
+                choices: prompt.choices.isEmpty ? event.choices : prompt.choices,
+                actionable: actionable,
+                risk: prompt.risk,
+                prompt: prompt)
+            pendingApprovals[key] = pending
+            if pending.needsEnrichment {
+                enrichApproval(event: event, key: key, paneId: actionablePaneId)
+            }
         } else if event.kind != .progress && event.kind != .started {
             pendingApprovals.removeValue(forKey: key)
+            approvalEnrichmentTasks[key]?.cancel()
+            approvalEnrichmentTasks.removeValue(forKey: key)
             // The pane stopped blocking: drop any pending notification so a
             // stale Approve/Deny can't inject a keypress into the pane now.
             if event.paneId != nil || event.source != nil {
-                let paneKey = event.paneId ?? event.source ?? key
+                let paneKey = actionablePaneId ?? event.paneId ?? event.source ?? key
                 ApprovalNotificationController.shared.removeForPane(paneKey)
             }
         }
         var completionDuration: TimeInterval?
+        let sessionStart = startedAtByPane[key] ?? event.createdAt
+        // True when this event recorded a fresh session row (not a dupe
+        // heartbeat). Gates recents + digest below on the same rule.
+        var recordedFreshFinish = false
         if event.kind == .completed || event.kind == .failed {
             if let start = startedAtByPane[key] {
                 completionDuration = event.createdAt.timeIntervalSince(start)
@@ -583,13 +727,111 @@ final class AgentEventManager: ObservableObject {
             if startedAtByPane[key] == nil {
                 startedAtByPane[key] = event.createdAt
             }
+            if usageBaselineByKey[key] == nil {
+                usageBaselineByKey[key] = (
+                    tokens: lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0,
+                    cost: lifetimeAccrual.costBySource[event.sourceKey] ?? 0
+                )
+                baselineCoveredByKey[key] = lifetimeAccrual.covered.contains(
+                    event.sourceKey)
+            }
+            // New working burst re-arms completion recording: the next
+            // completion for this pane is a real finish, not a heartbeat.
+            completedFingerprintByKey.removeValue(forKey: key)
         } else if event.kind == .completed || event.kind == .failed
             || event.kind == .cancelled || event.kind == .clear
         {
             startedAtByPane.removeValue(forKey: key)
         }
 
-        if (event.kind == .completed || event.kind == .failed) && !isActive {
+        if event.kind == .completed || event.kind == .failed {
+            let title = event.title ?? event.message ?? event.kind.label
+            // Completion heartbeats re-emit the same finish for minutes.
+            // Record one row per working burst: identical kind+title with no
+            // progress since the last one is a dupe, not a new session.
+            let fingerprint = "\(event.kind.rawValue):\(title)"
+            if completedFingerprintByKey[key] != fingerprint {
+                completedFingerprintByKey[key] = fingerprint
+                recordedFreshFinish = true
+                // The periodic lifetime sweep may be up to 10s behind. A
+                // finish is the one moment the final tokens must land, so
+                // accrue transcript sources once more before metering.
+                if !UsageTracker.ledgerCoveredSources.contains(event.sourceKey) {
+                    lifetimeAccrual = UsageTracker.accrueLifetime(
+                        home: NSHomeDirectory(),
+                        names: self.agents.map { $0.source },
+                        state: lifetimeAccrual)
+                }
+                // Ledger-metered sources skip in-memory baselines entirely:
+                // the ledger answers "as of session start" exactly, so short
+                // sessions cannot meter ~0.
+                let ledgerBaseline: (tokens: Int, cost: Double)? =
+                    UsageTracker.ledgerCoveredSources.contains(event.sourceKey)
+                        && OpenCodeUsageAdapter.detect()
+                    ? OpenCodeUsageAdapter.meterAsOf(
+                        beforeMs: Int64(sessionStart.timeIntervalSince1970 * 1000))
+                    : nil
+                let ledgerCurrent: UsageSnapshot? =
+                    ledgerBaseline == nil
+                    ? nil
+                    : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400, maxAge: 0)
+                var baseline = usageBaselineByKey[key]
+                var covered =
+                    baselineCoveredByKey[key]
+                    ?? lifetimeAccrual.covered.contains(event.sourceKey)
+                var currentTokens =
+                    covered
+                    ? (lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0)
+                    : (usage.tokensBySource[event.sourceKey] ?? 0)
+                var currentCost =
+                    covered
+                    ? (lifetimeAccrual.costBySource[event.sourceKey] ?? 0)
+                    : (usage.costBySource[event.sourceKey] ?? 0)
+                if let ledgerBaseline, let ledgerCurrent {
+                    baseline = ledgerBaseline
+                    covered = true
+                    currentTokens = ledgerCurrent.totalTokens
+                    currentCost = ledgerCurrent.costUSD
+                }
+                let snap = self.agents.first {
+                    (event.paneId != nil && $0.paneId == event.paneId)
+                        || $0.source == event.sourceKey
+                }
+                // Covered sources meter against monotonic lifetime counters.
+                // Uncovered sources fall back to the rolling window — an
+                // honest estimate, labeled as one downstream.
+                SessionHistoryStore.shared.addSession(
+                    AgentSessionRecord(
+                        id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",
+                        agentName: event.sourceKey,
+                        title: title,
+                        startTime: sessionStart,
+                        durationSeconds: completionDuration ?? 0,
+                        totalTokens: SessionUsageDelta.tokens(
+                            current: currentTokens,
+                            baseline: baseline?.tokens ?? 0),
+                        costUSD: SessionUsageDelta.cost(
+                            current: currentCost,
+                            baseline: baseline?.cost ?? 0),
+                        status: event.kind == .completed ? "Completed" : "Failed",
+                        project: snap?.projectContext?.project
+                            ?? snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
+                        branch: snap?.projectContext?.branch,
+                        sessionPath: snap?.sessionPath,
+                        cwd: snap?.cwd,
+                        // No baseline means no observed start: the numbers
+                        // are lifetime totals, labeled as such downstream.
+                        isDelta: covered && baseline != nil,
+                        isWindowEstimate: !covered && baseline != nil))
+            }
+            usageBaselineByKey.removeValue(forKey: key)
+            baselineCoveredByKey.removeValue(forKey: key)
+        }
+        // Recents and the away digest follow the same dupe rule: a repeated
+        // heartbeat must not push the same finish five times.
+        if (event.kind == .completed || event.kind == .failed) && !isActive
+            && recordedFreshFinish
+        {
             let recent = RecentCompletion(
                 id: "\(key):\(event.kind.rawValue):\(event.createdAt.timeIntervalSince1970)",
                 source: event.sourceKey,
@@ -709,7 +951,7 @@ extension AgentEventManager {
         guard let kind = kind(for: agent.agentStatus ?? "", agent: agent.agent) else { return nil }
         let projectContext: ProjectContext? = {
             guard let cwd = agent.cwd, !cwd.isEmpty else { return nil }
-            return ProjectContext(cwd: cwd)
+            return ProjectContext.cachedOrPlaceholder(cwd: cwd)
         }()
         // Unique id: paneId when present, else source + cwd. Multiple
         // pane-less agents of the same source (e.g. two herdr/freebuff
@@ -852,7 +1094,7 @@ extension AgentEventManager {
         captureTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, !self.displayAsleep else {
-                    try? await Task.sleep(for: .milliseconds(500))
+                    try? await Task.sleep(for: .seconds(5))
                     continue
                 }
                 // The push event stream keeps status live; the poll loop now
@@ -871,20 +1113,12 @@ extension AgentEventManager {
     }
 
     private func refreshRosterAndArmWaits() async {
-        if isRefreshingRoster {
-            hasPendingRosterRefresh = true
-            return
-        }
+        if isRefreshingRoster { return }
         isRefreshingRoster = true
-        defer {
-            isRefreshingRoster = false
-            if hasPendingRosterRefresh {
-                hasPendingRosterRefresh = false
-                Task { @MainActor [weak self] in
-                    await self?.refreshRosterAndArmWaits()
-                }
-            }
-        }
+        // Do not chain a queued refresh here. If a scan outlasts the poll
+        // interval, chaining keeps the scan loop back-to-back forever. The
+        // capture loop's next tick picks the work up instead.
+        defer { isRefreshingRoster = false }
         ensureFileWatcher()
         let herdrAgents: [HerdrAgentInfo] = await herdrAdapter.listAgents()
         let scanStandalone = NotchHUDConfig.shared.standaloneScanEnabled
@@ -892,11 +1126,14 @@ extension AgentEventManager {
         // the island never beachballs while polling. PERF-2: throttle the ps
         // spawn to `minScanInterval` — the roster is fine updating every few
         // seconds without re-scanning the process table each time.
+        let scanInterval: TimeInterval =
+            lastDetectedAgents.contains(where: { $0.isWorking })
+            ? Self.minScanInterval : Self.idleScanInterval
         let rescan =
             scanStandalone
             && StandaloneAgentScanner.shouldRescan(
                 lastScan: lastStandaloneScan, now: Date(),
-                minInterval: Self.minScanInterval)
+                minInterval: scanInterval)
         if rescan {
             lastStandaloneScan = Date()
             if let existing = activeScanTask {
@@ -947,13 +1184,20 @@ extension AgentEventManager {
                 }
         }.value
         // Transcript token/cost enumeration is gated behind `usageTrackingEnabled`.
-        if NotchHUDConfig.shared.usageTrackingEnabled {
+        // Usage sweeps read transcripts. Run them on a calmer cadence than
+        // the roster poll: 15s while agents are live, 120s when idle. The
+        // header is the only consumer, so a slower gauge is not felt.
+        let usageNow = Date()
+        let usageInterval: TimeInterval = agents.isEmpty ? 120 : 15
+        if NotchHUDConfig.shared.usageTrackingEnabled,
+            usageNow.timeIntervalSince(lastUsagePollAt) >= usageInterval
+        {
+            lastUsagePollAt = usageNow
             let hasKilo = agents.contains { $0.agent == "kilo" }
-            let now = Date()
+            let now = usageNow
             if hasKilo, KiloUsageAdapter.detect() {
                 // Read Kilo usage from SQLite off-main.
                 let pollInterval = NotchHUDConfig.shared.captureInterval
-                let currentUsage = self.usage
                 let currentRate = self.usageRate
                 let lastKilo = self.lastKiloSnapshot
                 let result = await Task.detached(priority: .utility) {
@@ -970,12 +1214,11 @@ extension AgentEventManager {
                         } else {
                             currentRate
                         }
-                    return (usage, rate)
+                    return (usage, rate, window)
                 }.value
-                self.usage = result.0
-                self.usageRate = result.1
-                self.lastKiloSnapshot = KiloUsageAdapter.snapshot(since: 60, now: now)
-                _ = currentUsage
+                if self.usage != result.0 { self.usage = result.0 }
+                if self.usageRate != result.1 { self.usageRate = result.1 }
+                self.lastKiloSnapshot = result.2
             } else {
                 // Non-kilo agents: fall back to transcript parsing (codex/
                 // claude/opencode) with the mtime memo.
@@ -1002,8 +1245,41 @@ extension AgentEventManager {
                         now: Date(),
                         window: 60)
                 }.value
-                self.usage = usageAndRate.0
-                self.usageRate = usageAndRate.1
+                if self.usage != usageAndRate.0 { self.usage = usageAndRate.0 }
+                if self.usageRate != usageAndRate.1 { self.usageRate = usageAndRate.1 }
+                // Lifetime counters for session deltas. Transcript files
+                // accrue incrementally (appended bytes only); the opencode
+                // ledger refreshes from its monotonic sums on file change.
+                let nowLifetime = Date()
+                if nowLifetime.timeIntervalSince(self.lastLifetimeAccrualAt)
+                    >= self.lifetimeAccrualInterval
+                {
+                    self.lastLifetimeAccrualAt = nowLifetime
+                    let prior = self.lifetimeAccrual
+                    let names = agents.map { $0.agent }
+                    self.lifetimeAccrual = await Task.detached(priority: .utility) {
+                        UsageTracker.accrueLifetime(
+                            home: NSHomeDirectory(), names: names, state: prior)
+                    }.value
+                }
+                let revision = OpenCodeUsageAdapter.ledgerRevision(
+                    home: NSHomeDirectory())
+                if revision != self.lifetimeOpencodeRevision {
+                    self.lifetimeOpencodeRevision = revision
+                    let lifetimeNow = now
+                    let life = await Task.detached(priority: .utility) {
+                        OpenCodeUsageAdapter.snapshot(
+                            since: 30 * 365 * 86400, now: lifetimeNow,
+                            home: NSHomeDirectory())
+                    }.value
+                    if let life {
+                        self.lifetimeAccrual.tokensBySource["opencode"] =
+                            life.tokensBySource["opencode"] ?? 0
+                        self.lifetimeAccrual.costBySource["opencode"] =
+                            life.costBySource["opencode"] ?? 0
+                        self.lifetimeAccrual.covered.insert("opencode")
+                    }
+                }
             }
             SpendHistoryStore.shared.recordUsage(
                 snapshot: self.usage,
@@ -1043,7 +1319,21 @@ extension AgentEventManager {
         }
         let liveAgentKeys = Set(agents.compactMap { $0.paneId ?? $0.agent })
         startedAtByPane = startedAtByPane.filter { liveAgentKeys.contains($0.key) }
-        self.agents = mergeApprovals(into: result.roster)
+        usageBaselineByKey = usageBaselineByKey.filter { liveAgentKeys.contains($0.key) }
+        baselineCoveredByKey = baselineCoveredByKey.filter {
+            liveAgentKeys.contains($0.key)
+        }
+        completedFingerprintByKey = completedFingerprintByKey.filter {
+            liveAgentKeys.contains($0.key)
+        }
+        // Tasks stuck in flight on dead panes can never transition again.
+        // Reset them to pending while the live roster is in hand.
+        TaskStore.shared.resetOrphanedTasks(
+            livePaneIDs: Set(agents.compactMap { $0.paneId }))
+        let mergedRoster = mergeApprovals(into: result.roster)
+        if self.agents != mergedRoster {
+            self.agents = mergedRoster
+        }
         for event in result.events {
             showEvent(event)
         }
@@ -1084,7 +1374,10 @@ extension AgentEventManager {
             from: agents,
             lastSeenKinds: &lastSeenKinds,
             current: currentEvent)
-        self.agents = mergeApprovals(into: result.roster)
+        let mergedRoster = mergeApprovals(into: result.roster)
+        if self.agents != mergedRoster {
+            self.agents = mergedRoster
+        }
         for event in result.events {
             showEvent(event)
         }
@@ -1107,21 +1400,29 @@ extension AgentEventManager {
         return roster.compactMap { (agent: AgentSnapshot) -> AgentSnapshot? in
             guard !muted.contains(agent.source) else { return nil }
             let key = agent.paneId ?? agent.source
+            var title = agent.title
+            var message = agent.message
             var variance = agent.variance
             var choices = agent.choices
+            var actionable = agent.approvalActionable
+            var risk = agent.approvalRisk
             if agent.kind == .accessRequest || agent.kind == .waiting,
                 let pending = pendingApprovals[key]
             {
-                variance = pending.variance
-                choices = pending.choices
+                title = pending.title ?? title
+                message = pending.message ?? message
+                variance = pending.variance ?? variance
+                choices = pending.choices ?? choices
+                actionable = pending.actionable
+                risk = pending.risk
             }
             let startedAt = startedAtByPane[key]
             return AgentSnapshot(
                 id: agent.id,
                 source: agent.source,
                 kind: agent.kind,
-                title: agent.title,
-                message: agent.message,
+                title: title,
+                message: message,
                 paneId: agent.paneId,
                 workspaceId: agent.workspaceId,
                 cwd: agent.cwd,
@@ -1129,8 +1430,68 @@ extension AgentEventManager {
                 choices: choices,
                 startedAt: startedAt,
                 projectContext: agent.projectContext,
-                sessionPath: agent.sessionPath
+                sessionPath: agent.sessionPath,
+                approvalActionable: actionable,
+                approvalRisk: risk
             )
+        }
+    }
+
+    /// Capture the live pane or transcript when a blocked event carries only
+    /// a status. Runs off the main thread; the card renders Review-only until
+    /// the exact request and choices arrive.
+    private func enrichApproval(event: AgentEvent, key: String, paneId: String?) {
+        guard approvalEnrichmentTasks[key] == nil else { return }
+        let adapter = activeAdapter
+        let source = event.sourceKey
+        let eventID = event.id
+        let fallbackTitle = event.title
+        let fallbackMessage = event.message
+        let fallbackVariance = event.variance == .yesNo ? ApprovalVariance.yesNo : nil
+        let kind = event.kind
+        let agent = agents.first {
+            ($0.paneId != nil && $0.paneId == paneId)
+                || $0.source == source
+        }
+        let sessionPath = agent?.sessionPath
+        let cwd = agent?.cwd
+        approvalEnrichmentTasks[key] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var raw = ""
+            if let paneId, !paneId.hasPrefix("standalone:") {
+                raw = await adapter.captureTail(paneId: paneId, lines: 30)
+            }
+            if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                raw = AgentDetector.recentTranscriptOutput(
+                    forAgent: source,
+                    sessionPath: sessionPath,
+                    cwd: cwd,
+                    maxLines: 30
+                ).joined(separator: "\n")
+            }
+            let prompt = ApprovalPromptResolver.resolve(
+                rawTail: raw,
+                fallbackTitle: fallbackTitle,
+                fallbackMessage: fallbackMessage,
+                fallbackVariance: fallbackVariance,
+                kind: kind)
+            defer { self.approvalEnrichmentTasks[key] = nil }
+            guard let current = self.pendingApprovals[key],
+                current.eventID == eventID
+            else { return }
+            self.pendingApprovals[key] = PendingApproval(
+                eventID: eventID,
+                title: prompt.detail ?? current.title,
+                message: prompt.detail == nil ? current.message : nil,
+                variance: prompt.variance ?? current.variance,
+                choices: prompt.choices.isEmpty ? current.choices : prompt.choices,
+                actionable: prompt.actionable
+                    || (kind == .accessRequest
+                        && (prompt.choices.count >= 2
+                            || (current.choices?.count ?? 0) >= 2)),
+                risk: prompt.risk,
+                prompt: prompt)
+            self.agents = self.mergeApprovals(into: self.agents)
         }
     }
 
@@ -1140,9 +1501,13 @@ extension AgentEventManager {
         resolvingPanes.contains(paneId)
     }
 
-    /// Convenience: resolves the agent's paneId and checks `isResolving`.
+    /// Convenience: resolves the agent's actionable pane id (including the
+    /// synthetic id used for standalone agents) and checks `isResolving`.
     func isResolving(agent: AgentSnapshot?) -> Bool {
-        guard let paneId = agent?.paneId else { return false }
+        guard
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: agent?.paneId, source: agent?.source)
+        else { return false }
         return resolvingPanes.contains(paneId)
     }
 
@@ -1165,8 +1530,105 @@ extension AgentEventManager {
     }
 
     /// Approves an agent request via the active adapter, routing OpenCode panes to the decision file.
+    /// Why an approval action could not reach its agent. The card shows the
+    /// exact reason and a Retry; a failed send is never reported as success.
+    enum ActionFailure: String, Equatable, Sendable {
+        case deadPane
+        case accessibility
+        case targetUnavailable
+        case emptyText
+        case transport
+
+        var message: String {
+            switch self {
+            case .deadPane: return "That pane is gone. Open the agent's terminal."
+            case .accessibility: return "Accessibility is not granted. Grant it in Settings."
+            case .targetUnavailable: return "The target app is not running."
+            case .emptyText: return "Type an answer first."
+            case .transport: return "The input could not be written to the agent."
+            }
+        }
+
+        var needsAccessibility: Bool { self == .accessibility }
+    }
+
+    enum ActionResult: Equatable, Sendable {
+        case delivered
+        case failed(ActionFailure)
+
+        var isDelivered: Bool { self == .delivered }
+    }
+
+    /// True when a real multiplexer pane is still in the roster.
+    func paneIsAlive(_ paneId: String) -> Bool {
+        if paneId.hasPrefix("standalone:") || paneId.hasPrefix("app:") { return true }
+        return agents.contains { $0.paneId == paneId }
+    }
+
+    /// Sends free text into an agent and reports whether it was written.
+    @discardableResult
+    func sendText(paneId: String, text: String) -> ActionResult {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .failed(.emptyText) }
+        if paneId.hasPrefix("standalone:") || OpenCodeActionWriter.isOpenCodePane(paneId) {
+            let agentName =
+                paneId.hasPrefix("standalone:")
+                ? StandaloneAgentDispatcher.cleanAgentName(from: paneId) : "opencode"
+            let ok = StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: agentName, text: trimmed, cwd: nil, autoSend: true)
+            if ok { return .delivered }
+            return .failed(
+                StandaloneAgentDispatcher.accessibilityGranted()
+                    ? .targetUnavailable : .accessibility)
+        }
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        let adapter = activeAdapter
+        adapter.sendLine(paneId: paneId, text: trimmed)
+        adapter.focusPane(paneId: paneId)
+        return .delivered
+    }
+
+    /// Approve with a transport result so the card can show failures.
+    @discardableResult
+    func approveResult(paneId: String) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        if paneId.hasPrefix("standalone:"),
+            !StandaloneAgentDispatcher.accessibilityGranted()
+        {
+            return .failed(.accessibility)
+        }
+        approve(paneId: paneId)
+        return .delivered
+    }
+
+    @discardableResult
+    func denyResult(paneId: String) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        deny(paneId: paneId)
+        return .delivered
+    }
+
+    @discardableResult
+    func approveChoiceResult(paneId: String, choice: Int) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        approveChoice(paneId: paneId, choice: choice)
+        return .delivered
+    }
+
+    @discardableResult
+    func approveMultiResult(paneId: String, selections: [Int]) -> ActionResult {
+        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
+        approveMulti(paneId: paneId, selections: selections)
+        return .delivered
+    }
+
     func approve(paneId: String) {
         AwayDigestStore.shared.recordApprovalAnswered()
+        acknowledgeApproval(paneId: paneId)
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneApproval(paneId: paneId, approved: true)
+            return
+        }
         if OpenCodeActionWriter.isOpenCodePane(paneId) {
             OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
         }
@@ -1175,6 +1637,11 @@ extension AgentEventManager {
 
     /// Denies an agent request via the active adapter, routing OpenCode panes to the decision file.
     func deny(paneId: String) {
+        acknowledgeApproval(paneId: paneId)
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneApproval(paneId: paneId, approved: false)
+            return
+        }
         if OpenCodeActionWriter.isOpenCodePane(paneId) {
             OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
         }
@@ -1185,12 +1652,167 @@ extension AgentEventManager {
     /// routing OpenCode panes to the decision file with choice index.
     func approveChoice(paneId: String, choice: Int) {
         AwayDigestStore.shared.recordApprovalAnswered()
+        acknowledgeApproval(paneId: paneId)
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneOption(paneId: paneId, option: String(choice))
+            return
+        }
         if OpenCodeActionWriter.isOpenCodePane(paneId) {
             OpenCodeActionWriter.writeDecision(
                 paneId: paneId, approve: true, choiceIndex: choice
             )
         }
         performAction(paneId: paneId) { $0.approveChoice(paneId: paneId, choice: choice) }
+    }
+
+    /// Submits a multi-select answer. Standalone agents receive the selected
+    /// numbers as one space-separated line, matching the roster's inline path.
+    func approveMulti(paneId: String, selections: [Int]) {
+        AwayDigestStore.shared.recordApprovalAnswered()
+        acknowledgeApproval(paneId: paneId)
+        let joined = selections.map(String.init).joined(separator: " ")
+        if paneId.hasPrefix("standalone:") {
+            dispatchStandaloneOption(paneId: paneId, option: joined)
+            return
+        }
+        performAction(paneId: paneId) { $0.approveMulti(paneId: paneId, selections: selections) }
+    }
+
+    /// Record that the user answered `paneId` and drop the visible prompt.
+    /// The exact prompt fingerprint stays suppressed until the agent reports
+    /// a non-approval status, so a repeated `blocked` heartbeat cannot ask
+    /// the same question again after the old time window expired.
+    func acknowledgeApproval(paneId: String) {
+        var keys = [paneId]
+        if paneId.hasPrefix("standalone:") {
+            keys.append(String(paneId.dropFirst("standalone:".count)))
+        }
+        let rawFingerprint = currentEvent.map {
+            ApprovalPromptResolver.fingerprint(for: $0, prompt: nil)
+        }
+        if let current = currentEvent, event(current, matches: paneId) {
+            keys.append(current.identityKey)
+            currentEvent = nil
+            clearTask?.cancel()
+        }
+        for key in pendingApprovals.keys
+        where matches(paneId: paneId, identityKey: key) {
+            if let pending = pendingApprovals[key] {
+                acknowledgedApprovalFingerprints[key, default: []].insert(
+                    pending.fingerprint)
+            }
+            pendingApprovals.removeValue(forKey: key)
+        }
+        for key in keys {
+            if let rawFingerprint {
+                acknowledgedApprovalFingerprints[key, default: []].insert(rawFingerprint)
+            }
+            // Suppress repeated status-only heartbeats even when the visible
+            // event was already cleared from currentEvent.
+            acknowledgedApprovalFingerprints[key, default: []].insert("accessRequest|||")
+            acknowledgedApprovalFingerprints[key, default: []].insert("waiting|||")
+        }
+        ApprovalNotificationController.shared.removeForPane(paneId)
+    }
+
+    private func event(_ event: AgentEvent, matches paneId: String) -> Bool {
+        if let id = event.paneId { return id == paneId }
+        return matches(paneId: paneId, identityKey: event.identityKey)
+    }
+
+    private func matches(paneId: String, identityKey key: String) -> Bool {
+        if key == paneId { return true }
+        guard paneId.hasPrefix("standalone:") else { return false }
+        let source = String(paneId.dropFirst("standalone:".count))
+        return key == source || key.hasPrefix(source + ":")
+    }
+
+    private func acknowledgmentKeys(for event: AgentEvent) -> [String] {
+        var keys = [event.identityKey]
+        if let actionable = IslandMetrics.actionablePaneId(
+            paneId: event.paneId, source: event.source)
+        {
+            keys.append(actionable)
+        }
+        if let source = event.source {
+            keys.append(source)
+        }
+        return keys
+    }
+
+    private func isAcknowledged(_ event: AgentEvent) -> Bool {
+        let fingerprint = ApprovalPromptResolver.fingerprint(for: event, prompt: nil)
+        for key in acknowledgmentKeys(for: event) {
+            if acknowledgedApprovalFingerprints[key]?.contains(fingerprint) == true {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func clearAcknowledgments(for event: AgentEvent) {
+        for key in acknowledgmentKeys(for: event) {
+            acknowledgedApprovalFingerprints.removeValue(forKey: key)
+        }
+    }
+
+    /// Routes a stop request to the standalone dispatcher or the multiplexer.
+    func stop(paneId: String) {
+        if paneId.hasPrefix("standalone:") {
+            let agent = agent(forPaneId: paneId)
+            let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+            performStandaloneAction(paneId: paneId) {
+                StandaloneAgentDispatcher.dispatchAbort(
+                    agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
+                    cwd: agent?.cwd)
+            }
+            return
+        }
+        performAction(paneId: paneId) { $0.stop(paneId: paneId) }
+    }
+
+    /// The roster entry that owns `paneId`, including synthetic standalone ids.
+    func agent(forPaneId paneId: String) -> AgentSnapshot? {
+        agents.first { agent in
+            if let id = agent.paneId { return id == paneId }
+            return paneId == "standalone:\(agent.source)"
+                || paneId.hasPrefix("standalone:\(agent.source):")
+        }
+    }
+
+    private func dispatchStandaloneApproval(paneId: String, approved: Bool) {
+        let agent = agent(forPaneId: paneId)
+        let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+        performStandaloneAction(paneId: paneId) {
+            StandaloneAgentDispatcher.dispatchApproval(
+                agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
+                approved: approved,
+                cwd: agent?.cwd)
+        }
+    }
+
+    private func dispatchStandaloneOption(paneId: String, option: String) {
+        let agent = agent(forPaneId: paneId)
+        let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+        performStandaloneAction(paneId: paneId) {
+            StandaloneAgentDispatcher.dispatchOption(
+                agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
+                option: option,
+                cwd: agent?.cwd)
+        }
+    }
+
+    /// Keeps the popup buttons disabled while a standalone keystroke dispatch
+    /// is in flight, mirroring `performAction`'s optimistic resolve state.
+    private func performStandaloneAction(
+        paneId: String, _ action: @escaping @MainActor () -> Void
+    ) {
+        resolvingPanes.insert(paneId)
+        Task { @MainActor in
+            action()
+            try? await Task.sleep(for: .seconds(self.resolvingTimeout))
+            self.resolvingPanes.remove(paneId)
+        }
     }
 
     /// Drop a pane from the resolving set immediately — called when a poll
@@ -1212,6 +1834,14 @@ extension AgentEventManager {
     /// Test seam: inject an event like the pipeline would.
     func publishEventForTesting(_ event: AgentEvent) {
         showEvent(event)
+    }
+
+    /// Test seam: seed a covered lifetime counter so delta math runs
+    /// without polling the real filesystem.
+    func setLifetimeCounterForTesting(source: String, tokens: Int, cost: Double) {
+        lifetimeAccrual.tokensBySource[source] = tokens
+        lifetimeAccrual.costBySource[source] = cost
+        lifetimeAccrual.covered.insert(source)
     }
 
     /// Test seam: current event readout for harness assertions.

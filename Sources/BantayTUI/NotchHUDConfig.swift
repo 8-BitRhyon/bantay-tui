@@ -2,9 +2,26 @@ import Foundation
 
 extension Notification.Name {
     static let notchVisibilityChanged = Notification.Name("notchVisibilityChanged")
-    static let notchHotkeyPressed = Notification.Name("notchHotkeyPressed")
     static let settingsWillOpen = Notification.Name("settingsWillOpen")
+    static let openSettingsRequested = Notification.Name("openSettingsRequested")
+    static let settingsRouteRequested = Notification.Name("settingsRouteRequested")
     static let mascotLeveledUp = Notification.Name("mascotLeveledUp")
+    static let stripToggleRequested = Notification.Name("stripToggleRequested")
+    static let stripFocusRequested = Notification.Name("stripFocusRequested")
+    static let stripCenterRequested = Notification.Name("stripCenterRequested")
+    static let stripWidthRequested = Notification.Name("stripWidthRequested")
+    static let stripApprovalRequested = Notification.Name("stripApprovalRequested")
+    static let stripSendDisplayRequested = Notification.Name("stripSendDisplayRequested")
+    static let stripOverviewRequested = Notification.Name("stripOverviewRequested")
+    static let stripReorderRequested = Notification.Name("stripReorderRequested")
+    static let stripAutochainRequested = Notification.Name("stripAutochainRequested")
+    static let stripPinRequested = Notification.Name("stripPinRequested")
+    static let stripStackRequested = Notification.Name("stripStackRequested")
+    static let stripUnstackRequested = Notification.Name("stripUnstackRequested")
+    static let stripTabbedRequested = Notification.Name("stripTabbedRequested")
+    static let stripHudRequested = Notification.Name("stripHudRequested")
+    static let notchCollapseRequested = Notification.Name("notchCollapseRequested")
+    static let notchExpandRequested = Notification.Name("notchExpandRequested")
 }
 
 @MainActor
@@ -91,6 +108,31 @@ final class NotchHUDConfig {
     var enforceBudgetLimit: Bool = false {
         didSet { defaults.set(enforceBudgetLimit, forKey: "enforceBudgetLimit") }
     }
+    /// Bundled OpenCode Go monthly allowance in dollars. Go meters every
+    /// model against one shared pool; the console is the only source for the
+    /// official figure, so this stays user-editable. Defaults to 60.
+    var openCodeGoAllowanceUSD: Double = 60 {
+        didSet {
+            openCodeGoAllowanceUSD = min(max(openCodeGoAllowanceUSD, 10), 1000)
+            defaults.set(openCodeGoAllowanceUSD, forKey: "openCodeGoAllowanceUSD")
+        }
+    }
+    /// Show the notch quota badge only when remaining quota drops below this
+    /// percent. 100 keeps the badge always visible while a live quota exists.
+    var quotaBadgeThresholdPercent: Double = 100 {
+        didSet {
+            quotaBadgeThresholdPercent = min(max(quotaBadgeThresholdPercent, 5), 100)
+            defaults.set(quotaBadgeThresholdPercent, forKey: "quotaBadgeThresholdPercent")
+        }
+    }
+    /// Desktop HUD auto-hide delay in seconds after the pointer leaves.
+    /// Ignored while pinned.
+    var desktopHUDAutoHideSeconds: Double = 1.8 {
+        didSet {
+            desktopHUDAutoHideSeconds = min(max(desktopHUDAutoHideSeconds, 0.5), 10)
+            defaults.set(desktopHUDAutoHideSeconds, forKey: "desktopHUDAutoHideSeconds")
+        }
+    }
     /// High burn velocity threshold in tokens per minute (default 2500.0).
     var highBurnThresholdTPM: Double = 2500.0 {
         didSet {
@@ -138,6 +180,14 @@ final class NotchHUDConfig {
     /// Modular Notch Tab Visibility Settings
     var showAgentsTab: Bool = true {
         didSet { defaults.set(showAgentsTab, forKey: "showAgentsTab") }
+    }
+    /// Opt-in second click for risky approvals. Off by default: one click
+    /// plus the risk badge is the norm.
+    var confirmRiskyPrompts = false {
+        didSet { defaults.set(confirmRiskyPrompts, forKey: "confirmRiskyPrompts") }
+    }
+    var riskyPromptPatterns: [String] = IslandMetrics.defaultRiskyPromptPatterns {
+        didSet { defaults.set(riskyPromptPatterns, forKey: "riskyPromptPatterns") }
     }
     var showTasksTab: Bool = true {
         didSet { defaults.set(showTasksTab, forKey: "showTasksTab") }
@@ -326,15 +376,6 @@ final class NotchHUDConfig {
     var clampedIdleMaxChips: Int {
         min(max(idleMaxChips, 1), 6)
     }
-    var expandedQueueCap: Int = IslandMetrics.expandedQueueCap {
-        didSet { defaults.set(expandedQueueCap, forKey: "expandedQueueCap") }
-    }
-    var clampedExpandedQueueCap: Int {
-        min(max(expandedQueueCap, 1), 5)
-    }
-    var expandedShowQueue = true {
-        didSet { defaults.set(expandedShowQueue, forKey: "expandedShowQueue") }
-    }
     var expandedGroupByState = true {
         didSet { defaults.set(expandedGroupByState, forKey: "expandedGroupByState") }
     }
@@ -367,22 +408,6 @@ final class NotchHUDConfig {
     }
     var standaloneScanEnabled = true {
         didSet { defaults.set(standaloneScanEnabled, forKey: "standaloneScanEnabled") }
-    }
-    var showUsageGauge = true {
-        didSet { defaults.set(showUsageGauge, forKey: "showUsageGauge") }
-    }
-    var usageBudgetUSD: Double = 10.0 {
-        didSet {
-            usageBudgetUSD = min(max(usageBudgetUSD, 1), 100)
-            defaults.set(usageBudgetUSD, forKey: "usageBudgetUSD")
-        }
-    }
-    /// Token rate indicator: amber when tokens/min ≥ this, red at ≥ 2×.
-    var usageRateWarnTokensPerMin: Int = 5000 {
-        didSet {
-            usageRateWarnTokensPerMin = min(max(usageRateWarnTokensPerMin, 100), 1_000_000)
-            defaults.set(usageRateWarnTokensPerMin, forKey: "usageRateWarnTokensPerMin")
-        }
     }
     var ingestEnabled = false {
         didSet { defaults.set(ingestEnabled, forKey: "ingestEnabled") }
@@ -486,11 +511,14 @@ final class NotchHUDConfig {
         return snoozedUntil.timeIntervalSinceNow > 0
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
     private var isInitializing = false
 
-    private init() {
+    /// Test seam: an isolated suite proves reload behavior without touching
+    /// the user's real defaults. Production always uses `.standard`.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         isInitializing = true
         if let v = defaults.object(forKey: "enableAgentAlerts") as? Bool {
             enableAgentAlerts = v
@@ -542,6 +570,15 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "enforceBudgetLimit") as? Bool {
             enforceBudgetLimit = v
+        }
+        if let v = defaults.object(forKey: "openCodeGoAllowanceUSD") as? NSNumber {
+            openCodeGoAllowanceUSD = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "quotaBadgeThresholdPercent") as? NSNumber {
+            quotaBadgeThresholdPercent = v.doubleValue
+        }
+        if let v = defaults.object(forKey: "desktopHUDAutoHideSeconds") as? NSNumber {
+            desktopHUDAutoHideSeconds = v.doubleValue
         }
         if let v = defaults.object(forKey: "highBurnThresholdTPM") as? NSNumber {
             highBurnThresholdTPM = v.doubleValue
@@ -646,12 +683,6 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "idleMaxChips") as? NSNumber {
             idleMaxChips = min(max(v.intValue, 1), 6)
         }
-        if let v = defaults.object(forKey: "expandedQueueCap") as? NSNumber {
-            expandedQueueCap = min(max(v.intValue, 1), 5)
-        }
-        if let v = defaults.object(forKey: "expandedShowQueue") as? Bool {
-            expandedShowQueue = v
-        }
         if let v = defaults.object(forKey: "expandedGroupByState") as? Bool {
             expandedGroupByState = v
         }
@@ -685,15 +716,6 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "standaloneScanEnabled") as? Bool {
             standaloneScanEnabled = v
         }
-        if let v = defaults.object(forKey: "showUsageGauge") as? Bool {
-            showUsageGauge = v
-        }
-        if let v = defaults.object(forKey: "usageBudgetUSD") as? NSNumber {
-            usageBudgetUSD = min(max(v.doubleValue, 1), 100)
-        }
-        if let v = defaults.object(forKey: "usageRateWarnTokensPerMin") as? NSNumber {
-            usageRateWarnTokensPerMin = min(max(v.intValue, 100), 1_000_000)
-        }
         if let v = defaults.object(forKey: "ingestEnabled") as? Bool {
             ingestEnabled = v
         }
@@ -707,8 +729,32 @@ final class NotchHUDConfig {
         if let v = defaults.object(forKey: "ingestPort") as? NSNumber {
             ingestPort = Int(IngestHTTP.clampedPort(v.intValue))
         }
+        if let v = defaults.object(forKey: "confirmRiskyPrompts") as? Bool {
+            confirmRiskyPrompts = v
+        }
+        if let v = defaults.stringArray(forKey: "riskyPromptPatterns") {
+            riskyPromptPatterns = v
+        }
         if let v = defaults.object(forKey: "showShelfTab") as? Bool {
             showShelfTab = v
+        }
+        if let v = defaults.object(forKey: "showAgentsTab") as? Bool {
+            showAgentsTab = v
+        }
+        if let v = defaults.object(forKey: "showHistoryTab") as? Bool {
+            showHistoryTab = v
+        }
+        if let v = defaults.object(forKey: "showMediaTab") as? Bool {
+            showMediaTab = v
+        }
+        if let v = defaults.object(forKey: "showNotesTab") as? Bool {
+            showNotesTab = v
+        }
+        if let v = defaults.object(forKey: "usageTrackingEnabled") as? Bool {
+            usageTrackingEnabled = v
+        }
+        if let v = defaults.object(forKey: "hoverSensitivityPreset") as? String {
+            hoverSensitivityPreset = v
         }
         if let v = defaults.object(forKey: "panelPinned") as? Bool {
             panelPinned = v

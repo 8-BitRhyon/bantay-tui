@@ -128,6 +128,13 @@ public struct TaskWidgetView: View {
                 Text("APPLE REMINDERS")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundColor(.blue.opacity(0.9))
+                if let listName = reminders.defaultList?.title, !listName.isEmpty {
+                    Text(listName)
+                        .font(.system(size: 8.5))
+                        .foregroundColor(.white.opacity(0.4))
+                        .lineLimit(1)
+                        .help("Syncs with this Reminders list only")
+                }
                 Spacer()
                 if reminders.isLoading {
                     ProgressView().controlSize(.mini)
@@ -156,13 +163,21 @@ public struct TaskWidgetView: View {
             if remindersEnabled {
                 if !reminders.authorized && !reminders.isAuthorized {
                     HStack(spacing: 8) {
-                        Text("Allow Reminders access in System Settings to sync.")
-                            .font(.system(size: 9.5))
-                            .foregroundColor(.white.opacity(0.6))
-                        Button("Allow") {
-                            Task {
-                                _ = await reminders.requestAccess()
-                                await reminders.refresh()
+                        Text(
+                            reminders.permissionDenied
+                                ? "Reminders access is off. Open System Settings to turn it on."
+                                : "Allow Reminders access in System Settings to sync."
+                        )
+                        .font(.system(size: 9.5))
+                        .foregroundColor(.white.opacity(0.6))
+                        Button(reminders.permissionDenied ? "Open Settings" : "Allow") {
+                            if reminders.permissionDenied {
+                                reminders.openPrivacySettings()
+                            } else {
+                                Task {
+                                    _ = await reminders.requestAccess()
+                                    await reminders.refresh()
+                                }
                             }
                         }
                         .font(.system(size: 9, weight: .semibold))
@@ -327,6 +342,14 @@ public struct TaskWidgetView: View {
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(BantayTheme.statusWorking.opacity(0.15), in: Capsule())
+
+                        if let routed = task.routedAgent {
+                            Text("→ \(routed)")
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundColor(BantayTheme.statusAttention)
+                                .help("Quota routing diverted this task from \(agent)")
+                                .accessibilityLabel("Rerouted to \(routed)")
+                        }
 
                         executionStateBadge(task)
                     }

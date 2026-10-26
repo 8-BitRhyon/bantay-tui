@@ -174,6 +174,18 @@ public enum RichSessionViewer {
                     }
                     continue
                 }
+            } else if trimmed.hasPrefix("❯ User: ") {
+                let prompt = String(trimmed.dropFirst(8))
+                turns.append(Turn(kind: .userPrompt, title: "User Prompt", detail: prompt))
+            } else if trimmed.hasPrefix("→ ") {
+                let action = String(trimmed.dropFirst(2))
+                turns.append(Turn(kind: .toolCall, title: action))
+            } else if trimmed.hasPrefix("● ") {
+                let response = String(trimmed.dropFirst(2))
+                turns.append(Turn(kind: .assistant, title: "Agent Response", detail: response))
+            } else if trimmed.hasPrefix("│ ") {
+                let text = String(trimmed.dropFirst(2))
+                turns.append(Turn(kind: .raw, title: text))
             } else {
                 let clean = LogFormatter.cleanAnsi(trimmed)
                 if !clean.isEmpty {
@@ -647,7 +659,12 @@ public enum RichSessionViewer {
 
         do {
             try html.write(to: tmpUrl, atomically: true, encoding: .utf8)
-            NSWorkspace.shared.open(tmpUrl)
+            if !NSWorkspace.shared.open(tmpUrl) {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                proc.arguments = [tmpUrl.path]
+                try? proc.run()
+            }
         } catch {
             print("[RichSessionViewer] Failed to write HTML: \(error)")
         }
