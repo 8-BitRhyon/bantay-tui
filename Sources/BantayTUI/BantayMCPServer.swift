@@ -215,7 +215,13 @@ enum BantayMCPServer {
                 payload["variance"] = "yes-no"
             }
             appendEvent(payload, to: eventsPath)
-            return makeToolCallSuccess(id: id, text: "Approval requested for: \(title)")
+            // MCP has no decision channel back to the agent: the request is
+            // review-only by construction. Say so in the tool result.
+            return makeToolCallSuccess(
+                id: id,
+                text:
+                    "Approval requested for: \(title) (review-only: decide in the agent's terminal)"
+            )
 
         case "bantay_log":
             guard let message = arguments["message"] as? String else {

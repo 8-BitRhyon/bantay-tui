@@ -1243,6 +1243,28 @@ struct LogicCheckMain {
         let sumW = IslandMetrics.idleStripWidth(
             style: .summary, agentCount: 9, maxChips: 6, nameLengths: [])
         check(sumW > 0 && sumW < IslandMetrics.expandedWidth, "L5 summary width sane")
+        check(
+            IslandMetrics.IdleStyle.project.rawValue == "project",
+            "L5 project style has a stable raw value")
+        let projectOne = IslandMetrics.idleStripWidth(
+            style: .project, agentCount: 4, maxChips: 3, nameLengths: [4])
+        let projectTwo = IslandMetrics.idleStripWidth(
+            style: .project, agentCount: 4, maxChips: 3, nameLengths: [4, 4])
+        check(
+            projectTwo > projectOne,
+            "L5 project overflow widens the chip (got \(projectTwo) vs \(projectOne))")
+        let projectLong = IslandMetrics.idleProjectChipWidth(
+            nameLength: 14, agentCount: 4, projectCount: 1)
+        let projectShort = IslandMetrics.idleProjectChipWidth(
+            nameLength: 4, agentCount: 4, projectCount: 1)
+        check(projectLong > projectShort, "L5 longer project names widen the chip")
+        let closedProject = IslandMetrics.idleClosedWidth(
+            style: .project, agentCount: 4, maxChips: 3,
+            nameLengths: [10, 6], notchWidth: 190)
+        check(
+            closedProject >= IslandMetrics.idleChipWidth
+                && closedProject <= IslandMetrics.expandedWidth,
+            "L5 closed project chip clamps to the strip (got \(closedProject))")
         let closedNames = IslandMetrics.idleClosedWidth(
             style: .names, agentCount: 8, maxChips: 6,
             nameLengths: Array(repeating: 4, count: 8), notchWidth: 190)
@@ -1263,6 +1285,10 @@ struct LogicCheckMain {
             check(
                 cfg.clampedIdleMaxChips >= 1 && cfg.clampedIdleMaxChips <= 6,
                 "L5 clamped max chips in range (got \(cfg.clampedIdleMaxChips))")
+            cfg.idleStyle = .project
+            check(
+                defaults.string(forKey: "idleStyle") == "project",
+                "L5 project style persisted")
             cfg.idleStyle = .dots
             check(
                 defaults.string(forKey: "idleStyle") == "dots",
@@ -2535,6 +2561,71 @@ struct LogicCheckMain {
             agentCount: 3, maxChips: 3, nameLengths: [30, 30, 30], availableWidth: 200)
         check(fit4 >= 1 && fit4 <= 3, "L23 long names shrink fit (got \(fit4))")
         check(fit4 <= fit1, "L23 longer names never fit more than short ones")
+        let cramped = IslandMetrics.idleChipFit(
+            agentCount: 4, maxChips: 3, nameLengths: [8, 11, 5], availableWidth: 134)
+        check(
+            cramped.shown == 1 && cramped.overflow == 3,
+            "L23 centered wing shows one full name plus +3 (got \(cramped.shown)+\(cramped.overflow))"
+        )
+        let roomy = IslandMetrics.idleChipFit(
+            agentCount: 4, maxChips: 3, nameLengths: [3, 3, 3], availableWidth: 200)
+        check(
+            roomy.shown == 3 && roomy.overflow == 1,
+            "L23 roomy wing keeps three chips plus overflow (got \(roomy.shown)+\(roomy.overflow))"
+        )
+        let singleChip = IslandMetrics.idleChipFit(
+            agentCount: 1, maxChips: 3, nameLengths: [8], availableWidth: 134)
+        check(
+            singleChip.shown == 1 && singleChip.overflow == 0,
+            "L23 one agent shows its full name without overflow")
+        let noRoom = IslandMetrics.idleChipFit(
+            agentCount: 2, maxChips: 3, nameLengths: [11, 11], availableWidth: 40)
+        check(
+            noRoom.shown == 0 && noRoom.overflow == 0,
+            "L23 no readable chip means no cramped chips")
+        check(
+            IslandMetrics.centeredWorkingLabel(working: 4) == "4 working",
+            "L23 working count never reads as Idle")
+        let projectLabels = IslandMetrics.compactProjectLabels(
+            projects: ["bantay-tui", "Bantay-TUI", "api", nil, "  api  "],
+            sources: ["opencode", "kilo", "codex", "herdr", "cursor"])
+        check(
+            projectLabels == ["bantay-tui", "api", "herdr"],
+            "L23 project labels dedupe and fall back to source (got \(projectLabels))")
+        check(
+            IslandMetrics.compactProjectLabels(
+                projects: ["", nil], sources: ["", "  "]
+            ).isEmpty,
+            "L23 empty project and source make no chip")
+        check(
+            IslandMetrics.compactProjectLabels(
+                projects: ["  api  "], sources: ["opencode"]
+            ) == ["api"],
+            "L23 project labels trim whitespace")
+        let recentFirst = IslandMetrics.compactProjectLabels(
+            projects: ["older", "newer", "oldest"],
+            sources: ["a", "b", "c"],
+            startedAt: [
+                Date(timeIntervalSince1970: 10),
+                Date(timeIntervalSince1970: 20),
+                nil,
+            ])
+        check(
+            recentFirst == ["newer", "older", "oldest"],
+            "L23 newest project leads the strip (got \(recentFirst))")
+        let tiedOrder = IslandMetrics.compactProjectLabels(
+            projects: ["first", "second"], sources: ["a", "b"],
+            startedAt: [nil, nil])
+        check(
+            tiedOrder == ["first", "second"],
+            "L23 tied start times keep roster order (got \(tiedOrder))")
+        let projectPill = IslandMetrics.idleProjectChipWidth(
+            nameLength: 6, agentCount: 1, projectCount: 1)
+        let projectPillWide = IslandMetrics.idleProjectChipWidth(
+            nameLength: 6, agentCount: 12, projectCount: 3)
+        check(
+            projectPillWide > projectPill,
+            "L23 project pill grows with count and overflow (got \(projectPillWide))")
 
         // L24. Expanded height reserves the tab row when it is shown, plus
         // +N overflow rows.
@@ -3283,12 +3374,28 @@ struct LogicCheckMain {
                     .appendingPathComponent("lc-l38-\(UUID().uuidString).jsonl"),
                 capture: false)
             manager.setActive(false)
+            // Recording requires an attributable burst: seed a baseline
+            // counter, open the burst with progress, move the counter,
+            // then finish. Baseless completions are not sessions and
+            // contribute no recents.
             for index in 0..<7 {
+                let source = "agent-\(index)"
+                let pane = "p\(index)"
+                manager.setLifetimeCounterForTesting(
+                    source: source, tokens: 1000, cost: 1.0)
                 manager.publishEventForTesting(
                     AgentEvent(
-                        source: "agent-\(index)",
+                        source: source, kind: .progress,
+                        title: "working \(index)", message: nil, paneId: pane,
+                        workspaceId: nil, variance: nil, choices: nil,
+                        playSound: false, persistent: true))
+                manager.setLifetimeCounterForTesting(
+                    source: source, tokens: 2000, cost: 2.0)
+                manager.publishEventForTesting(
+                    AgentEvent(
+                        source: source,
                         kind: index.isMultiple(of: 2) ? .completed : .failed,
-                        title: "result \(index)", message: nil, paneId: "p\(index)",
+                        title: "result \(index)", message: nil, paneId: pane,
                         workspaceId: nil, variance: nil, choices: nil,
                         playSound: false, persistent: false))
             }
@@ -3304,6 +3411,15 @@ struct LogicCheckMain {
             // working-burst start for the pane and reports createdAt − start.
             let start = Date()
             manager.recordStartForTesting(pane: "dur", at: start.addingTimeInterval(-90))
+            manager.setLifetimeCounterForTesting(
+                source: "dur-agent", tokens: 1000, cost: 1.0)
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "dur-agent", kind: .progress, title: "working",
+                    message: nil, paneId: "dur", workspaceId: nil, variance: nil,
+                    choices: nil, playSound: false, persistent: true))
+            manager.setLifetimeCounterForTesting(
+                source: "dur-agent", tokens: 1500, cost: 1.5)
             manager.publishEventForTesting(
                 AgentEvent(
                     source: "dur-agent", kind: .completed, title: "done", message: nil,
@@ -3373,24 +3489,35 @@ struct LogicCheckMain {
             // The shared history store persists across harness runs: diff
             // against the baseline so stale rows cannot mask the assertions.
             let baseRows = rows().count
+            // Baseless completions carry no attributable usage: no row,
+            // no recent, never a lifetime total stamped as a session.
             finish("Same finish")
+            finish("Same finish")
+            finish("Same finish")
+            check(rows().count - baseRows == 0, "baseless completions record no rows")
+            check(recents() == 0, "baseless completions push no recents")
+            // An attributable burst records once; identical heartbeats
+            // after it record nothing more.
+            dup.setLifetimeCounterForTesting(
+                source: "dupe-agent", tokens: 5000, cost: 5.0)
+            work()
+            dup.setLifetimeCounterForTesting(
+                source: "dupe-agent", tokens: 5500, cost: 5.5)
             finish("Same finish")
             finish("Same finish")
             check(rows().count - baseRows == 1, "heartbeat dupes record one row")
             check(recents() == 1, "heartbeat dupes push one recent")
             check(
-                rows().first?.isDelta == false,
-                "no-baseline rows are legacy-marked, never fake deltas")
+                rows().first?.isDelta == true,
+                "attributable rows are true deltas")
             // Session ids carry one-second resolution: space the next burst
             // so the id guard cannot mask the fingerprint re-arm.
             Thread.sleep(forTimeInterval: 1.2)
             work()
+            dup.setLifetimeCounterForTesting(
+                source: "dupe-agent", tokens: 6000, cost: 6.0)
             finish("Same finish")
             check(rows().count - baseRows == 2, "new burst after progress records again")
-            check(
-                rows().first?.isWindowEstimate == true
-                    && rows().first?.isDelta == false,
-                "uncovered sources fall back to window estimates")
             // Covered sources meter true deltas against lifetime counters.
             dup.setLifetimeCounterForTesting(
                 source: "metered-agent", tokens: 10_000, cost: 1.00)
@@ -5393,12 +5520,7 @@ struct LogicCheckMain {
         check(
             abs(NotchHUDConfig.shared.hoverDelaySeconds - 0.08) < 0.001,
             "L70 snappy hover sensitivity is 0.08s")
-        // L71 Media & Notes Integration
-        NotesStore.shared.noteText = "# Test Note"
-        NotesStore.shared.saveImmediate()
-        check(
-            NotesStore.shared.noteText == "# Test Note",
-            "L71 NotesStore note text saved")
+        // L71 Media Integration
         let dummyTrack = MediaTrack(title: "Song", artist: "Artist", isPlaying: true)
         check(
             dummyTrack.title == "Song" && dummyTrack.isPlaying == true,
@@ -5471,13 +5593,6 @@ struct LogicCheckMain {
         check(
             hud == nil || hud != nil,
             "L77 SystemHUDMonitor multi-call monitoring invalidates prior timers safely")
-
-        // L78 NotesStore Initial Load Save-Bypass Test
-        let store = NotesStore.shared
-        let current = store.noteText
-        check(
-            !current.isEmpty,
-            "L78 NotesStore note loaded without scheduling immediate redundant disk write")
 
         // L79 ShelfStore Folder Cleanup Test
         let testUUID = UUID().uuidString
@@ -9559,6 +9674,433 @@ struct LogicCheckMain {
             !AgentDetector.isNonTranscriptTree(
                 "/Users/me/projects/opencode/shell-tool/main.swift"),
             "PERF unrelated opencode-named project is not skipped")
+
+        // Interaction feedback: the refusal shake must rest at zero, reach the
+        // full travel mid-flight, and return to zero so it never drifts.
+        check(
+            abs(ShakeEffect.offset(progress: 0)) < 0.0001,
+            "FEEDBACK shake rests at zero")
+        check(
+            abs(ShakeEffect.offset(progress: 1)) < 0.0001,
+            "FEEDBACK shake returns to zero")
+        check(
+            abs(ShakeEffect.offset(progress: 0.5) + 5) < 0.0001,
+            "FEEDBACK shake reaches full travel at mid progress")
+        check(
+            abs(ShakeEffect.offset(progress: 0.2)) <= 5,
+            "FEEDBACK shake stays within its travel budget")
+
+        // P0 approval proof: confirmed sends, decision receipts, observe-only.
+        // Unsupported panes must stay review-only, and no failure may ever
+        // report success.
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "mcp:claude", inputSynthesisEnabled: true) == false,
+            "PROOF mcp panes cannot receive a decision")
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "app:claude", inputSynthesisEnabled: true) == false,
+            "PROOF app panes cannot receive a decision")
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "  ", inputSynthesisEnabled: true) == false,
+            "PROOF empty pane ids cannot receive a decision")
+        check(
+            ApprovalRouting.supportsDecision(
+                paneId: "standalone:claude", inputSynthesisEnabled: true) == true
+                && ApprovalRouting.supportsDecision(
+                    paneId: "standalone:claude", inputSynthesisEnabled: false)
+                    == false,
+            "PROOF standalone panes follow the input-synthesis gate")
+        check(
+            ApprovalRouting.route(
+                paneId: "dev:1.2", adapterKind: .tmux,
+                inputSynthesisEnabled: true, paneAlive: true)
+                == .multiplexer(.tmux),
+            "PROOF multiplexer panes route to their adapter")
+        check(
+            ApprovalRouting.route(
+                paneId: "opencode:proj", adapterKind: .herdr,
+                inputSynthesisEnabled: true, paneAlive: true)
+                == .openCodeDecisionFile,
+            "PROOF opencode panes route to the decision file")
+        if case .observeOnly = ApprovalRouting.route(
+            paneId: "mcp:claude", adapterKind: .tmux,
+            inputSynthesisEnabled: true, paneAlive: true)
+        {
+        } else {
+            check(false, "PROOF mcp pane routes to observe-only")
+        }
+
+        let proofHashA = ApprovalReceiptStore.requestHash("dev:1.2|run tests?")
+        check(
+            proofHashA == ApprovalReceiptStore.requestHash("dev:1.2|run tests?")
+                && proofHashA.count == 64
+                && ApprovalReceiptStore.requestHash("dev:1.2|other") != proofHashA,
+            "PROOF request hashes are stable, 64 chars, and distinct")
+
+        let proofDir =
+            FileManager.default.temporaryDirectory
+            .appendingPathComponent("bantay-proof-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(
+            at: proofDir, withIntermediateDirectories: true)
+        let proofReceipts = ApprovalReceiptStore(
+            fileURL: proofDir.appendingPathComponent("receipts.jsonl"))
+        proofReceipts.append(
+            ApprovalReceipt(
+                paneId: "fixture:9.9", source: "claude", eventKind: "access_request",
+                action: "approve",
+                requestHash: ApprovalReceiptStore.requestHash("x"),
+                idempotencyKey: "key-1", route: "tmux_send_keys", outcome: "sent"))
+        check(
+            proofReceipts.recent().first?.agentAck == "not_available",
+            "PROOF receipt store round-trips with explicit no-ack")
+
+        func awaitProof<T>(_ work: @escaping @MainActor () async -> T) -> T? {
+            var box: T?
+            Task { @MainActor in box = await work() }
+            let deadline = Date().addingTimeInterval(10.0)
+            while box == nil, Date() < deadline {
+                RunLoop.current.run(
+                    mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            return box
+        }
+
+        final class ProofAdapter: PlexerAdapter {
+            let kind: PlexerKind = .tmux
+            let confirmed: Bool
+            init(confirmed: Bool) { self.confirmed = confirmed }
+            func listPanes() -> [PaneInfo] { [] }
+            func captureTail(paneId: String, lines: Int) async -> String { "" }
+            func focusPane(paneId: String) {}
+            func sendLine(paneId: String, text: String) {}
+            func sendKeys(paneId: String, keys: [String]) {}
+            func sendLineConfirmed(paneId: String, text: String) async -> Bool {
+                confirmed
+            }
+            func sendKeysConfirmed(paneId: String, keys: [String]) async -> Bool {
+                confirmed
+            }
+            func stop(paneId: String) {}
+            func attachPane(paneId: String) {}
+            func agentPrompt(paneId: String, text: String) async {}
+            func captureDiff(cwd: String, pathLimit: Int) async -> String? { nil }
+        }
+
+        func proofManager(confirmed: Bool) -> AgentEventManager {
+            let file = proofDir.appendingPathComponent("events-\(UUID().uuidString).jsonl")
+            FileManager.default.createFile(atPath: file.path, contents: nil)
+            let manager = AgentEventManager(
+                eventsFileURL: file, capture: false, receiptStore: proofReceipts)
+            manager.activeAdapter = ProofAdapter(confirmed: confirmed)
+            return manager
+        }
+
+        func proofBlockedAgent(paneId: String) -> AgentSnapshot {
+            AgentSnapshot(
+                id: "proof-agent", source: "claude", kind: .accessRequest,
+                title: "Run tests?", message: nil, paneId: paneId,
+                workspaceId: "dev", cwd: nil, variance: .yesNo, choices: nil,
+                startedAt: nil, projectContext: nil)
+        }
+
+        func proofBlockedEvent(paneId: String) -> AgentEvent {
+            AgentEvent(
+                source: "claude", kind: .accessRequest, title: "Run tests?",
+                message: nil, paneId: paneId, workspaceId: nil,
+                variance: .yesNo, choices: nil, playSound: false, persistent: true)
+        }
+
+        let proofMcp = proofManager(confirmed: true)
+        proofMcp.publishEventForTesting(proofBlockedEvent(paneId: "mcp:claude"))
+        check(
+            proofMcp.pendingApprovals["mcp:claude"]?.actionable == false,
+            "PROOF mcp requests stay review-only")
+        let proofMcpOutcome = awaitProof { await proofMcp.approve(paneId: "mcp:claude") }
+        check(
+            proofMcpOutcome == .failed(.unsupported),
+            "PROOF mcp approval fails unsupported, never success")
+        check(
+            proofMcp.pendingApprovals["mcp:claude"] != nil,
+            "PROOF failed mcp approval keeps the request visible")
+        proofMcp.stop()
+
+        let proofDead = proofManager(confirmed: true)
+        let proofDeadOutcome = awaitProof { await proofDead.approve(paneId: "gone:9.9") }
+        check(
+            proofDeadOutcome == .failed(.deadPane),
+            "PROOF dead-pane approval fails without transport")
+        proofDead.stop()
+
+        let proofFail = proofManager(confirmed: false)
+        proofFail.setAgentsForTesting([proofBlockedAgent(paneId: "dev:1.2")])
+        proofFail.publishEventForTesting(proofBlockedEvent(paneId: "dev:1.2"))
+        let settleUntil = Date().addingTimeInterval(1.5)
+        while Date() < settleUntil {
+            RunLoop.current.run(
+                mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        let proofFailOutcome = awaitProof { await proofFail.approve(paneId: "dev:1.2") }
+        check(
+            proofFailOutcome == .failed(.transport),
+            "PROOF failed transport reports transport, never success")
+        check(
+            proofFail.pendingApprovals["dev:1.2"] != nil,
+            "PROOF failed transport keeps the request visible")
+        let proofRetryOutcome = awaitProof { await proofFail.approve(paneId: "dev:1.2") }
+        check(
+            proofRetryOutcome == .failed(.transport),
+            "PROOF retry of a failed transport reports transport again")
+        let proofKeys =
+            proofReceipts.recent(limit: 20)
+            .filter { $0.paneId == "dev:1.2" && $0.action == "approve" }
+            .map(\.idempotencyKey)
+        check(
+            proofKeys.count >= 2 && Set(proofKeys).count == 1,
+            "PROOF retries share one idempotency key")
+        proofFail.stop()
+
+        let proofSent = proofManager(confirmed: true)
+        proofSent.setAgentsForTesting([proofBlockedAgent(paneId: "dev:1.2")])
+        proofSent.publishEventForTesting(proofBlockedEvent(paneId: "dev:1.2"))
+        let proofSentOutcome = awaitProof { await proofSent.approve(paneId: "dev:1.2") }
+        check(
+            proofSentOutcome == .sent,
+            "PROOF confirmed transport sends")
+        check(
+            proofSent.pendingApprovals["dev:1.2"] == nil,
+            "PROOF confirmed transport clears the answered request")
+        proofSent.stop()
+
+        let proofEmpty = proofManager(confirmed: true)
+        let proofEmptyOutcome = awaitProof {
+            await proofEmpty.sendText(paneId: "dev:1.2", text: "   ")
+        }
+        check(
+            proofEmptyOutcome == .failed(.emptyText),
+            "PROOF empty free text fails without a receipt")
+        proofEmpty.stop()
+
+        let proofSynthesis = StandaloneAgentDispatcher.enableInputSynthesis
+        StandaloneAgentDispatcher.enableInputSynthesis = false
+        check(
+            StandaloneAgentDispatcher.dispatchApproval(
+                agentName: "claude", approved: true) == false,
+            "PROOF disabled input synthesis cannot approve")
+        StandaloneAgentDispatcher.enableInputSynthesis = proofSynthesis
+
+        let proofMissing = TmuxAdapter(tmuxBinPath: "bantay-no-such-binary-xyz")
+        let proofMissingOutcome = awaitProof {
+            await proofMissing.sendKeysConfirmed(paneId: "dev:1.2", keys: ["y"])
+        }
+        check(
+            proofMissingOutcome == false,
+            "PROOF missing tmux binary reports transport failure")
+
+        // SESSIONS correctness: every row must be an attributable session.
+        // Baseless completions and zero-token completions are not recorded;
+        // failures always keep their error signal; same-session refires with
+        // different titles collapse into one row with the best numbers.
+        func proofCleanupSuite(_ suite: String) {
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/\(suite).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
+        func proofSessionStore() -> (SessionHistoryStore, String) {
+            let suite = "bantay-proof-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            return (SessionHistoryStore(defaults: defaults), suite)
+        }
+        func proofSessionManager(store: SessionHistoryStore) -> AgentEventManager {
+            let file = proofDir.appendingPathComponent(
+                "sess-events-\(UUID().uuidString).jsonl")
+            FileManager.default.createFile(atPath: file.path, contents: nil)
+            return AgentEventManager(
+                eventsFileURL: file, capture: false, sessionStore: store)
+        }
+        func proofSessionAgent(
+            paneId: String, title: String? = nil, sessionPath: String? = nil
+        ) -> AgentSnapshot {
+            AgentSnapshot(
+                id: "proof-session", source: "proofagent", kind: .accessRequest,
+                title: title, message: nil, paneId: paneId,
+                workspaceId: "w9", cwd: nil, variance: nil, choices: nil,
+                startedAt: nil, projectContext: nil, sessionPath: sessionPath)
+        }
+        func proofSessionEvent(
+            kind: AgentEventKind, paneId: String, title: String? = "Whatever"
+        ) -> AgentEvent {
+            AgentEvent(
+                source: "proofagent", kind: kind, title: title,
+                message: nil, paneId: paneId, workspaceId: nil,
+                variance: nil, choices: nil, playSound: false, persistent: true)
+        }
+
+        let (sessStore1, sessSuite1) = proofSessionStore()
+        let sessManager1 = proofSessionManager(store: sessStore1)
+        sessManager1.publishEventForTesting(
+            proofSessionEvent(kind: .completed, paneId: "w9:p9"))
+        check(
+            sessStore1.sessions.isEmpty,
+            "SESS baseless completed is not recorded as a session")
+        sessManager1.stop()
+        proofCleanupSuite(sessSuite1)
+
+        let (sessStore2, sessSuite2) = proofSessionStore()
+        let sessManager2 = proofSessionManager(store: sessStore2)
+        sessManager2.setAgentsForTesting([proofSessionAgent(paneId: "w9:p9")])
+        sessManager2.publishEventForTesting(
+            proofSessionEvent(kind: .progress, paneId: "w9:p9"))
+        sessManager2.publishEventForTesting(
+            proofSessionEvent(kind: .completed, paneId: "w9:p9"))
+        check(
+            sessStore2.sessions.isEmpty,
+            "SESS zero-token completed is not recorded as a session")
+        sessManager2.stop()
+        proofCleanupSuite(sessSuite2)
+
+        let (sessStore3, sessSuite3) = proofSessionStore()
+        let sessManager3 = proofSessionManager(store: sessStore3)
+        sessManager3.publishEventForTesting(
+            proofSessionEvent(kind: .failed, paneId: "w9:p9", title: "Boom"))
+        check(
+            sessStore3.sessions.count == 1
+                && sessStore3.sessions.first?.totalTokens == 0
+                && sessStore3.sessions.first?.isDelta == false,
+            "SESS failed without baseline keeps its error signal honestly")
+        sessManager3.stop()
+        proofCleanupSuite(sessSuite3)
+
+        let (sessStore4, sessSuite4) = proofSessionStore()
+        let sessManager4 = proofSessionManager(store: sessStore4)
+        sessManager4.setAgentsForTesting([
+            proofSessionAgent(
+                paneId: "w9:p9", title: "Proof Title",
+                sessionPath: "ses_proofpair")
+        ])
+        sessManager4.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1000, cost: 0.5)
+        sessManager4.publishEventForTesting(
+            proofSessionEvent(kind: .progress, paneId: "w9:p9"))
+        sessManager4.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1500, cost: 0.75)
+        sessManager4.publishEventForTesting(
+            proofSessionEvent(kind: .failed, paneId: "w9:p9", title: "A"))
+        sessManager4.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1900, cost: 0.9)
+        sessManager4.publishEventForTesting(
+            proofSessionEvent(kind: .failed, paneId: "w9:p9", title: "B"))
+        check(
+            sessStore4.sessions.count == 1,
+            "SESS same-session pair records one row (got \(sessStore4.sessions.count))")
+        check(
+            sessStore4.sessions.first?.totalTokens == 900,
+            "SESS same-session pair keeps the most complete numbers")
+        sessManager4.stop()
+        proofCleanupSuite(sessSuite4)
+
+        let (sessStore5, sessSuite5) = proofSessionStore()
+        let sessManager5 = proofSessionManager(store: sessStore5)
+        sessManager5.setAgentsForTesting([
+            proofSessionAgent(paneId: "w9:p9", title: "Proof Title")
+        ])
+        sessManager5.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1000, cost: 0.5)
+        sessManager5.publishEventForTesting(
+            proofSessionEvent(kind: .progress, paneId: "w9:p9"))
+        sessManager5.setLifetimeCounterForTesting(
+            source: "proofagent", tokens: 1500, cost: 0.75)
+        sessManager5.publishEventForTesting(
+            proofSessionEvent(kind: .completed, paneId: "w9:p9", title: nil))
+        check(
+            sessStore5.sessions.first?.title == "Proof Title"
+                && sessStore5.sessions.first?.totalTokens == 500,
+            "SESS titleless completion falls back to the roster title")
+        sessManager5.stop()
+        proofCleanupSuite(sessSuite5)
+
+        let staleRow = AgentSessionRecord(
+            agentName: "proofagent", title: "Old", isDelta: true)
+        let freshRow = AgentSessionRecord(
+            agentName: "proofagent", title: "New", isDelta: true,
+            buildTag: SessionHistoryStore.currentBuildTag)
+        let rebaselined = SessionHistoryStore.rebaselineStale(rows: [staleRow, freshRow])
+        check(
+            rebaselined[0].isDelta == false && rebaselined[1].isDelta == true,
+            "SESS migration quarantines rows from before the metering fix")
+
+        try? FileManager.default.removeItem(at: proofDir)
+
+        // LEDGER loading states: the spend tab must never run SQLite on the
+        // main thread. Snapshots load off-main, gate on the ledger
+        // revision, and scope filtering is pure in-memory math.
+        func awaitLedger<T>(_ work: @escaping () async -> T) -> T? {
+            var box: T?
+            Task { box = await work() }
+            let deadline = Date().addingTimeInterval(30.0)
+            while box == nil, Date() < deadline {
+                RunLoop.current.run(
+                    mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            return box
+        }
+        let ledgerEmptyHome =
+            FileManager.default.temporaryDirectory
+            .appendingPathComponent("bantay-ledger-empty-\(UUID().uuidString)").path
+        try? FileManager.default.createDirectory(
+            atPath: ledgerEmptyHome, withIntermediateDirectories: true)
+        let ledgerEmpty = awaitLedger {
+            await LedgerSnapshotCache.shared.snapshot(home: ledgerEmptyHome)
+        }
+        check(
+            ledgerEmpty?.lifetime == nil && ledgerEmpty?.buckets.isEmpty == true
+                && ledgerEmpty?.revision == 0,
+            "LEDGER empty home yields an empty snapshot")
+        try? FileManager.default.removeItem(atPath: ledgerEmptyHome)
+
+        let ledgerFirst = awaitLedger {
+            await LedgerSnapshotCache.shared.snapshot(home: ledgerEmptyHome)
+        }
+        let ledgerSecond = awaitLedger {
+            await LedgerSnapshotCache.shared.snapshot(home: ledgerEmptyHome)
+        }
+        check(
+            ledgerFirst != nil && ledgerFirst == ledgerSecond,
+            "LEDGER repeat loads hit the revision-gated cache")
+
+        let ledgerCalendar = Calendar.current
+        let ledgerToday = ledgerCalendar.startOfDay(for: Date())
+        func ledgerBucket(daysAgo: Int, tokens: Int) -> OpenCodeUsageAdapter.DayBucket {
+            OpenCodeUsageAdapter.DayBucket(
+                dayStart: ledgerCalendar.date(
+                    byAdding: .day, value: -daysAgo, to: ledgerToday)!,
+                tokens: tokens, cost: Double(tokens) / 1_000_000.0 * 3.0,
+                messages: tokens > 0 ? 1 : 0)
+        }
+        let ledgerFake = LedgerSnapshotData(
+            lifetime: OpenCodeUsageAdapter.LifetimeTotals(
+                tokens: 600, cost: 0.002, sessions: 3),
+            buckets: [
+                ledgerBucket(daysAgo: 0, tokens: 100),
+                ledgerBucket(daysAgo: 3, tokens: 200),
+                ledgerBucket(daysAgo: 30, tokens: 300),
+            ],
+            revision: 7)
+        let ledgerLife = ScopedLedger.summary(scope: .lifetime, snapshot: ledgerFake)
+        check(
+            ledgerLife.tokens == 600 && ledgerLife.sessions == 3
+                && ledgerLife.activeDays == 3,
+            "LEDGER lifetime scope sums every bucket (got \(ledgerLife.tokens) tok)")
+        let ledgerWeek = ScopedLedger.summary(scope: .week, snapshot: ledgerFake)
+        check(
+            ledgerWeek.tokens == 300,
+            "LEDGER week scope keeps only the last 7 days (got \(ledgerWeek.tokens) tok)")
+        let ledgerDay = ScopedLedger.summary(scope: .day, snapshot: ledgerFake)
+        check(
+            ledgerDay.tokens == 100,
+            "LEDGER day scope keeps only today (got \(ledgerDay.tokens) tok)")
 
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)

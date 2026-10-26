@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- **Closed Strip Choice** (`IslandMetrics.swift`, `NotchIdleStripView.swift`, `NotchHUDConfig.swift`, `SettingsView.swift`): The strip beside the notch now offers four modes: lead project plus working count, working count alone, agent name chips, and status dots. Project mode groups agents by folder, folds other projects into `+N`, and is the default for new installs. The choice persists and applies to centered and docked placements. A quiet notch no longer renders an `Idle` capsule.
 - **Desktop Strip HUD** (`DesktopHUDController.swift`, `DesktopHUDView.swift`): Bottom-center window-only surface with column cards, Chain, Overview, navigation, and a Layout menu. Opens with `⌃⌥Space`, the menu bar, or `bantay strip hud`. Auto-hides unless pinned. Never appears in full screen. The notch no longer renders window controls.
 - **Unified Approval Cards** (`ApprovalCardView.swift`): Blocked agents render as cards. Each card shows the exact request, risk badge, and queue position. Actions are Allow Once, Review, and Deny. Supports yes-no, numbered choices, and multi-select prompts.
 - **Humanized Agent Rows** (`AgentPresentation.swift`, `AgentRowView.swift`): Raw tool text maps to plain status lines. Risk tiers flag destructive commands. Subagents fold under their project. Clicking a row focuses its window. Reply uses `R` or the row menu.
@@ -54,6 +55,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- **Tactile Feedback** (`InteractionFeedback.swift`, `NotchCommonViews.swift`, `ApprovalCardView.swift`, `NotchStatusView.swift`): One motion scale now drives press, hover, selection, and commit feedback. Presses compress and spring back, hover fades instead of snapping, multi-select choices pop when picked, a delivered card holds for a 200 ms commit flash, and a refused action shakes. Reduce Motion skips all of it.
 - **Terminal Focus Registry** (`TerminalFocusser.swift`): Corrected the Ghostty bundle identifier to `com.mitchellh.ghostty` and added `com.google.antigravity-ide`. Added PID ancestor lookup for CLI agents.
 - **Setup Script Deployment** (`scripts/setup.sh`): Updated binary installation to check modification timestamps (`-nt`). Installs the newest build to the app bundle.
 - **Peek Panel Event Monitoring** (`PeekPanel.swift`): Deferred click-outside dismissal to the next runloop turn. Ignores clicks on the Notch HUD window to prevent premature dismissal.
@@ -71,6 +73,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- **Centered Idle Strip** (`NotchIdleStripView.swift`, `IslandMetrics.swift`): Name chips fit the wing beside the notch, and overflow folds into `+N` instead of squeezing every label to two characters. The status reads `N working` instead of `Idle` while agents run, and a single blocked agent reads `1 needs you`.
 - Fixed every CI run hanging on the retired macOS 13 runner. The Intel compile, test, and logic legs now run on `macos-15-intel`, with the macOS 13 deployment target unchanged.
 - Fixed quota probes blocking the main thread during notch rendering. The header reads cached values.
 - Fixed the notch re-rendering on every strip scroll. It observes only the HUD controller now.
@@ -98,6 +101,10 @@ All notable changes to this project are documented in this file. The format is b
 - Fixed strip halos, chevrons, and HUD controls remaining visible over full-screen apps.
 - Fixed a stale strip timer resizing a full-screen window.
 - Fixed strip navigation targeting the frontmost process instead of the focused window.
+
+### Removed
+
+- **Quick Notes Scratchpad** (`NotchNotesView.swift`, `NotesStore.swift`): Removed the Notes tab, store, settings toggle, and keyboard shortcut. The tab held one unformatted global note with no agent link, no CLI surface, and no dispatch. Its only stored content was the logic harness fixture, which overwrote any real note. Recoverable from git history.
 
 ## [0.1.0] - 2026-08-05
 

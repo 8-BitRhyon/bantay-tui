@@ -439,10 +439,16 @@ struct NotchHistoryView: View {
     }
 
     private func sessionClockTime(_ date: Date) -> String {
+        Self.clockFormatter.string(from: date)
+    }
+
+    /// Shared clock formatter: one allocation, not one per row per body
+    /// evaluation. Main-thread use only, matching every call site.
+    private static let clockFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
-        return formatter.string(from: date)
-    }
+        return formatter
+    }()
 
     private func sessionActionButton(
         title: String, systemName: String, action: @escaping () -> Void

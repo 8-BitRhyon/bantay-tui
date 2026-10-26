@@ -888,9 +888,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         #endif
         if approve {
-            manager.approve(paneId: paneId)
+            Task { @MainActor in
+                await manager.approve(paneId: paneId)
+            }
         } else {
-            manager.deny(paneId: paneId)
+            Task { @MainActor in
+                await manager.deny(paneId: paneId)
+            }
         }
     }
 
@@ -954,11 +958,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 Task { @MainActor in
                     switch action {
                     case .approve(let paneId):
-                        manager.approve(paneId: paneId)
+                        await manager.approve(paneId: paneId)
                     case .deny(let paneId):
-                        manager.deny(paneId: paneId)
+                        await manager.deny(paneId: paneId)
                     case .choice(let paneId, let index):
-                        manager.approveChoice(paneId: paneId, choice: index)
+                        await manager.approveChoice(paneId: paneId, choice: index)
                     }
                 }
             }
@@ -1384,13 +1388,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor
     @objc private func approveAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
-        AgentEventManager.shared.approve(paneId: paneId)
+        Task { @MainActor in
+            await AgentEventManager.shared.approve(paneId: paneId)
+        }
     }
 
     @MainActor
     @objc private func denyAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
-        AgentEventManager.shared.deny(paneId: paneId)
+        Task { @MainActor in
+            await AgentEventManager.shared.deny(paneId: paneId)
+        }
     }
 
     @MainActor
@@ -1400,7 +1408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard parts.count == 2, let index = Int(parts[1]) else { return }
         let paneId = parts[0]
         let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
-        AgentEventManager.shared.approveChoice(paneId: paneId, choice: number)
+        Task { @MainActor in
+            await AgentEventManager.shared.approveChoice(paneId: paneId, choice: number)
+        }
     }
 
     /// Opens the Agents inbox for review without resolving anything.
@@ -1438,7 +1448,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         else {
             return
         }
-        AgentEventManager.shared.approveMulti(paneId: paneId, selections: numbers)
+        Task { @MainActor in
+            await AgentEventManager.shared.approveMulti(paneId: paneId, selections: numbers)
+        }
         menuMultiSelections.removeValue(forKey: paneId)
     }
 

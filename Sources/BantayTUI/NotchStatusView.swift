@@ -5,6 +5,7 @@ import UserNotifications
 @MainActor
 struct NotchStatusView: View {
     @EnvironmentObject var eventManager: AgentEventManager
+    @AppStorage("idleStyle") private var idleStyleRaw = IslandMetrics.IdleStyle.project.rawValue
     @State private var isExpanded = false
     @State private var isHovered = false
     @State private var hoverTask: Task<Void, Never>?
@@ -22,6 +23,13 @@ struct NotchStatusView: View {
     /// Inline failure from the last card action, with a retry closure.
     @State private var cardFailure: String?
     @State private var cardRetry: (() -> Void)?
+    /// One-shot feedback for a sent card action. The card holds for a
+    /// short commit beat before it leaves so the input feels acknowledged.
+    /// "Sent" means the transport accepted the write, never agent approval.
+    @State private var commitToken = 0
+    @State private var commitTask: Task<Void, Never>?
+    /// Drives the refusal shake when a send fails.
+    @State private var shakeTrigger: CGFloat = 0
     /// Second-click arming for risky prompts (opt-in).
     @State private var confirmArmed = false
     @State private var confirmTask: Task<Void, Never>?
@@ -37,7 +45,6 @@ struct NotchStatusView: View {
     private var showHistory: Bool { selectedTab == .history }
     private var showShelf: Bool { selectedTab == .shelf }
     private var showMedia: Bool { selectedTab == .media }
-    private var showNotes: Bool { selectedTab == .notes }
 
     @State private var historyMode: HistoryMode = .timeline
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
@@ -98,11 +105,32 @@ struct NotchStatusView: View {
         let full = min(AppDelegate.notchWidth, IslandMetrics.expandedWidth)
         guard !hasTransientEvent else { return full }
         let config = NotchHUDConfig.shared
+        let style = IslandMetrics.IdleStyle(rawValue: idleStyleRaw) ?? .project
         if isCenteredIdle {
             return full
         }
+        if style == .project {
+            let projects = IslandMetrics.compactProjectLabels(
+                projects: eventManager.agents.map { $0.projectContext?.project },
+                sources: eventManager.agents.map(\.source),
+                startedAt: eventManager.agents.map(\.startedAt))
+            let lead = IslandMetrics.cleanHUDText(projects.first ?? "", maxCharacters: 14)
+            var width = IslandMetrics.idleProjectChipWidth(
+                nameLength: lead.isEmpty ? 6 : lead.count,
+                agentCount: eventManager.agents.count,
+                projectCount: max(projects.count, 1))
+            if config.avoidMenuBarIcons {
+                let clearance = IslandMetrics.MenuBarClearance.maxIdleWidth(
+                    side: config.islandDockSide, notchWidth: AppDelegate.notchWidth,
+                    screenWidth: AppDelegate.islandScreen()?.frame.width
+                        ?? AppDelegate.notchWidth,
+                    auxLeft: AppDelegate.auxLeftWidth, auxRight: AppDelegate.auxRightWidth)
+                width = min(width, max(clearance, IslandMetrics.idleChipWidth))
+            }
+            return max(width, IslandMetrics.idleChipWidth)
+        }
         var width = IslandMetrics.idleClosedWidth(
-            style: config.idleStyle,
+            style: style,
             agentCount: eventManager.agents.count,
             maxChips: config.clampedIdleMaxChips,
             nameLengths: eventManager.agents.map(\.source.count),
@@ -254,7 +282,7 @@ struct NotchStatusView: View {
                 return min(
                     max(historyContentHeight + chipTopOffset, IslandMetrics.minExpandedHeight),
                     IslandMetrics.maxExpandedHeight)
-            } else if showShelf || showMedia || showNotes {
+            } else if showShelf || showMedia {
                 let itemCount =
                     showShelf
                     ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
@@ -298,7 +326,7 @@ struct NotchStatusView: View {
                 sectionCount: 3,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab
             )
-        } else if showShelf || showMedia || showNotes {
+        } else if showShelf || showMedia {
             let itemCount =
                 showShelf
                 ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
@@ -505,6 +533,8 @@ struct NotchStatusView: View {
             cardFailure = nil
             cardRetry = nil
             confirmArmed = false
+            commitTask?.cancel()
+            commitTask = nil
         }
         .onChange(of: hasSeenOnboarding) { seen in
             if !seen { showWelcome = true }
@@ -592,18 +622,26 @@ struct NotchStatusView: View {
         case .approve:
             // Multi-select: Y submits the toggled selection; otherwise plain
             // approve. The pill and the roster share queueSelections (keyed
-            // by pane id), so digits + Y work consistently from both.
+            // by pane id), so digits + Y work consistently from both. The
+            // decision is awaited off the key handler; a failure keeps the
+            // card open with its reason instead of dismissing.
             if agent.approval.isMulti {
                 let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
                     queueSelections[paneId] ?? [])
-                eventManager.approveMulti(paneId: paneId, selections: numbers)
+                Task { @MainActor in
+                    await eventManager.approveMulti(paneId: paneId, selections: numbers)
+                }
                 queueSelections.removeValue(forKey: paneId)
             } else {
-                eventManager.approve(paneId: paneId)
+                Task { @MainActor in
+                    await eventManager.approve(paneId: paneId)
+                }
             }
             return true
         case .deny:
-            eventManager.deny(paneId: paneId)
+            Task { @MainActor in
+                await eventManager.deny(paneId: paneId)
+            }
             return true
         case .reply:
             // Handled before the approval guard above; reply needs no pane.
@@ -613,7 +651,9 @@ struct NotchStatusView: View {
                 queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
                     queueSelections[paneId] ?? [], index: number - 1)
             } else {
-                eventManager.approveChoice(paneId: paneId, choice: number)
+                Task { @MainActor in
+                    await eventManager.approveChoice(paneId: paneId, choice: number)
+                }
             }
             return true
         }
@@ -659,7 +699,9 @@ struct NotchStatusView: View {
                 let paneId = IslandMetrics.actionablePaneId(
                     paneId: agent.paneId, source: agent.source)
             else { return }
-            eventManager.approve(paneId: paneId)
+            Task { @MainActor in
+                await eventManager.approve(paneId: paneId)
+            }
         } else {
             showDetail = true
             fetchPeek(paneId: agent.paneId ?? agent.source)
@@ -1220,6 +1262,11 @@ struct NotchStatusView: View {
                 + (cardFailure == nil ? 0 : 30)
         )
         .contentShape(Rectangle())
+        .modifier(ShakeEffect(animatableData: reduceMotion ? 0 : shakeTrigger))
+        .commitFlash(
+            token: commitToken,
+            cornerRadius: IslandMetrics.notificationCornerRadius,
+            reduceMotion: reduceMotion)
     }
 
     /// Compact completion/failure notice. No approval controls, no extra
@@ -1392,6 +1439,8 @@ struct NotchStatusView: View {
     }
 
     private func dismissNotification(_ id: UUID) {
+        commitTask?.cancel()
+        commitTask = nil
         let topBefore = activeNotification?.id
         withAnimation(morphAnimation) {
             notificationQueue = IslandMetrics.notificationQueueRemove(
@@ -1495,12 +1544,18 @@ struct NotchStatusView: View {
     }
 
     /// A notification may approve only when the event is a real permission
-    /// request with concrete detail. Generic blocked heartbeats get Review.
+    /// request with concrete detail and a transport that can carry the
+    /// decision. Generic blocked heartbeats and observe-only panes get Review.
     private func canApproveNotification(
         event: AgentEvent, agent: AgentSnapshot?
     ) -> Bool {
         guard event.kind == .accessRequest else { return false }
         if let agent, !agent.approvalActionable { return false }
+        guard
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: event.paneId, source: event.source),
+            eventManager.supportsDecision(paneId: paneId)
+        else { return false }
         if let agent, agent.approval.isYesNo, agent.approvalActionable { return true }
         let title = event.title ?? event.message
         return !IslandMetrics.isGenericApprovalText(title)
@@ -1536,9 +1591,9 @@ struct NotchStatusView: View {
             ) {
                 performCardAction(
                     paneId: paneId, prompt: event.title ?? event.message ?? "",
-                    onDelivered: { dismissNotification(event.id) }
+                    onSent: { dismissNotification(event.id) }
                 ) {
-                    eventManager.approveResult(paneId: paneId)
+                    await eventManager.approve(paneId: paneId)
                 }
             }
             notificationActionButton(
@@ -1547,9 +1602,9 @@ struct NotchStatusView: View {
             ) {
                 performCardAction(
                     paneId: paneId, prompt: event.title ?? event.message ?? "",
-                    onDelivered: { dismissNotification(event.id) }
+                    onSent: { dismissNotification(event.id) }
                 ) {
-                    eventManager.denyResult(paneId: paneId)
+                    await eventManager.deny(paneId: paneId)
                 }
             }
         } else {
@@ -1572,9 +1627,9 @@ struct NotchStatusView: View {
             ) {
                 performCardAction(
                     paneId: paneId, prompt: event.title ?? event.message ?? "",
-                    onDelivered: { dismissNotification(event.id) }
+                    onSent: { dismissNotification(event.id) }
                 ) {
-                    eventManager.approveResult(paneId: paneId)
+                    await eventManager.approve(paneId: paneId)
                 }
             }
         } else {
@@ -1588,9 +1643,9 @@ struct NotchStatusView: View {
                 ) {
                     performCardAction(
                         paneId: paneId, prompt: event.title ?? event.message ?? "",
-                        onDelivered: { dismissNotification(event.id) }
+                        onSent: { dismissNotification(event.id) }
                     ) {
-                        eventManager.approveChoiceResult(
+                        await eventManager.approveChoice(
                             paneId: paneId, choice: index + 1)
                     }
                 }
@@ -1708,12 +1763,12 @@ struct NotchStatusView: View {
         ) {
             performCardAction(
                 paneId: paneId, prompt: event.title ?? event.message ?? "",
-                onDelivered: {
+                onSent: {
                     queueSelections.removeValue(forKey: paneId)
                     dismissNotification(event.id)
                 }
             ) {
-                eventManager.approveMultiResult(paneId: paneId, selections: numbers)
+                await eventManager.approveMulti(paneId: paneId, selections: numbers)
             }
         }
     }
@@ -1799,6 +1854,7 @@ struct NotchStatusView: View {
 
     private func canApprovePill(event: AgentEvent, paneId: String) -> Bool {
         guard event.kind == .accessRequest else { return false }
+        guard eventManager.supportsDecision(paneId: paneId) else { return false }
         if let agent = mergedRoster.first(where: {
             ($0.paneId != nil && $0.paneId == paneId)
                 || $0.source == event.sourceKey
@@ -1820,13 +1876,17 @@ struct NotchStatusView: View {
                 systemName: "checkmark.circle.fill", color: .green, help: "Approve",
                 disabled: resolving
             ) {
-                eventManager.approve(paneId: paneId)
+                Task { @MainActor in
+                    noteSendOutcome(await eventManager.approve(paneId: paneId))
+                }
             }
             approvalActionButton(
                 systemName: "xmark.circle.fill", color: .red, help: "Deny",
                 disabled: resolving
             ) {
-                eventManager.deny(paneId: paneId)
+                Task { @MainActor in
+                    noteSendOutcome(await eventManager.deny(paneId: paneId))
+                }
             }
         case .choices:
             let options: [ChoiceOption] = {
@@ -1850,7 +1910,11 @@ struct NotchStatusView: View {
                     Menu {
                         ForEach(options) { opt in
                             Button("\(opt.id). \(opt.label)") {
-                                eventManager.approveChoice(paneId: paneId, choice: opt.id)
+                                Task { @MainActor in
+                                    noteSendOutcome(
+                                        await eventManager.approveChoice(
+                                            paneId: paneId, choice: opt.id))
+                                }
                             }
                         }
                     } label: {
@@ -1874,7 +1938,11 @@ struct NotchStatusView: View {
                         help: opt.label,
                         disabled: resolving
                     ) {
-                        eventManager.approveChoice(paneId: paneId, choice: opt.id)
+                        Task { @MainActor in
+                            noteSendOutcome(
+                                await eventManager.approveChoice(
+                                    paneId: paneId, choice: opt.id))
+                        }
                     }
                 }
             } else {
@@ -1882,7 +1950,9 @@ struct NotchStatusView: View {
                     systemName: "checkmark.circle.fill", color: .green, help: "Approve",
                     disabled: resolving
                 ) {
-                    eventManager.approve(paneId: paneId)
+                    Task { @MainActor in
+                        noteSendOutcome(await eventManager.approve(paneId: paneId))
+                    }
                 }
             }
         case .multi:
@@ -1903,7 +1973,11 @@ struct NotchStatusView: View {
             ) {
                 let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
                     queueSelections[paneId] ?? [])
-                eventManager.approveMulti(paneId: paneId, selections: numbers)
+                Task { @MainActor in
+                    noteSendOutcome(
+                        await eventManager.approveMulti(
+                            paneId: paneId, selections: numbers))
+                }
                 queueSelections.removeValue(forKey: paneId)
             }
         }
@@ -1997,8 +2071,6 @@ struct NotchStatusView: View {
                 )
             } else if showMedia {
                 NotchMediaView()
-            } else if showNotes {
-                NotchNotesView()
             } else {
                 NotchRosterView(
                     visibleAgents: visibleAgents,
@@ -2473,13 +2545,29 @@ struct NotchStatusView: View {
 
     // MARK: - Closed-card actions
 
+    /// Surfaces a fire-and-forget surface's send outcome in the shared
+    /// failure banner. A failure names its reason; the pill stays so the
+    /// same buttons retry.
+    private func noteSendOutcome(_ outcome: AgentEventManager.ActionResult) {
+        switch outcome {
+        case .sent:
+            cardFailure = nil
+        case .failed(let failure):
+            cardFailure = failure.message
+        }
+    }
+
     /// Runs a card action and surfaces its transport result. A failure keeps
-    /// the card open, names the reason, and offers Retry.
+    /// the card open, names the reason, and offers Retry. Only a confirmed
+    /// send dismisses.
     private func performCardAction(
         paneId: String, prompt: String,
-        onDelivered: (() -> Void)? = nil,
-        action: @escaping () -> AgentEventManager.ActionResult
+        onSent: (() -> Void)? = nil,
+        action: @escaping @Sendable () async -> AgentEventManager.ActionResult
     ) {
+        // A sent action holds the card for one commit beat. Ignore input
+        // during that window so a double-click cannot send twice.
+        guard commitTask == nil else { return }
         let config = NotchHUDConfig.shared
         let needsConfirm =
             config.confirmRiskyPrompts
@@ -2497,26 +2585,53 @@ struct NotchStatusView: View {
         }
         confirmTask?.cancel()
         confirmArmed = false
-        let result = action()
-        switch result {
-        case .delivered:
-            cardFailure = nil
-            cardRetry = nil
-            onDelivered?()
-        case .failed(let failure):
-            cardFailure = failure.message
-            cardRetry = { [self] in
-                performCardAction(
-                    paneId: paneId, prompt: prompt, onDelivered: onDelivered,
-                    action: action)
+        // The transport write is awaited off the button tap. The hold guard
+        // is set now so a second tap while sending cannot double-fire.
+        commitTask = Task { @MainActor in
+            let result = await action()
+            switch result {
+            case .sent:
+                cardFailure = nil
+                cardRetry = nil
+                commitTask = nil
+                commitSent(onSent)
+            case .failed(let failure):
+                commitTask = nil
+                cardFailure = failure.message
+                cardRetry = { [self] in
+                    performCardAction(
+                        paneId: paneId, prompt: prompt, onSent: onSent,
+                        action: action)
+                }
+                guard !reduceMotion else { return }
+                withAnimation(.linear(duration: 0.28)) { shakeTrigger += 1 }
             }
+        }
+    }
+
+    /// Hold the card for one short commit beat so a sent action reads as
+    /// written before the card leaves. The hold is skipped when nothing is
+    /// dismissed and when reduce-motion is on.
+    private func commitSent(_ onSent: (() -> Void)?) {
+        guard let onSent else { return }
+        guard !reduceMotion else {
+            onSent()
+            return
+        }
+        commitTask?.cancel()
+        commitToken += 1
+        commitTask = Task { @MainActor in
+            try? await Task.sleep(for: InteractionMotion.commitHold)
+            guard !Task.isCancelled else { return }
+            commitTask = nil
+            onSent()
         }
     }
 
     private func sendCardAnswer(paneId: String) {
         let text = cardAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
         performCardAction(paneId: paneId, prompt: text) {
-            eventManager.sendText(paneId: paneId, text: text)
+            await eventManager.sendText(paneId: paneId, text: text)
         }
     }
 
@@ -2533,30 +2648,19 @@ struct NotchStatusView: View {
         }
         let label = targetAgent?.source ?? StandaloneAgentDispatcher.cleanAgentName(from: paneId)
 
-        var delivered = false
-        if paneId.hasPrefix("standalone:") {
-            delivered = StandaloneAgentDispatcher.dispatchPrompt(
-                agentName: StandaloneAgentDispatcher.cleanAgentName(from: paneId),
-                text: text, cwd: targetAgent?.cwd, autoSend: true)
-        } else if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            delivered = StandaloneAgentDispatcher.dispatchPrompt(
-                agentName: "opencode", text: text, cwd: targetAgent?.cwd, autoSend: true)
-        } else {
-            // Multiplexer panes take text through the adapter directly; no
-            // Accessibility or clipboard involved.
-            let activeAdapter = eventManager.activeAdapter
-            activeAdapter.sendLine(paneId: paneId, text: text)
-            activeAdapter.focusPane(paneId: paneId)
-            delivered = true
-        }
-
-        if delivered {
-            showComposeNotice("Sent to \(label)")
-            cancelComposing()
-        } else {
-            // Never clear a draft that did not reach the agent.
-            showComposeNotice("Couldn't reach \(label). Grant Accessibility or open its terminal.")
-            promptFocused = true
+        // Free text goes through the same confirmed pipeline as decisions:
+        // only a confirmed write clears the draft.
+        Task { @MainActor in
+            let outcome = await eventManager.sendText(paneId: paneId, text: text)
+            switch outcome {
+            case .sent:
+                showComposeNotice("Sent to \(label)")
+                cancelComposing()
+            case .failed(let failure):
+                // Never clear a draft that did not reach the agent.
+                showComposeNotice("\(failure.message) Draft kept.")
+                promptFocused = true
+            }
         }
     }
 

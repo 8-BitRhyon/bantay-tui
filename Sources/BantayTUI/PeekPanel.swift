@@ -123,6 +123,8 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
         model.isWorking = agent.kind == .progress || agent.kind == .started
         model.approvalActionable =
             agent.kind == .accessRequest && agent.approvalActionable
+            && AgentEventManager.shared.supportsDecision(
+                paneId: agent.paneId ?? agent.source)
         model.projectSlug = agent.projectContext?.project ?? agent.source
         if model.tailLines.isEmpty {
             model.isLoading = true
@@ -331,7 +333,9 @@ private struct PeekPanelView: View {
             if model.approvalActionable {
                 Button {
                     if let paneId = actionablePaneId {
-                        AgentEventManager.shared.approve(paneId: paneId)
+                        Task { @MainActor in
+                            await AgentEventManager.shared.approve(paneId: paneId)
+                        }
                     }
                 } label: {
                     HStack(spacing: 3) {
@@ -350,7 +354,9 @@ private struct PeekPanelView: View {
 
                 Button {
                     if let paneId = actionablePaneId {
-                        AgentEventManager.shared.deny(paneId: paneId)
+                        Task { @MainActor in
+                            await AgentEventManager.shared.deny(paneId: paneId)
+                        }
                     }
                 } label: {
                     HStack(spacing: 3) {
@@ -434,8 +440,10 @@ private struct PeekPanelView: View {
                         ForEach(choices) { option in
                             Button {
                                 if let paneId = actionablePaneId {
-                                    AgentEventManager.shared.approveChoice(
-                                        paneId: paneId, choice: option.id)
+                                    Task { @MainActor in
+                                        await AgentEventManager.shared.approveChoice(
+                                            paneId: paneId, choice: option.id)
+                                    }
                                 }
                             } label: {
                                 HStack(spacing: 4) {

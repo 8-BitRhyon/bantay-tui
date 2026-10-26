@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Navigation bar for the expanded notch HUD: core workflow tabs on the
 /// leading edge (Inbox, Tasks, History), quick utility pills on the trailing
-/// edge (Shelf, Notes, Media). Utilities stay one tap away without competing
+/// edge (Shelf, Media). Utilities stay one tap away without competing
 /// with the agent workflow for visual weight.
 struct NotchTabBarView: View {
     @Binding var selectedTab: ShelfTab
@@ -27,9 +27,6 @@ struct NotchTabBarView: View {
                 utilityButton(
                     icon: "tray.and.arrow.down", tab: .shelf, shortcut: "5",
                     glow: shelfDropGlow)
-            }
-            if NotchHUDConfig.shared.showNotesTab {
-                utilityButton(icon: "note.text", tab: .notes, shortcut: "6")
             }
             if NotchHUDConfig.shared.showMediaTab {
                 utilityButton(icon: "play.circle", tab: .media, shortcut: "7")

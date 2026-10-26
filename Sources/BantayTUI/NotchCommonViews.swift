@@ -86,7 +86,9 @@ struct AgentRowAccessibility: ViewModifier {
                     paneId: agent.paneId, source: agent.source),
                     agent.kind == .accessRequest || agent.kind == .waiting
                 {
-                    AgentEventManager.shared.approve(paneId: paneId)
+                    Task { @MainActor in
+                        await AgentEventManager.shared.approve(paneId: paneId)
+                    }
                 }
             }
             .accessibilityAction(named: "Deny") {
@@ -94,21 +96,9 @@ struct AgentRowAccessibility: ViewModifier {
                     paneId: agent.paneId, source: agent.source),
                     agent.kind == .accessRequest || agent.kind == .waiting
                 {
-                    AgentEventManager.shared.deny(paneId: paneId)
-                }
-            }
-    }
-}
-
-/// Spring-driven press animation style for tactile feedback.
-struct TactilePressStyle: ButtonStyle {
-    @Binding var isPressed: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .onChange(of: configuration.isPressed) { pressed in
-                withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
-                    isPressed = pressed
+                    Task { @MainActor in
+                        await AgentEventManager.shared.deny(paneId: paneId)
+                    }
                 }
             }
     }
@@ -122,8 +112,8 @@ struct TactileRowButton: View {
     var helpText: String = ""
     let action: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
-    @State private var isPressed = false
 
     private var foregroundColor: Color {
         isHovered ? .white : color.opacity(0.75)
@@ -139,10 +129,6 @@ struct TactileRowButton: View {
 
     private var strokeColor: Color {
         isHovered ? Color.white.opacity(0.25) : Color.white.opacity(0.08)
-    }
-
-    private var currentScale: CGFloat {
-        isPressed ? 0.92 : 1.0
     }
 
     var body: some View {
@@ -172,10 +158,13 @@ struct TactileRowButton: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .strokeBorder(strokeColor, lineWidth: 0.8)
             )
-            .scaleEffect(currentScale)
             .contentShape(Rectangle())
         }
-        .buttonStyle(TactilePressStyle(isPressed: $isPressed))
+        .buttonStyle(PressableButtonStyle(pressedScale: 0.93, reduceMotion: reduceMotion))
+        .animation(
+            isHovered ? InteractionMotion.hoverIn : InteractionMotion.hoverOut,
+            value: isHovered
+        )
         .onHover { isHovered = $0 }
         .help(helpText)
         .accessibilityLabel(helpText)
@@ -308,6 +297,5 @@ public enum ShelfTab: String, CaseIterable, Identifiable, Sendable {
     case history = "History"
     case shelf = "Shelf"
     case media = "Media"
-    case notes = "Notes"
     public var id: String { rawValue }
 }

@@ -115,7 +115,6 @@ struct SettingsView: View {
     @State private var showHistoryTab = NotchHUDConfig.shared.showHistoryTab
     @State private var showShelfTab = NotchHUDConfig.shared.showShelfTab
     @State private var showMediaTab = NotchHUDConfig.shared.showMediaTab
-    @State private var showNotesTab = NotchHUDConfig.shared.showNotesTab
     @State private var hoverSensitivity = NotchHUDConfig.shared.hoverSensitivityPreset
     @State private var enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
     @State private var quotaBadgeThreshold = NotchHUDConfig.shared.quotaBadgeThresholdPercent
@@ -150,8 +149,8 @@ struct SettingsView: View {
     private static let sectionKeywords: [String: [String]] = [
         "Startup": [
             "launch at login", "hide island at startup", "show island when idle", "idle position",
-            "idle display", "agent name chips", "status dots", "count summary", "max agent chips",
-            "dock",
+            "closed strip", "idle display", "project chip", "project name", "working count",
+            "agent name chips", "status dots", "count summary", "max agent chips", "dock",
         ],
         "Quick actions": [
             "global shortcut", "option space", "hotkey", "keyboard shortcuts in roster", "approve",
@@ -173,7 +172,7 @@ struct SettingsView: View {
         ],
         "Expanded panel": [
             "modular tabs", "agents roster tab", "tasks & reminders tab", "session history tab",
-            "drop shelf", "media tab", "quick notes tab", "scratchpad", "attention-only triage",
+            "drop shelf", "media tab", "attention-only triage",
             "hover sensitivity", "quota-axi", "global hotkey",
         ],
         "Muted sources": [
@@ -1508,20 +1507,35 @@ struct SettingsView: View {
                         NotificationCenter.default.post(
                             name: .notchVisibilityChanged, object: nil)
                     }
-                    Picker("Idle display", selection: $idleStyle) {
-                        Text("Agent name chips").tag(IslandMetrics.IdleStyle.names.rawValue)
-                        Text("Status dots only").tag(IslandMetrics.IdleStyle.dots.rawValue)
-                        Text("Count summary").tag(IslandMetrics.IdleStyle.summary.rawValue)
+                    Picker("Closed strip", selection: $idleStyle) {
+                        Text("Project + working count")
+                            .tag(IslandMetrics.IdleStyle.project.rawValue)
+                        Text("Working count only")
+                            .tag(IslandMetrics.IdleStyle.summary.rawValue)
+                        Text("Agent name chips")
+                            .tag(IslandMetrics.IdleStyle.names.rawValue)
+                        Text("Status dots only")
+                            .tag(IslandMetrics.IdleStyle.dots.rawValue)
                     }
-                    .help("What the closed chip shows beside the notch while agents work.")
+                    .help(
+                        "What the strip beside the notch shows while agents work. "
+                            + "Project groups agents by folder name; agent names show the CLI."
+                    )
                     .onChange(of: idleStyle) { newValue in
                         NotchHUDConfig.shared.idleStyle =
-                            IslandMetrics.IdleStyle(rawValue: newValue) ?? .names
+                            IslandMetrics.IdleStyle(rawValue: newValue) ?? .project
                         NotificationCenter.default.post(
                             name: .notchVisibilityChanged, object: nil)
                     }
                     Stepper("Max agent chips: \(idleMaxChips)", value: $idleMaxChips, in: 1...6)
-                        .help("Longer strips truncate to +N.")
+                        .help(
+                            "Applies to agent name and status dot modes. "
+                                + "Longer strips truncate to +N."
+                        )
+                        .disabled(
+                            idleStyle == IslandMetrics.IdleStyle.project.rawValue
+                                || idleStyle == IslandMetrics.IdleStyle.summary.rawValue
+                        )
                         .onChange(of: idleMaxChips) { newValue in
                             NotchHUDConfig.shared.idleMaxChips = newValue
                             NotificationCenter.default.post(
@@ -1558,11 +1572,6 @@ struct SettingsView: View {
                         .help("Adds Apple Music & Spotify player controls to expanded island.")
                         .onChange(of: showMediaTab) { newValue in
                             NotchHUDConfig.shared.showMediaTab = newValue
-                        }
-                    Toggle("📝 Quick Notes Scratchpad tab", isOn: $showNotesTab)
-                        .help("Adds an auto-saving markdown quick notes tab to expanded island.")
-                        .onChange(of: showNotesTab) { newValue in
-                            NotchHUDConfig.shared.showNotesTab = newValue
                         }
                     Toggle("Attention-only triage tab", isOn: $attentionFilter)
                         .help(

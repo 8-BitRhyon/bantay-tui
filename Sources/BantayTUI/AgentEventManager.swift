@@ -373,11 +373,26 @@ final class AgentEventManager: ObservableObject {
     /// Whether the baseline came from a covered source (true delta) or a
     /// rolling window (honest estimate). Pruned with the other per-pane maps.
     private var baselineCoveredByKey: [String: Bool] = [:]
-    /// Last recorded completion fingerprint per pane (kind + title). Kills
-    /// the 48-rows-for-one-finish class: heartbeats with no work between
-    /// completions record once. Cleared by progress/started, pruned with the
-    /// other per-pane maps.
-    private var completedFingerprintByKey: [String: String] = [:]
+    /// What the last completion for a pane recorded. One finish often
+    /// arrives as several events with different titles (a terminal title
+    /// from the roster poll, then a fallback from the event stream). The
+    /// session path identifies the finish; the title is only a description,
+    /// so a refire upgrades the row in place instead of doubling it.
+    private struct CompletionMark: Sendable {
+        var fingerprint: String
+        var title: String
+        var tokens: Int
+        var rowId: String
+        /// Baseline the recorded numbers were metered against. Upgrades
+        /// re-read current usage against this fixed start; without it the
+        /// cleared burst maps would meter lifetime as a delta.
+        var baseline: (tokens: Int, cost: Double)?
+        var covered: Bool
+    }
+
+    /// Last recorded completion per pane. Cleared by progress/started,
+    /// pruned with the other per-pane maps.
+    private var completionMarks: [String: CompletionMark] = [:]
     /// Latest approval prompt shape per pane, decoded from the event stream
     /// and enriched from the live pane when the event is only "blocked".
     var pendingApprovals: [String: PendingApproval] = [:]
@@ -397,9 +412,19 @@ final class AgentEventManager: ObservableObject {
     private let captureEnabled: Bool
     private let herdrAdapter = HerdrSocketAdapter()
     var activeAdapter: any PlexerAdapter = PlexerFactory.makeAdapter()
+    /// Append-only decision receipts. Injected in tests; shared in the app.
+    private let receiptStore: ApprovalReceiptStore
+    /// Session history. Injected in tests; shared in the app.
+    private let sessionStore: SessionHistoryStore
 
-    init(eventsFileURL: URL? = nil, capture: Bool = true) {
+    init(
+        eventsFileURL: URL? = nil, capture: Bool = true,
+        receiptStore: ApprovalReceiptStore? = nil,
+        sessionStore: SessionHistoryStore? = nil
+    ) {
         self.captureEnabled = capture
+        self.receiptStore = receiptStore ?? .shared
+        self.sessionStore = sessionStore ?? .shared
         let url =
             eventsFileURL
             ?? FileManager.default
@@ -679,9 +704,14 @@ final class AgentEventManager: ObservableObject {
             let explicitChoices = (event.choices ?? []).filter {
                 !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
+            // Transport gate: panes that cannot receive a decision stay
+            // review-only no matter how concrete the parsed prompt looks.
+            let supportsTransport = supportsDecision(
+                paneId: actionablePaneId ?? key)
             let actionable =
-                prompt.actionable
-                || (event.kind == .accessRequest && explicitChoices.count >= 2)
+                (prompt.actionable
+                    || (event.kind == .accessRequest && explicitChoices.count >= 2))
+                && supportsTransport
             let variance: ApprovalVariance? =
                 prompt.variance
                 ?? (explicitChoices.count >= 2 ? .choices : event.variance)
@@ -737,7 +767,7 @@ final class AgentEventManager: ObservableObject {
             }
             // New working burst re-arms completion recording: the next
             // completion for this pane is a real finish, not a heartbeat.
-            completedFingerprintByKey.removeValue(forKey: key)
+            completionMarks.removeValue(forKey: key)
         } else if event.kind == .completed || event.kind == .failed
             || event.kind == .cancelled || event.kind == .clear
         {
@@ -745,84 +775,108 @@ final class AgentEventManager: ObservableObject {
         }
 
         if event.kind == .completed || event.kind == .failed {
-            let title = event.title ?? event.message ?? event.kind.label
-            // Completion heartbeats re-emit the same finish for minutes.
-            // Record one row per working burst: identical kind+title with no
-            // progress since the last one is a dupe, not a new session.
-            let fingerprint = "\(event.kind.rawValue):\(title)"
-            if completedFingerprintByKey[key] != fingerprint {
-                completedFingerprintByKey[key] = fingerprint
-                recordedFreshFinish = true
-                // The periodic lifetime sweep may be up to 10s behind. A
-                // finish is the one moment the final tokens must land, so
-                // accrue transcript sources once more before metering.
-                if !UsageTracker.ledgerCoveredSources.contains(event.sourceKey) {
-                    lifetimeAccrual = UsageTracker.accrueLifetime(
-                        home: NSHomeDirectory(),
-                        names: self.agents.map { $0.source },
-                        state: lifetimeAccrual)
+            let snap = self.agents.first {
+                (event.paneId != nil && $0.paneId == event.paneId)
+                    || $0.source == event.sourceKey
+            }
+            let sessionIdentity = snap?.sessionPath.flatMap {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+            }
+            // Prefer the roster's terminal title over a bare kind label:
+            // completion events often carry no text, and the terminal title
+            // names the actual task. It also unifies the titles of refires
+            // so the dedupe below sees one finish, not two.
+            let title = event.title ?? event.message ?? snap?.title ?? event.kind.label
+            // One finish often arrives as several events with different
+            // titles. The session path identifies the finish; without one,
+            // the title does. Identical refires skip without recomputing;
+            // cross-title refires re-meter against the recorded baseline
+            // and keep the most complete numbers.
+            let fingerprint = "\(event.kind.rawValue):\(sessionIdentity ?? title)"
+            let marked = completionMarks[key]
+            if marked?.fingerprint == fingerprint, marked?.title == title {
+                // Identical refire: nothing new. Skip the recompute too —
+                // the ledger scan behind it is seconds of main-thread disk.
+            } else {
+                let upgrading = marked?.fingerprint == fingerprint
+                if upgrading, marked?.baseline == nil {
+                    // Same finish, still no observable start (progress
+                    // would have cleared the mark): keep waiting, keep mark.
+                } else {
+                    let metered = meterCompletion(
+                        key: key, sourceKey: event.sourceKey,
+                        sessionStart: sessionStart,
+                        fixedBaseline: upgrading
+                            ? marked.flatMap({ $0.baseline }) : nil,
+                        fixedCovered: upgrading ? marked?.covered : nil)
+                    if !upgrading || metered.tokens > (marked?.tokens ?? -1) {
+                        let failed = event.kind == .failed
+                        // A finished session with no attributable usage is
+                        // not a session row: without a baseline the numbers
+                        // would be lifetime totals, and zeros carry no
+                        // information. Failures keep their error signal
+                        // with honest zero numbers.
+                        let attributable =
+                            metered.baseline != nil
+                            && !(metered.tokens == 0 && metered.cost <= 0)
+                        if !failed, !attributable {
+                            completionMarks[key] = CompletionMark(
+                                fingerprint: fingerprint, title: title,
+                                tokens: 0, rowId: "",
+                                baseline: metered.baseline,
+                                covered: metered.covered)
+                        } else {
+                            let rowId = "\(key):\(Int(event.createdAt.timeIntervalSince1970))"
+                            let resolvedTitle: String
+                            if let old = marked.flatMap({
+                                sessionStore.session(withId: $0.rowId)
+                            }),
+                                old.title != event.kind.label
+                            {
+                                resolvedTitle = old.title
+                            } else {
+                                resolvedTitle = title
+                            }
+                            if upgrading, !(marked?.rowId.isEmpty ?? true) {
+                                sessionStore.updateSessionNumbers(
+                                    id: marked!.rowId, tokens: metered.tokens,
+                                    cost: metered.cost,
+                                    duration: completionDuration ?? 0,
+                                    title: resolvedTitle)
+                            } else {
+                                sessionStore.addSession(
+                                    AgentSessionRecord(
+                                        id: rowId,
+                                        agentName: event.sourceKey,
+                                        title: resolvedTitle,
+                                        startTime: sessionStart,
+                                        durationSeconds: completionDuration ?? 0,
+                                        totalTokens: metered.tokens,
+                                        costUSD: metered.cost,
+                                        status: failed ? "Failed" : "Completed",
+                                        project: snap?.projectContext?.project
+                                            ?? snap?.cwd.flatMap {
+                                                ($0 as NSString).lastPathComponent
+                                            },
+                                        branch: snap?.projectContext?.branch,
+                                        sessionPath: snap?.sessionPath,
+                                        cwd: snap?.cwd,
+                                        isDelta: metered.covered
+                                            && metered.baseline != nil,
+                                        isWindowEstimate: !metered.covered
+                                            && metered.baseline != nil,
+                                        buildTag: SessionHistoryStore
+                                            .currentBuildTag))
+                                recordedFreshFinish = true
+                            }
+                            completionMarks[key] = CompletionMark(
+                                fingerprint: fingerprint, title: title,
+                                tokens: metered.tokens, rowId: rowId,
+                                baseline: metered.baseline,
+                                covered: metered.covered)
+                        }
+                    }
                 }
-                // Ledger-metered sources skip in-memory baselines entirely:
-                // the ledger answers "as of session start" exactly, so short
-                // sessions cannot meter ~0.
-                let ledgerBaseline: (tokens: Int, cost: Double)? =
-                    UsageTracker.ledgerCoveredSources.contains(event.sourceKey)
-                        && OpenCodeUsageAdapter.detect()
-                    ? OpenCodeUsageAdapter.meterAsOf(
-                        beforeMs: Int64(sessionStart.timeIntervalSince1970 * 1000))
-                    : nil
-                let ledgerCurrent: UsageSnapshot? =
-                    ledgerBaseline == nil
-                    ? nil
-                    : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400, maxAge: 0)
-                var baseline = usageBaselineByKey[key]
-                var covered =
-                    baselineCoveredByKey[key]
-                    ?? lifetimeAccrual.covered.contains(event.sourceKey)
-                var currentTokens =
-                    covered
-                    ? (lifetimeAccrual.tokensBySource[event.sourceKey] ?? 0)
-                    : (usage.tokensBySource[event.sourceKey] ?? 0)
-                var currentCost =
-                    covered
-                    ? (lifetimeAccrual.costBySource[event.sourceKey] ?? 0)
-                    : (usage.costBySource[event.sourceKey] ?? 0)
-                if let ledgerBaseline, let ledgerCurrent {
-                    baseline = ledgerBaseline
-                    covered = true
-                    currentTokens = ledgerCurrent.totalTokens
-                    currentCost = ledgerCurrent.costUSD
-                }
-                let snap = self.agents.first {
-                    (event.paneId != nil && $0.paneId == event.paneId)
-                        || $0.source == event.sourceKey
-                }
-                // Covered sources meter against monotonic lifetime counters.
-                // Uncovered sources fall back to the rolling window — an
-                // honest estimate, labeled as one downstream.
-                SessionHistoryStore.shared.addSession(
-                    AgentSessionRecord(
-                        id: "\(key):\(Int(event.createdAt.timeIntervalSince1970))",
-                        agentName: event.sourceKey,
-                        title: title,
-                        startTime: sessionStart,
-                        durationSeconds: completionDuration ?? 0,
-                        totalTokens: SessionUsageDelta.tokens(
-                            current: currentTokens,
-                            baseline: baseline?.tokens ?? 0),
-                        costUSD: SessionUsageDelta.cost(
-                            current: currentCost,
-                            baseline: baseline?.cost ?? 0),
-                        status: event.kind == .completed ? "Completed" : "Failed",
-                        project: snap?.projectContext?.project
-                            ?? snap?.cwd.flatMap { ($0 as NSString).lastPathComponent },
-                        branch: snap?.projectContext?.branch,
-                        sessionPath: snap?.sessionPath,
-                        cwd: snap?.cwd,
-                        // No baseline means no observed start: the numbers
-                        // are lifetime totals, labeled as such downstream.
-                        isDelta: covered && baseline != nil,
-                        isWindowEstimate: !covered && baseline != nil))
             }
             usageBaselineByKey.removeValue(forKey: key)
             baselineCoveredByKey.removeValue(forKey: key)
@@ -1323,7 +1377,7 @@ extension AgentEventManager {
         baselineCoveredByKey = baselineCoveredByKey.filter {
             liveAgentKeys.contains($0.key)
         }
-        completedFingerprintByKey = completedFingerprintByKey.filter {
+        completionMarks = completionMarks.filter {
             liveAgentKeys.contains($0.key)
         }
         // Tasks stuck in flight on dead panes can never transition again.
@@ -1413,7 +1467,11 @@ extension AgentEventManager {
                 message = pending.message ?? message
                 variance = pending.variance ?? variance
                 choices = pending.choices ?? choices
-                actionable = pending.actionable
+                // The roster re-checks transport: a pane that lost its route
+                // (input synthesis disabled mid-session) drops to review-only.
+                actionable =
+                    pending.actionable
+                    && supportsDecision(paneId: agent.paneId ?? agent.source)
                 risk = pending.risk
             }
             let startedAt = startedAtByPane[key]
@@ -1485,10 +1543,11 @@ extension AgentEventManager {
                 message: prompt.detail == nil ? current.message : nil,
                 variance: prompt.variance ?? current.variance,
                 choices: prompt.choices.isEmpty ? current.choices : prompt.choices,
-                actionable: prompt.actionable
+                actionable: (prompt.actionable
                     || (kind == .accessRequest
                         && (prompt.choices.count >= 2
-                            || (current.choices?.count ?? 0) >= 2)),
+                            || (current.choices?.count ?? 0) >= 2)))
+                    && self.supportsDecision(paneId: paneId ?? key),
                 risk: prompt.risk,
                 prompt: prompt)
             self.agents = self.mergeApprovals(into: self.agents)
@@ -1529,34 +1588,365 @@ extension AgentEventManager {
         }
     }
 
-    /// Approves an agent request via the active adapter, routing OpenCode panes to the decision file.
-    /// Why an approval action could not reach its agent. The card shows the
-    /// exact reason and a Retry; a failed send is never reported as success.
-    enum ActionFailure: String, Equatable, Sendable {
-        case deadPane
-        case accessibility
-        case targetUnavailable
-        case emptyText
-        case transport
+    /// Historical names for the approval-proof outcome types. `ActionResult`
+    /// is `.sent` (the transport accepted the write) or `.failed` with the
+    /// exact reason. `.sent` is never an agent acknowledgment.
+    typealias ActionFailure = ApprovalFailure
+    typealias ActionResult = ApprovalOutcome
 
-        var message: String {
+    /// Whether the inbox may offer a decision for `paneId`. Pure transport
+    /// capability: external event channels and disabled input synthesis stay
+    /// review-only even before liveness is known.
+    func supportsDecision(paneId: String) -> Bool {
+        ApprovalRouting.supportsDecision(
+            paneId: paneId,
+            inputSynthesisEnabled: StandaloneAgentDispatcher.enableInputSynthesis)
+    }
+
+    /// Why `paneId` is review-only, if it is.
+    func observeReason(paneId: String) -> ApprovalObserveReason? {
+        if case .observeOnly(let reason) = ApprovalRouting.route(
+            paneId: paneId,
+            adapterKind: activeAdapter.kind,
+            inputSynthesisEnabled: StandaloneAgentDispatcher.enableInputSynthesis,
+            paneAlive: paneIsAlive(paneId))
+        {
+            return reason
+        }
+        return nil
+    }
+
+    /// Metered usage for a finished burst: current counters minus the burst
+    /// baseline. Ledger-metered sources use the as-of-start ledger read so
+    /// short sessions cannot meter ~0; everything else uses the in-memory
+    /// burst baseline captured on progress. A nil baseline means no start
+    /// was ever observed: the numbers are unattributable.
+    private struct MeteredCompletion: Sendable {
+        var tokens: Int
+        var cost: Double
+        var baseline: (tokens: Int, cost: Double)?
+        var covered: Bool
+    }
+
+    private func meterCompletion(
+        key: String, sourceKey: String, sessionStart: Date,
+        fixedBaseline: (tokens: Int, cost: Double)? = nil,
+        fixedCovered: Bool? = nil
+    ) -> MeteredCompletion {
+        // The periodic lifetime sweep may be up to 10s behind. A finish is
+        // the one moment the final tokens must land, so accrue transcript
+        // sources once more before metering.
+        if !UsageTracker.ledgerCoveredSources.contains(sourceKey) {
+            lifetimeAccrual = UsageTracker.accrueLifetime(
+                home: NSHomeDirectory(),
+                names: self.agents.map { $0.source },
+                state: lifetimeAccrual)
+        }
+        // Ledger-metered sources skip in-memory baselines entirely: the
+        // ledger answers "as of session start" exactly, so short sessions
+        // cannot meter ~0.
+        let ledgerBaseline: (tokens: Int, cost: Double)? =
+            UsageTracker.ledgerCoveredSources.contains(sourceKey)
+                && OpenCodeUsageAdapter.detect()
+            ? OpenCodeUsageAdapter.meterAsOf(
+                beforeMs: Int64(sessionStart.timeIntervalSince1970 * 1000))
+            : nil
+        let ledgerCurrent: UsageSnapshot? =
+            ledgerBaseline == nil
+            ? nil
+            : OpenCodeUsageAdapter.snapshot(since: 30 * 365 * 86400, maxAge: 0)
+        var baseline = fixedBaseline ?? usageBaselineByKey[key]
+        var covered =
+            fixedCovered ?? baselineCoveredByKey[key]
+            ?? lifetimeAccrual.covered.contains(sourceKey)
+        var currentTokens =
+            covered
+            ? (lifetimeAccrual.tokensBySource[sourceKey] ?? 0)
+            : (usage.tokensBySource[sourceKey] ?? 0)
+        var currentCost =
+            covered
+            ? (lifetimeAccrual.costBySource[sourceKey] ?? 0)
+            : (usage.costBySource[sourceKey] ?? 0)
+        if fixedBaseline != nil {
+            // Upgrade path: the baseline is pinned to record time (the
+            // burst maps were cleared), but current usage re-reads live.
+            // Counters and the ledger only grow, so the upgrade can only
+            // complete the numbers, never shrink them.
+            if UsageTracker.ledgerCoveredSources.contains(sourceKey),
+                OpenCodeUsageAdapter.detect(),
+                let snap = OpenCodeUsageAdapter.snapshot(
+                    since: 30 * 365 * 86400, maxAge: 0)
+            {
+                currentTokens = snap.totalTokens
+                currentCost = snap.costUSD
+            }
+        } else if let ledgerBaseline, let ledgerCurrent {
+            baseline = ledgerBaseline
+            covered = true
+            currentTokens = ledgerCurrent.totalTokens
+            currentCost = ledgerCurrent.costUSD
+        }
+        // Covered sources meter against monotonic lifetime counters.
+        // Uncovered sources fall back to the rolling window — an honest
+        // estimate, labeled as one downstream.
+        return MeteredCompletion(
+            tokens: SessionUsageDelta.tokens(
+                current: currentTokens, baseline: baseline?.tokens ?? 0),
+            cost: SessionUsageDelta.cost(
+                current: currentCost, baseline: baseline?.cost ?? 0),
+            baseline: baseline,
+            covered: covered)
+    }
+
+    /// A user decision that needs a transport write.
+    private enum DecisionKind: Sendable {
+        case approve
+        case deny
+        case choice(Int)
+        case multi([Int])
+        case reply(String)
+
+        var actionName: String {
             switch self {
-            case .deadPane: return "That pane is gone. Open the agent's terminal."
-            case .accessibility: return "Accessibility is not granted. Grant it in Settings."
-            case .targetUnavailable: return "The target app is not running."
-            case .emptyText: return "Type an answer first."
-            case .transport: return "The input could not be written to the agent."
+            case .approve: return "approve"
+            case .deny: return "deny"
+            case .choice: return "choice"
+            case .multi: return "multi"
+            case .reply: return "reply"
             }
         }
 
-        var needsAccessibility: Bool { self == .accessibility }
+        var detail: String {
+            switch self {
+            case .approve: return "approve"
+            case .deny: return "deny"
+            case .choice(let number): return String(number)
+            case .multi(let selections):
+                return selections.map(String.init).joined(separator: ",")
+            case .reply(let text): return text
+            }
+        }
     }
 
-    enum ActionResult: Equatable, Sendable {
-        case delivered
-        case failed(ActionFailure)
+    /// Single decision pipeline: route, await the transport, record a
+    /// receipt, and only then acknowledge. A failure keeps the request
+    /// visible and returns the exact reason; it never reports success.
+    private func decide(paneId: String, decision: DecisionKind) async -> ApprovalOutcome {
+        let target = paneId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if case .reply(let text) = decision,
+            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return .failed(.emptyText)
+        }
+        let route = ApprovalRouting.route(
+            paneId: target,
+            adapterKind: activeAdapter.kind,
+            inputSynthesisEnabled: StandaloneAgentDispatcher.enableInputSynthesis,
+            paneAlive: paneIsAlive(target))
+        guard route.canRespond else {
+            let reason: ApprovalObserveReason
+            if case .observeOnly(let gated) = route {
+                reason = gated
+            } else {
+                reason = .paneUnavailable
+            }
+            // A dead pane is a lookup miss, not a decision: no receipt.
+            if reason != .paneUnavailable {
+                recordDecision(
+                    paneId: target, decision: decision, route: route,
+                    outcome: .failed(reason.failure))
+            }
+            return .failed(reason.failure)
+        }
+        resolvingPanes.insert(target)
+        let outcome: ApprovalOutcome
+        switch route {
+        case .openCodeDecisionFile:
+            outcome = writeOpenCodeDecision(paneId: target, decision: decision)
+        case .standalone:
+            outcome = standaloneDecision(paneId: target, decision: decision)
+        case .multiplexer:
+            outcome = await adapterDecision(paneId: target, decision: decision)
+        case .observeOnly:
+            outcome = .failed(.unsupported)
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(self.resolvingTimeout))
+            self.resolvingPanes.remove(target)
+        }
+        recordDecision(
+            paneId: target, decision: decision, route: route, outcome: outcome)
+        if outcome.isSent {
+            AwayDigestStore.shared.recordApprovalAnswered()
+            acknowledgeApproval(paneId: target)
+        }
+        return outcome
+    }
 
-        var isDelivered: Bool { self == .delivered }
+    /// OpenCode decisions travel through the plugin's decision file. The
+    /// writer's Bool is the transport proof: a failed write is `.failed`.
+    private func writeOpenCodeDecision(
+        paneId: String, decision: DecisionKind
+    ) -> ApprovalOutcome {
+        switch decision {
+        case .approve:
+            return OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+                ? .sent : .failed(.transport)
+        case .deny:
+            return OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
+                ? .sent : .failed(.transport)
+        case .choice(let number):
+            return OpenCodeActionWriter.writeDecision(
+                paneId: paneId, approve: true, choiceIndex: number)
+                ? .sent : .failed(.transport)
+        case .multi:
+            return OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+                ? .sent : .failed(.transport)
+        case .reply(let text):
+            // Free text still travels through input synthesis (existing
+            // behavior); only the failure mapping is new.
+            guard StandaloneAgentDispatcher.enableInputSynthesis else {
+                return .failed(.inputSynthesisDisabled)
+            }
+            let agent = agent(forPaneId: paneId)
+            let ok = StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: "opencode", text: text, cwd: agent?.cwd, autoSend: true)
+            return promptOutcome(ok: ok)
+        }
+    }
+
+    /// Standalone decisions focus the target app and schedule one keystroke.
+    /// `.sent` means focus succeeded and the keystroke was scheduled with
+    /// Accessibility granted. Anything else maps to its exact failure.
+    private func standaloneDecision(
+        paneId: String, decision: DecisionKind
+    ) -> ApprovalOutcome {
+        guard StandaloneAgentDispatcher.enableInputSynthesis else {
+            return .failed(.inputSynthesisDisabled)
+        }
+        guard StandaloneAgentDispatcher.accessibilityGranted() else {
+            return .failed(.accessibility)
+        }
+        let agent = agent(forPaneId: paneId)
+        let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
+        let target = name.isEmpty ? (agent?.source ?? paneId) : name
+        let ok: Bool
+        switch decision {
+        case .approve:
+            ok = StandaloneAgentDispatcher.dispatchApproval(
+                agentName: target, approved: true, cwd: agent?.cwd)
+        case .deny:
+            ok = StandaloneAgentDispatcher.dispatchApproval(
+                agentName: target, approved: false, cwd: agent?.cwd)
+        case .choice(let number):
+            ok = StandaloneAgentDispatcher.dispatchOption(
+                agentName: target, option: String(number), cwd: agent?.cwd)
+        case .multi(let selections):
+            ok = StandaloneAgentDispatcher.dispatchOption(
+                agentName: target,
+                option: selections.map(String.init).joined(separator: " "),
+                cwd: agent?.cwd)
+        case .reply(let text):
+            ok = StandaloneAgentDispatcher.dispatchPrompt(
+                agentName: target, text: text, cwd: agent?.cwd, autoSend: true)
+        }
+        return ok ? .sent : .failed(.targetUnavailable)
+    }
+
+    /// Multiplexer decisions await the confirmed send. False is always
+    /// `.transport`: the process exit or socket call is the only proof.
+    private func adapterDecision(
+        paneId: String, decision: DecisionKind
+    ) async -> ApprovalOutcome {
+        let adapter = activeAdapter
+        let ok: Bool
+        switch decision {
+        case .approve:
+            ok = await adapter.sendKeysConfirmed(paneId: paneId, keys: ["y", "enter"])
+        case .deny:
+            ok = await adapter.sendKeysConfirmed(paneId: paneId, keys: ["n", "enter"])
+        case .choice(let number):
+            ok = await adapter.sendLineConfirmed(paneId: paneId, text: String(number))
+        case .multi(let selections):
+            ok = await adapter.sendLineConfirmed(
+                paneId: paneId, text: selections.map(String.init).joined(separator: ","))
+        case .reply(let text):
+            ok = await adapter.sendLineConfirmed(paneId: paneId, text: text)
+            adapter.focusPane(paneId: paneId)
+        }
+        return ok ? .sent : .failed(.transport)
+    }
+
+    /// Maps a prompt-dispatch Bool to its failure: with input synthesis on,
+    /// false means the target app is gone; without Accessibility the grant
+    /// is the reason.
+    private func promptOutcome(ok: Bool) -> ApprovalOutcome {
+        guard ok else {
+            return StandaloneAgentDispatcher.accessibilityGranted()
+                ? .failed(.targetUnavailable) : .failed(.accessibility)
+        }
+        return .sent
+    }
+
+    /// Appends the decision receipt. The request text is hashed, not stored.
+    private func recordDecision(
+        paneId: String, decision: DecisionKind, route: ApprovalRoute,
+        outcome: ApprovalOutcome
+    ) {
+        let fingerprint =
+            pendingApprovals[paneId]?.fingerprint
+            ?? currentEventFingerprint(for: paneId)
+            ?? paneId
+        let choice: Int?
+        let selections: [Int]?
+        switch decision {
+        case .choice(let number):
+            choice = number
+            selections = nil
+        case .multi(let picked):
+            choice = nil
+            selections = picked
+        default:
+            choice = nil
+            selections = nil
+        }
+        let failure: String?
+        if case .failed(let gated) = outcome {
+            failure = gated.rawValue
+        } else {
+            failure = nil
+        }
+        receiptStore.append(
+            ApprovalReceipt(
+                paneId: paneId,
+                source: agent(forPaneId: paneId)?.source,
+                eventKind: eventKind(for: paneId),
+                action: decision.actionName,
+                choice: choice,
+                selections: selections,
+                requestHash: ApprovalReceiptStore.requestHash(fingerprint),
+                idempotencyKey: ApprovalReceiptStore.requestHash(
+                    [paneId, fingerprint, decision.actionName, decision.detail]
+                        .joined(separator: "|")),
+                route: route.label,
+                outcome: outcome.isSent ? "sent" : "failed",
+                failure: failure))
+    }
+
+    /// Fingerprint of the visible request for `paneId`, if any.
+    private func currentEventFingerprint(for paneId: String) -> String? {
+        guard let current = currentEvent, event(current, matches: paneId) else {
+            return nil
+        }
+        return ApprovalPromptResolver.fingerprint(for: current, prompt: nil)
+    }
+
+    /// Event kind of the visible request for `paneId`, for the receipt.
+    private func eventKind(for paneId: String) -> String {
+        if let current = currentEvent, event(current, matches: paneId) {
+            return current.kind.rawValue
+        }
+        return "unknown"
     }
 
     /// True when a real multiplexer pane is still in the roster.
@@ -1566,116 +1956,37 @@ extension AgentEventManager {
     }
 
     /// Sends free text into an agent and reports whether it was written.
+    /// Only a confirmed write returns `.sent`; the draft stays on failure.
     @discardableResult
-    func sendText(paneId: String, text: String) -> ActionResult {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return .failed(.emptyText) }
-        if paneId.hasPrefix("standalone:") || OpenCodeActionWriter.isOpenCodePane(paneId) {
-            let agentName =
-                paneId.hasPrefix("standalone:")
-                ? StandaloneAgentDispatcher.cleanAgentName(from: paneId) : "opencode"
-            let ok = StandaloneAgentDispatcher.dispatchPrompt(
-                agentName: agentName, text: trimmed, cwd: nil, autoSend: true)
-            if ok { return .delivered }
-            return .failed(
-                StandaloneAgentDispatcher.accessibilityGranted()
-                    ? .targetUnavailable : .accessibility)
-        }
-        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
-        let adapter = activeAdapter
-        adapter.sendLine(paneId: paneId, text: trimmed)
-        adapter.focusPane(paneId: paneId)
-        return .delivered
+    func sendText(paneId: String, text: String) async -> ActionResult {
+        await decide(
+            paneId: paneId,
+            decision: .reply(text.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 
-    /// Approve with a transport result so the card can show failures.
+    /// Approve with a confirmed transport result so the card can show
+    /// failures. The request stays visible until the write is confirmed.
     @discardableResult
-    func approveResult(paneId: String) -> ActionResult {
-        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
-        if paneId.hasPrefix("standalone:"),
-            !StandaloneAgentDispatcher.accessibilityGranted()
-        {
-            return .failed(.accessibility)
-        }
-        approve(paneId: paneId)
-        return .delivered
+    func approve(paneId: String) async -> ActionResult {
+        await decide(paneId: paneId, decision: .approve)
     }
 
+    /// Deny with a confirmed transport result.
     @discardableResult
-    func denyResult(paneId: String) -> ActionResult {
-        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
-        deny(paneId: paneId)
-        return .delivered
+    func deny(paneId: String) async -> ActionResult {
+        await decide(paneId: paneId, decision: .deny)
     }
 
+    /// Select a numbered choice with a confirmed transport result.
     @discardableResult
-    func approveChoiceResult(paneId: String, choice: Int) -> ActionResult {
-        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
-        approveChoice(paneId: paneId, choice: choice)
-        return .delivered
+    func approveChoice(paneId: String, choice: Int) async -> ActionResult {
+        await decide(paneId: paneId, decision: .choice(choice))
     }
 
+    /// Submit a multi-select answer with a confirmed transport result.
     @discardableResult
-    func approveMultiResult(paneId: String, selections: [Int]) -> ActionResult {
-        guard paneIsAlive(paneId) else { return .failed(.deadPane) }
-        approveMulti(paneId: paneId, selections: selections)
-        return .delivered
-    }
-
-    func approve(paneId: String) {
-        AwayDigestStore.shared.recordApprovalAnswered()
-        acknowledgeApproval(paneId: paneId)
-        if paneId.hasPrefix("standalone:") {
-            dispatchStandaloneApproval(paneId: paneId, approved: true)
-            return
-        }
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
-        }
-        performAction(paneId: paneId) { $0.approve(paneId: paneId) }
-    }
-
-    /// Denies an agent request via the active adapter, routing OpenCode panes to the decision file.
-    func deny(paneId: String) {
-        acknowledgeApproval(paneId: paneId)
-        if paneId.hasPrefix("standalone:") {
-            dispatchStandaloneApproval(paneId: paneId, approved: false)
-            return
-        }
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(paneId: paneId, approve: false)
-        }
-        performAction(paneId: paneId) { $0.deny(paneId: paneId) }
-    }
-
-    /// Selects a numbered choice for an agent request via the active adapter,
-    /// routing OpenCode panes to the decision file with choice index.
-    func approveChoice(paneId: String, choice: Int) {
-        AwayDigestStore.shared.recordApprovalAnswered()
-        acknowledgeApproval(paneId: paneId)
-        if paneId.hasPrefix("standalone:") {
-            dispatchStandaloneOption(paneId: paneId, option: String(choice))
-            return
-        }
-        if OpenCodeActionWriter.isOpenCodePane(paneId) {
-            OpenCodeActionWriter.writeDecision(
-                paneId: paneId, approve: true, choiceIndex: choice
-            )
-        }
-        performAction(paneId: paneId) { $0.approveChoice(paneId: paneId, choice: choice) }
-    }
-
-    /// Submits a multi-select answer. Standalone agents receive the selected
-    /// numbers as one space-separated line, matching the roster's inline path.
-    func approveMulti(paneId: String, selections: [Int]) {
-        AwayDigestStore.shared.recordApprovalAnswered()
-        acknowledgeApproval(paneId: paneId)
-        let joined = selections.map(String.init).joined(separator: " ")
-        if paneId.hasPrefix("standalone:") {
-            dispatchStandaloneOption(paneId: paneId, option: joined)
-            return
-        }
-        performAction(paneId: paneId) { $0.approveMulti(paneId: paneId, selections: selections) }
+    func approveMulti(paneId: String, selections: [Int]) async -> ActionResult {
+        await decide(paneId: paneId, decision: .multi(selections))
     }
 
     /// Record that the user answered `paneId` and drop the visible prompt.
@@ -1762,7 +2073,7 @@ extension AgentEventManager {
             let agent = agent(forPaneId: paneId)
             let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
             performStandaloneAction(paneId: paneId) {
-                StandaloneAgentDispatcher.dispatchAbort(
+                _ = StandaloneAgentDispatcher.dispatchAbort(
                     agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
                     cwd: agent?.cwd)
             }
@@ -1780,30 +2091,8 @@ extension AgentEventManager {
         }
     }
 
-    private func dispatchStandaloneApproval(paneId: String, approved: Bool) {
-        let agent = agent(forPaneId: paneId)
-        let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
-        performStandaloneAction(paneId: paneId) {
-            StandaloneAgentDispatcher.dispatchApproval(
-                agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
-                approved: approved,
-                cwd: agent?.cwd)
-        }
-    }
-
-    private func dispatchStandaloneOption(paneId: String, option: String) {
-        let agent = agent(forPaneId: paneId)
-        let name = StandaloneAgentDispatcher.cleanAgentName(from: paneId)
-        performStandaloneAction(paneId: paneId) {
-            StandaloneAgentDispatcher.dispatchOption(
-                agentName: name.isEmpty ? (agent?.source ?? paneId) : name,
-                option: option,
-                cwd: agent?.cwd)
-        }
-    }
-
-    /// Keeps the popup buttons disabled while a standalone keystroke dispatch
-    /// is in flight, mirroring `performAction`'s optimistic resolve state.
+    /// Keeps the popup buttons disabled while a standalone MainActor action
+    /// (stop) runs, mirroring `performAction`'s resolve state.
     private func performStandaloneAction(
         paneId: String, _ action: @escaping @MainActor () -> Void
     ) {
@@ -1842,6 +2131,11 @@ extension AgentEventManager {
         lifetimeAccrual.tokensBySource[source] = tokens
         lifetimeAccrual.costBySource[source] = cost
         lifetimeAccrual.covered.insert(source)
+    }
+
+    /// Test seam: inject roster rows without polling a live multiplexer.
+    func setAgentsForTesting(_ agents: [AgentSnapshot]) {
+        self.agents = agents
     }
 
     /// Test seam: current event readout for harness assertions.
