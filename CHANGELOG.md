@@ -71,6 +71,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Fixed every CI run hanging on the retired macOS 13 runner. The Intel compile, test, and logic legs now run on `macos-15-intel`, with the macOS 13 deployment target unchanged.
 - Fixed quota probes blocking the main thread during notch rendering. The header reads cached values.
 - Fixed the notch re-rendering on every strip scroll. It observes only the HUD controller now.
 - Fixed the roster builder reading `.git/HEAD` on the main thread. Slow project paths now warm in the background.
