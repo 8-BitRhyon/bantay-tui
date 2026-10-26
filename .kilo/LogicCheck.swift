@@ -2535,6 +2535,34 @@ struct LogicCheckMain {
             agentCount: 3, maxChips: 3, nameLengths: [30, 30, 30], availableWidth: 200)
         check(fit4 >= 1 && fit4 <= 3, "L23 long names shrink fit (got \(fit4))")
         check(fit4 <= fit1, "L23 longer names never fit more than short ones")
+        let cramped = IslandMetrics.idleChipFit(
+            agentCount: 4, maxChips: 3, nameLengths: [8, 11, 5], availableWidth: 134)
+        check(
+            cramped.shown == 1 && cramped.overflow == 3,
+            "L23 centered wing shows one full name plus +3 (got \(cramped.shown)+\(cramped.overflow))"
+        )
+        let roomy = IslandMetrics.idleChipFit(
+            agentCount: 4, maxChips: 3, nameLengths: [3, 3, 3], availableWidth: 200)
+        check(
+            roomy.shown == 3 && roomy.overflow == 1,
+            "L23 roomy wing keeps three chips plus overflow (got \(roomy.shown)+\(roomy.overflow))"
+        )
+        let singleChip = IslandMetrics.idleChipFit(
+            agentCount: 1, maxChips: 3, nameLengths: [8], availableWidth: 134)
+        check(
+            singleChip.shown == 1 && singleChip.overflow == 0,
+            "L23 one agent shows its full name without overflow")
+        let noRoom = IslandMetrics.idleChipFit(
+            agentCount: 2, maxChips: 3, nameLengths: [11, 11], availableWidth: 40)
+        check(
+            noRoom.shown == 0 && noRoom.overflow == 0,
+            "L23 no readable chip means no cramped chips")
+        check(
+            IslandMetrics.centeredIdleLabel(working: 4) == "4 working",
+            "L23 working count never reads as Idle")
+        check(
+            IslandMetrics.centeredIdleLabel(working: 0) == "Idle",
+            "L23 empty strip reads Idle")
 
         // L24. Expanded height reserves the tab row when it is shown, plus
         // +N overflow rows.

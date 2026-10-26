@@ -144,6 +144,49 @@ public enum IslandMetrics: Sendable {
         return shown
     }
 
+    /// Chips to render beside the notch plus how many fold into `+N`.
+    /// Reserves room for the overflow label when one has to appear. When even
+    /// one readable chip plus the label will not fit, shows no chips rather
+    /// than truncating every name to an ellipsis.
+    public struct IdleChipFit: Equatable, Sendable {
+        public let shown: Int
+        public let overflow: Int
+
+        public init(shown: Int, overflow: Int) {
+            self.shown = shown
+            self.overflow = overflow
+        }
+    }
+
+    public static func idleChipFit(
+        agentCount: Int, maxChips: Int, nameLengths: [Int], availableWidth: CGFloat
+    ) -> IdleChipFit {
+        let count = max(agentCount, 0)
+        guard count > 0, availableWidth > 0 else {
+            return IdleChipFit(shown: 0, overflow: 0)
+        }
+        let full = idleFitChips(
+            agentCount: count, maxChips: maxChips,
+            nameLengths: nameLengths, availableWidth: availableWidth)
+        if full >= count {
+            return IdleChipFit(shown: full, overflow: 0)
+        }
+        let overflowWidth = idleOverflowPad + idleChipGap
+        let withOverflow = idleFitChips(
+            agentCount: count, maxChips: maxChips, nameLengths: nameLengths,
+            availableWidth: max(availableWidth - overflowWidth, 0))
+        guard withOverflow >= 1 else {
+            return IdleChipFit(shown: 0, overflow: 0)
+        }
+        return IdleChipFit(shown: withOverflow, overflow: count - withOverflow)
+    }
+
+    /// Right-wing wording when nothing needs the user. Working agents must
+    /// never read as "Idle" just because nothing is blocked.
+    public static func centeredIdleLabel(working: Int) -> String {
+        working > 0 ? "\(working) working" : "Idle"
+    }
+
     /// Total closed idle strip width for `style`.
     public static func idleStripWidth(
         style: IdleStyle, agentCount: Int, maxChips: Int, nameLengths: [Int]

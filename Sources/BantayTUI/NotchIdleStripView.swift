@@ -7,6 +7,9 @@ struct CenteredSplitStripView: View {
     let islandWidth: CGFloat
     let islandHeight: CGFloat
 
+    /// Clearance between the chip row and the physical notch cutout.
+    private let notchSidePad: CGFloat = 8
+
     private var agents: [AgentSnapshot] {
         eventManager.agents
     }
@@ -23,6 +26,15 @@ struct CenteredSplitStripView: View {
         agents.filter { $0.kind == .failed }
     }
 
+    /// Chips that fit beside the notch, with overflow folded into `+N`.
+    private var chipFit: IslandMetrics.IdleChipFit {
+        IslandMetrics.idleChipFit(
+            agentCount: working.count,
+            maxChips: NotchHUDConfig.shared.clampedIdleMaxChips,
+            nameLengths: working.map(\.source.count),
+            availableWidth: max(sideWidth - notchSidePad, 0))
+    }
+
     private var sideWidth: CGFloat {
         let windowW = IslandMetrics.windowSize().width
         return max(
@@ -35,16 +47,15 @@ struct CenteredSplitStripView: View {
     }
 
     var body: some View {
-        let notchPad: CGFloat = 8
         HStack(spacing: 0) {
             leftWingView
-                .padding(.trailing, notchPad)
+                .padding(.trailing, notchSidePad)
                 .frame(width: sideWidth, alignment: .trailing)
 
             Spacer(minLength: 0)
 
             rightWingView
-                .padding(.leading, notchPad)
+                .padding(.leading, notchSidePad)
                 .frame(width: sideWidth, alignment: .leading)
         }
         .frame(width: islandWidth, height: islandHeight, alignment: .top)
@@ -53,10 +64,10 @@ struct CenteredSplitStripView: View {
 
     @ViewBuilder
     private var leftWingView: some View {
-        let left = working.prefix(3)
+        let left = Array(working.prefix(chipFit.shown))
         HStack(spacing: IslandMetrics.idleChipGap) {
             if !left.isEmpty {
-                ForEach(Array(left.enumerated()), id: \.element.id) { _, agent in
+                ForEach(left) { agent in
                     HStack(spacing: IslandMetrics.idleChipDotGap) {
                         Circle()
                             .fill(Color(hex: agent.kind.color))
@@ -67,13 +78,14 @@ struct CenteredSplitStripView: View {
                             .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                             .foregroundColor(.white)
                             .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.horizontal, IslandMetrics.idleChipHPad)
                     .frame(height: 20)
                     .background(Color.white.opacity(0.10), in: Capsule())
                 }
-                if working.count > left.count {
-                    Text("+\(working.count - left.count)")
+                if chipFit.overflow > 0 {
+                    Text("+\(chipFit.overflow)")
                         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white.opacity(0.6))
                 }
@@ -119,9 +131,12 @@ struct CenteredSplitStripView: View {
             if !needsYou.isEmpty {
                 Circle().fill(Color(hex: AgentEventKind.accessRequest.color))
                     .frame(width: 7, height: 7)
-                Text("\(needsYou.count) need you")
-                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
+                Text(
+                    needsYou.count == 1
+                        ? "1 needs you" : "\(needsYou.count) need you"
+                )
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
             }
             if !failed.isEmpty {
                 Circle().fill(Color(hex: AgentEventKind.failed.color))
@@ -131,7 +146,11 @@ struct CenteredSplitStripView: View {
                     .foregroundColor(.white)
             }
             if needsYou.isEmpty && failed.isEmpty {
-                Text("Idle")
+                if !working.isEmpty {
+                    Circle().fill(Color(hex: AgentEventKind.progress.color))
+                        .frame(width: 7, height: 7)
+                }
+                Text(IslandMetrics.centeredIdleLabel(working: working.count))
                     .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.55))
             }

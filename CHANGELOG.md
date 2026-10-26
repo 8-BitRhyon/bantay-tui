@@ -72,6 +72,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- **Centered Idle Strip** (`NotchIdleStripView.swift`, `IslandMetrics.swift`): Name chips fit the wing beside the notch, and overflow folds into `+N` instead of squeezing every label to two characters. The status reads `N working` instead of `Idle` while agents run, and a single blocked agent reads `1 needs you`.
 - Fixed every CI run hanging on the retired macOS 13 runner. The Intel compile, test, and logic legs now run on `macos-15-intel`, with the macOS 13 deployment target unchanged.
 - Fixed quota probes blocking the main thread during notch rendering. The header reads cached values.
 - Fixed the notch re-rendering on every strip scroll. It observes only the HUD controller now.
