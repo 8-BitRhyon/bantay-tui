@@ -26,7 +26,6 @@ UI_ONLY=(
   NotchHistoryView.swift
   NotchIdleStripView.swift
   NotchMediaView.swift
-  NotchNotesView.swift
   NotchRosterView.swift
   NotchShelfView.swift
   NotchStatusView.swift

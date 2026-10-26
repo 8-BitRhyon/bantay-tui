@@ -43,7 +43,6 @@ struct NotchStatusView: View {
     private var showHistory: Bool { selectedTab == .history }
     private var showShelf: Bool { selectedTab == .shelf }
     private var showMedia: Bool { selectedTab == .media }
-    private var showNotes: Bool { selectedTab == .notes }
 
     @State private var historyMode: HistoryMode = .timeline
     /// Read-only mirror of `NotchHUDConfig.shared.panelPinned` so the header
@@ -260,7 +259,7 @@ struct NotchStatusView: View {
                 return min(
                     max(historyContentHeight + chipTopOffset, IslandMetrics.minExpandedHeight),
                     IslandMetrics.maxExpandedHeight)
-            } else if showShelf || showMedia || showNotes {
+            } else if showShelf || showMedia {
                 let itemCount =
                     showShelf
                     ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
@@ -304,7 +303,7 @@ struct NotchStatusView: View {
                 sectionCount: 3,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab
             )
-        } else if showShelf || showMedia || showNotes {
+        } else if showShelf || showMedia {
             let itemCount =
                 showShelf
                 ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
@@ -2012,8 +2011,6 @@ struct NotchStatusView: View {
                 )
             } else if showMedia {
                 NotchMediaView()
-            } else if showNotes {
-                NotchNotesView()
             } else {
                 NotchRosterView(
                     visibleAgents: visibleAgents,

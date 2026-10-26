@@ -201,9 +201,6 @@ final class NotchHUDConfig {
     var showMediaTab: Bool = true {
         didSet { defaults.set(showMediaTab, forKey: "showMediaTab") }
     }
-    var showNotesTab: Bool = true {
-        didSet { defaults.set(showNotesTab, forKey: "showNotesTab") }
-    }
     /// Hover Sensitivity Presets ("Instant", "Snappy", "Balanced", "Relaxed").
     var hoverSensitivityPreset: String = "Snappy" {
         didSet { defaults.set(hoverSensitivityPreset, forKey: "hoverSensitivityPreset") }
@@ -746,9 +743,6 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "showMediaTab") as? Bool {
             showMediaTab = v
-        }
-        if let v = defaults.object(forKey: "showNotesTab") as? Bool {
-            showNotesTab = v
         }
         if let v = defaults.object(forKey: "usageTrackingEnabled") as? Bool {
             usageTrackingEnabled = v

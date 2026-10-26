@@ -293,6 +293,5 @@ public enum ShelfTab: String, CaseIterable, Identifiable, Sendable {
     case history = "History"
     case shelf = "Shelf"
     case media = "Media"
-    case notes = "Notes"
     public var id: String { rawValue }
 }

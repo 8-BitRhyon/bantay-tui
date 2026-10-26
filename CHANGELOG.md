@@ -100,6 +100,10 @@ All notable changes to this project are documented in this file. The format is b
 - Fixed a stale strip timer resizing a full-screen window.
 - Fixed strip navigation targeting the frontmost process instead of the focused window.
 
+### Removed
+
+- **Quick Notes Scratchpad** (`NotchNotesView.swift`, `NotesStore.swift`): Removed the Notes tab, store, settings toggle, and keyboard shortcut. The tab held one unformatted global note with no agent link, no CLI surface, and no dispatch. Its only stored content was the logic harness fixture, which overwrote any real note. Recoverable from git history.
+
 ## [0.1.0] - 2026-08-05
 
 - Initial baseline release. Included notch island idle strip, expanded control plane, approval queue, universal agent detection, and Go TUI client.

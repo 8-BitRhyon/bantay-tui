@@ -5393,12 +5393,7 @@ struct LogicCheckMain {
         check(
             abs(NotchHUDConfig.shared.hoverDelaySeconds - 0.08) < 0.001,
             "L70 snappy hover sensitivity is 0.08s")
-        // L71 Media & Notes Integration
-        NotesStore.shared.noteText = "# Test Note"
-        NotesStore.shared.saveImmediate()
-        check(
-            NotesStore.shared.noteText == "# Test Note",
-            "L71 NotesStore note text saved")
+        // L71 Media Integration
         let dummyTrack = MediaTrack(title: "Song", artist: "Artist", isPlaying: true)
         check(
             dummyTrack.title == "Song" && dummyTrack.isPlaying == true,
@@ -5471,13 +5466,6 @@ struct LogicCheckMain {
         check(
             hud == nil || hud != nil,
             "L77 SystemHUDMonitor multi-call monitoring invalidates prior timers safely")
-
-        // L78 NotesStore Initial Load Save-Bypass Test
-        let store = NotesStore.shared
-        let current = store.noteText
-        check(
-            !current.isEmpty,
-            "L78 NotesStore note loaded without scheduling immediate redundant disk write")
 
         // L79 ShelfStore Folder Cleanup Test
         let testUUID = UUID().uuidString

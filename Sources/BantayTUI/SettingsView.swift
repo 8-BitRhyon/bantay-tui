@@ -115,7 +115,6 @@ struct SettingsView: View {
     @State private var showHistoryTab = NotchHUDConfig.shared.showHistoryTab
     @State private var showShelfTab = NotchHUDConfig.shared.showShelfTab
     @State private var showMediaTab = NotchHUDConfig.shared.showMediaTab
-    @State private var showNotesTab = NotchHUDConfig.shared.showNotesTab
     @State private var hoverSensitivity = NotchHUDConfig.shared.hoverSensitivityPreset
     @State private var enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
     @State private var quotaBadgeThreshold = NotchHUDConfig.shared.quotaBadgeThresholdPercent
@@ -173,7 +172,7 @@ struct SettingsView: View {
         ],
         "Expanded panel": [
             "modular tabs", "agents roster tab", "tasks & reminders tab", "session history tab",
-            "drop shelf", "media tab", "quick notes tab", "scratchpad", "attention-only triage",
+            "drop shelf", "media tab", "attention-only triage",
             "hover sensitivity", "quota-axi", "global hotkey",
         ],
         "Muted sources": [
@@ -1558,11 +1557,6 @@ struct SettingsView: View {
                         .help("Adds Apple Music & Spotify player controls to expanded island.")
                         .onChange(of: showMediaTab) { newValue in
                             NotchHUDConfig.shared.showMediaTab = newValue
-                        }
-                    Toggle("📝 Quick Notes Scratchpad tab", isOn: $showNotesTab)
-                        .help("Adds an auto-saving markdown quick notes tab to expanded island.")
-                        .onChange(of: showNotesTab) { newValue in
-                            NotchHUDConfig.shared.showNotesTab = newValue
                         }
                     Toggle("Attention-only triage tab", isOn: $attentionFilter)
                         .help(
