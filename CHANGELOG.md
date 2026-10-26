@@ -54,6 +54,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- **Tactile Feedback** (`InteractionFeedback.swift`, `NotchCommonViews.swift`, `ApprovalCardView.swift`, `NotchStatusView.swift`): One motion scale now drives press, hover, selection, and commit feedback. Presses compress and spring back, hover fades instead of snapping, multi-select choices pop when picked, a delivered card holds for a 200 ms commit flash, and a refused action shakes. Reduce Motion skips all of it.
 - **Terminal Focus Registry** (`TerminalFocusser.swift`): Corrected the Ghostty bundle identifier to `com.mitchellh.ghostty` and added `com.google.antigravity-ide`. Added PID ancestor lookup for CLI agents.
 - **Setup Script Deployment** (`scripts/setup.sh`): Updated binary installation to check modification timestamps (`-nt`). Installs the newest build to the app bundle.
 - **Peek Panel Event Monitoring** (`PeekPanel.swift`): Deferred click-outside dismissal to the next runloop turn. Ignores clicks on the Notch HUD window to prevent premature dismissal.

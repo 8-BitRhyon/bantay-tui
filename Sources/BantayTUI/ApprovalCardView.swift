@@ -12,6 +12,7 @@ struct ApprovalCardView: View {
     let onFocus: () -> Void
 
     @ObservedObject private var manager = AgentEventManager.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var paneId: String {
         IslandMetrics.actionablePaneId(paneId: agent.paneId, source: agent.source)
@@ -217,7 +218,8 @@ struct ApprovalCardView: View {
                                     : Color.white.opacity(0.06))
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle(pressedScale: 0.98, reduceMotion: reduceMotion))
+                .animation(InteractionMotion.selection, value: isSelected)
                 .help(label)
                 .accessibilityLabel("Option \(number): \(label)")
             }
@@ -243,7 +245,7 @@ struct ApprovalCardView: View {
                     .frame(width: 32, height: 32)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle(pressedScale: 0.94, reduceMotion: reduceMotion))
             .help("Focus agent window")
             .accessibilityLabel("Focus agent window")
         }
@@ -302,7 +304,7 @@ struct ApprovalCardView: View {
                     ? Color.white.opacity(0.08) : BantayTheme.statusCompleted,
                 in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(pressedScale: 0.97, reduceMotion: reduceMotion))
         .disabled(numbers.isEmpty)
         .help("Submit selected options")
         .accessibilityLabel("Submit selected options")
@@ -329,7 +331,7 @@ struct ApprovalCardView: View {
             .frame(height: 32)
             .background(BantayTheme.statusCompleted, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(pressedScale: 0.96, reduceMotion: reduceMotion))
         .help("\(title) (Y)")
         .accessibilityLabel("\(title). Shortcut Y.")
     }
@@ -349,7 +351,7 @@ struct ApprovalCardView: View {
             .frame(height: 32)
             .background(Color.white.opacity(0.08), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(pressedScale: 0.96, reduceMotion: reduceMotion))
         .help(title)
         .accessibilityLabel(title)
     }
@@ -367,7 +369,7 @@ struct ApprovalCardView: View {
             .frame(height: 32)
             .background(BantayTheme.statusFailed.opacity(0.12), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(pressedScale: 0.96, reduceMotion: reduceMotion))
         .help("Deny request (N)")
         .accessibilityLabel("Deny request. Shortcut N.")
     }

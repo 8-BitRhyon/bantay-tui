@@ -22,6 +22,12 @@ struct NotchStatusView: View {
     /// Inline failure from the last card action, with a retry closure.
     @State private var cardFailure: String?
     @State private var cardRetry: (() -> Void)?
+    /// One-shot feedback for a delivered card action. The card holds for a
+    /// short commit beat before it leaves so the input feels acknowledged.
+    @State private var commitToken = 0
+    @State private var commitTask: Task<Void, Never>?
+    /// Drives the refusal shake when delivery fails.
+    @State private var shakeTrigger: CGFloat = 0
     /// Second-click arming for risky prompts (opt-in).
     @State private var confirmArmed = false
     @State private var confirmTask: Task<Void, Never>?
@@ -505,6 +511,8 @@ struct NotchStatusView: View {
             cardFailure = nil
             cardRetry = nil
             confirmArmed = false
+            commitTask?.cancel()
+            commitTask = nil
         }
         .onChange(of: hasSeenOnboarding) { seen in
             if !seen { showWelcome = true }
@@ -1220,6 +1228,11 @@ struct NotchStatusView: View {
                 + (cardFailure == nil ? 0 : 30)
         )
         .contentShape(Rectangle())
+        .modifier(ShakeEffect(animatableData: reduceMotion ? 0 : shakeTrigger))
+        .commitFlash(
+            token: commitToken,
+            cornerRadius: IslandMetrics.notificationCornerRadius,
+            reduceMotion: reduceMotion)
     }
 
     /// Compact completion/failure notice. No approval controls, no extra
@@ -1392,6 +1405,8 @@ struct NotchStatusView: View {
     }
 
     private func dismissNotification(_ id: UUID) {
+        commitTask?.cancel()
+        commitTask = nil
         let topBefore = activeNotification?.id
         withAnimation(morphAnimation) {
             notificationQueue = IslandMetrics.notificationQueueRemove(
@@ -2480,6 +2495,9 @@ struct NotchStatusView: View {
         onDelivered: (() -> Void)? = nil,
         action: @escaping () -> AgentEventManager.ActionResult
     ) {
+        // A delivered action holds the card for one commit beat. Ignore input
+        // during that window so a double-click cannot deliver twice.
+        guard commitTask == nil else { return }
         let config = NotchHUDConfig.shared
         let needsConfirm =
             config.confirmRiskyPrompts
@@ -2502,7 +2520,7 @@ struct NotchStatusView: View {
         case .delivered:
             cardFailure = nil
             cardRetry = nil
-            onDelivered?()
+            commitDelivered(onDelivered)
         case .failed(let failure):
             cardFailure = failure.message
             cardRetry = { [self] in
@@ -2510,6 +2528,27 @@ struct NotchStatusView: View {
                     paneId: paneId, prompt: prompt, onDelivered: onDelivered,
                     action: action)
             }
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 0.28)) { shakeTrigger += 1 }
+        }
+    }
+
+    /// Hold the card for one short commit beat so a delivered action reads as
+    /// accepted before the card leaves. The hold is skipped when nothing is
+    /// dismissed and when reduce-motion is on.
+    private func commitDelivered(_ onDelivered: (() -> Void)?) {
+        guard let onDelivered else { return }
+        guard !reduceMotion else {
+            onDelivered()
+            return
+        }
+        commitTask?.cancel()
+        commitToken += 1
+        commitTask = Task { @MainActor in
+            try? await Task.sleep(for: InteractionMotion.commitHold)
+            guard !Task.isCancelled else { return }
+            commitTask = nil
+            onDelivered()
         }
     }
 

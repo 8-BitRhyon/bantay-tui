@@ -9560,6 +9560,21 @@ struct LogicCheckMain {
                 "/Users/me/projects/opencode/shell-tool/main.swift"),
             "PERF unrelated opencode-named project is not skipped")
 
+        // Interaction feedback: the refusal shake must rest at zero, reach the
+        // full travel mid-flight, and return to zero so it never drifts.
+        check(
+            abs(ShakeEffect.offset(progress: 0)) < 0.0001,
+            "FEEDBACK shake rests at zero")
+        check(
+            abs(ShakeEffect.offset(progress: 1)) < 0.0001,
+            "FEEDBACK shake returns to zero")
+        check(
+            abs(ShakeEffect.offset(progress: 0.5) + 5) < 0.0001,
+            "FEEDBACK shake reaches full travel at mid progress")
+        check(
+            abs(ShakeEffect.offset(progress: 0.2)) <= 5,
+            "FEEDBACK shake stays within its travel budget")
+
         try? FileManager.default.removeItem(at: brainMockDir)
         try? FileManager.default.removeItem(at: mockHome)
 
