@@ -97,6 +97,27 @@ public enum IslandMetrics: Sendable {
     ) -> Bool {
         kind == .completed && userFocusedInPanel
     }
+
+    /// What to do with a settled completion or failure, with pane-level
+    /// attention: watching that agent finish needs no card at all; working
+    /// in another pane of the same terminal defers it; being outside the
+    /// terminal entirely is the one case a popup earns its interruption.
+    enum TransientNoticeDisposition: Equatable {
+        case show
+        case `defer`
+        case suppress
+    }
+
+    static func transientNoticeDisposition(
+        kind: AgentEventKind,
+        isFinishedPaneFocused: Bool,
+        userFocusedInPanel: Bool
+    ) -> TransientNoticeDisposition {
+        if kind == .failed { return .show }
+        if isFinishedPaneFocused { return .suppress }
+        if userFocusedInPanel { return .defer }
+        return .show
+    }
     public static let headerHeight: CGFloat = 40
     public static let rowHeight: CGFloat = 26
     /// Height of the horizontal thumbnail strip on the shelf tab.

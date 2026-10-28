@@ -978,6 +978,26 @@ struct LogicCheckMain {
         check(
             !IslandMetrics.shouldDeferTransientNotice(kind: .failed, userFocusedInPanel: true),
             "L144 failures never defer")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .completed, isFinishedPaneFocused: true, userFocusedInPanel: true)
+                == .suppress,
+            "L145 watching the agent finish needs no popup")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .completed, isFinishedPaneFocused: false, userFocusedInPanel: true)
+                == .defer,
+            "L145 another pane in the same terminal defers the popup")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .completed, isFinishedPaneFocused: false, userFocusedInPanel: false)
+                == .show,
+            "L145 outside the terminal the popup shows")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .failed, isFinishedPaneFocused: true, userFocusedInPanel: true)
+                == .show,
+            "L145 failures show even on the watched pane")
 
         // -- Multi-select answers: every surface gates empty Submit, shows
         // up to six options, and banners/push never partial-answer.

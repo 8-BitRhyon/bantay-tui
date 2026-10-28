@@ -319,6 +319,10 @@ final class AgentEventManager: ObservableObject {
 
     @Published private(set) var currentEvent: AgentEvent?
     @Published private(set) var agents: [AgentSnapshot] = []
+    /// The multiplexer pane the user is currently looking at, when the
+    /// adapter reports focus (herdr does). A finish on this pane needs no
+    /// popup: the user watched it happen.
+    @Published private(set) var focusedPaneId: String?
     @Published private(set) var recentCompletions: [RecentCompletion] = []
     /// Aggregate token/cost usage from agent transcripts (gauge in footer).
     @Published private(set) var usage: UsageSnapshot = .zero
@@ -571,6 +575,9 @@ final class AgentEventManager: ObservableObject {
     private func handleStreamEvent(_ event: HerdrEventStream.StreamEvent) {
         switch event {
         case .paneUpdated(let pane):
+            if pane.focused, focusedPaneId != pane.paneId {
+                focusedPaneId = pane.paneId
+            }
             if pane.agentStatus != lastStreamStatus[pane.paneId]
                 || pane.terminalTitle != lastStreamTitle[pane.paneId]
             {
@@ -582,6 +589,7 @@ final class AgentEventManager: ObservableObject {
             // Prune dedup state so closed panes can't accumulate forever.
             lastStreamStatus.removeValue(forKey: paneId)
             lastStreamTitle.removeValue(forKey: paneId)
+            if focusedPaneId == paneId { focusedPaneId = nil }
             scheduleStreamRefresh()
         case .agentDetected, .disconnected:
             scheduleStreamRefresh()

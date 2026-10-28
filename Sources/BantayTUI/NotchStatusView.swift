@@ -2428,14 +2428,22 @@ struct NotchStatusView: View {
                     }
                     guard IslandMetrics.transientNoticeShouldShow(agentKind: agent?.kind)
                     else { return }
-                    // The user is heads-down in another panel: hold the
-                    // finish silently instead of popping over their work.
-                    // It surfaces once when their attention returns.
-                    if IslandMetrics.shouldDeferTransientNotice(
-                        kind: pending.kind, userFocusedInPanel: isTerminalFocused())
+                    // Pane-level attention: watching this agent finish
+                    // needs no card; working in another pane of the same
+                    // terminal holds it silently until attention returns.
+                    switch IslandMetrics.transientNoticeDisposition(
+                        kind: pending.kind,
+                        isFinishedPaneFocused: pending.paneId != nil
+                            && pending.paneId == eventManager.focusedPaneId,
+                        userFocusedInPanel: isTerminalFocused())
                     {
+                    case .suppress:
+                        return
+                    case .defer:
                         deferredDoneEvents[pending.paneId ?? pending.sourceKey] = pending
                         return
+                    case .show:
+                        break
                     }
                     withAnimation(morphAnimation) {
                         notificationQueue = IslandMetrics.notificationQueueInsert(

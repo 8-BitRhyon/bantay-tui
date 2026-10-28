@@ -350,6 +350,22 @@
             #expect(
                 !IslandMetrics.shouldDeferTransientNotice(
                     kind: .failed, userFocusedInPanel: true))
+            #expect(
+                IslandMetrics.transientNoticeDisposition(
+                    kind: .completed, isFinishedPaneFocused: true,
+                    userFocusedInPanel: true) == .suppress)
+            #expect(
+                IslandMetrics.transientNoticeDisposition(
+                    kind: .completed, isFinishedPaneFocused: false,
+                    userFocusedInPanel: true) == .defer)
+            #expect(
+                IslandMetrics.transientNoticeDisposition(
+                    kind: .completed, isFinishedPaneFocused: false,
+                    userFocusedInPanel: false) == .show)
+            #expect(
+                IslandMetrics.transientNoticeDisposition(
+                    kind: .failed, isFinishedPaneFocused: true,
+                    userFocusedInPanel: true) == .show)
         }
     }
 #endif
