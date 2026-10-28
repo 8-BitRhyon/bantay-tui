@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bantay-TUI: Agentic Control Plane in Your Notch</title>
 <meta name="description" content="Bantay-TUI is a native macOS control plane for AI coding agents. It lives in your MacBook notch: watch agents work, answer their questions, and approve actions without leaving your current task.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #07080c;
@@ -19,67 +22,109 @@
     --amber: #f5b14c;
     --red: #f26d6d;
     --radius: 18px;
+    --ink: #fff1e6;
+    --ink-muted: rgba(255, 241, 230, 0.72);
+    --gold: #ffc27a;
+    --ember: #2a0806;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
   body {
     background: var(--bg);
     color: var(--text);
-    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    font: 16px/1.6 Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
   a { color: var(--cyan); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
 
-  header {
-    position: sticky; top: 0; z-index: 10;
-    background: rgba(7, 8, 12, 0.85);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--line);
+  /* Sentinel hero: full-viewport cinematic scene, copy held bottom-left. */
+  .hero {
+    position: relative; min-height: 100vh; min-height: 100svh;
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center; isolation: isolate; overflow: hidden;
+    background: var(--ember); color: var(--ink);
   }
-  .nav { display: flex; align-items: center; gap: 24px; height: 60px; }
-  .brand { font-weight: 700; font-size: 17px; color: var(--text); letter-spacing: -0.01em; }
-  .brand:hover { text-decoration: none; }
-  .brand span { color: var(--cyan); }
-  .nav nav { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
-  .nav nav a { color: var(--muted); }
-  .nav nav a:hover { color: var(--text); text-decoration: none; }
+  [data-bg] { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -2; display: block; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(30, 4, 4, 0.45), transparent 22%, transparent 55%, rgba(24, 3, 3, 0.7) 88%, var(--bg) 100%),
+      linear-gradient(90deg, rgba(24, 3, 3, 0.55), transparent 45%);
+  }
+  .hero nav {
+    width: 100%; display: flex; justify-content: space-between; align-items: center;
+    padding: 24px clamp(20px, 4vw, 56px);
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .logo {
+    font-family: Cinzel, serif; font-weight: 700; font-size: 18px;
+    letter-spacing: 0.3em; color: var(--ink);
+  }
+  .logo:hover { text-decoration: none; }
+  .links { display: flex; gap: 32px; color: var(--ink-muted); }
+  .links a { color: var(--ink-muted); }
+  .links a:hover { color: var(--ink); text-decoration: none; }
+  .nb { color: var(--gold); }
+  .nb:hover { text-decoration: none; color: var(--ink); }
 
-  .hero { padding: 88px 0 64px; text-align: center; position: relative; overflow: hidden; }
-  .hero-bg {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    opacity: 0.55; pointer-events: none;
+  .copy {
+    margin-top: auto; align-self: flex-start; text-align: left;
+    max-width: 820px; padding: 0 clamp(20px, 5vw, 80px) clamp(30px, 7vh, 72px);
   }
-  .hero-inner { position: relative; z-index: 1; }
   .eyebrow {
-    display: inline-block; font-size: 11px; font-weight: 700;
-    letter-spacing: 0.22em; color: var(--cyan);
-    border: 1px solid rgba(87, 199, 227, 0.35); border-radius: 999px;
-    padding: 5px 14px; margin-bottom: 22px;
-    background: rgba(87, 199, 227, 0.07);
+    font-size: 12px; letter-spacing: 0.42em; text-transform: uppercase; color: var(--gold);
   }
-  .hero h1 {
-    font-size: clamp(38px, 6vw, 58px);
-    line-height: 1.08; letter-spacing: -0.03em; font-weight: 800;
+  h1 {
+    margin-top: 16px; font-family: Cinzel, serif; font-weight: 500;
+    font-size: clamp(38px, 4.8vw, 84px); line-height: 1.02; letter-spacing: 0.05em;
+    text-shadow: 0 6px 50px rgba(0, 0, 0, 0.5);
   }
-  .hero h1 em { font-style: normal; color: var(--cyan); }
-  .hero p {
-    max-width: 640px; margin: 20px auto 0;
-    color: var(--muted); font-size: 18px;
-  }
-  .cta { display: flex; gap: 12px; justify-content: center; margin-top: 32px; flex-wrap: wrap; }
+  .sub { margin: 18px 0 0; font-size: 17px; line-height: 1.6; color: var(--ink-muted); max-width: 520px; }
+  .ctas { margin-top: 28px; display: flex; gap: 14px; flex-wrap: wrap; }
   .btn {
-    display: inline-block; padding: 11px 22px; border-radius: 999px;
-    font-size: 15px; font-weight: 600; border: 1px solid var(--line);
-    color: var(--text); background: var(--card);
+    padding: 16px 30px; font-size: 13px; font-weight: 500;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    transition: transform 0.25s, box-shadow 0.25s, background 0.25s, border-color 0.25s;
   }
-  .btn:hover { text-decoration: none; border-color: var(--faint); }
-  .btn.primary { background: var(--cyan); border-color: var(--cyan); color: #06121a; }
-  .btn.primary:hover { background: #77d4ec; }
+  .btn:hover { text-decoration: none; }
+  .btn.p {
+    background: var(--ink); color: #2a0806;
+    clip-path: polygon(12px 0, 100% 0, calc(100% - 12px) 100%, 0 100%);
+  }
+  .btn.p:hover { transform: translateY(-2px); box-shadow: 0 14px 44px rgba(255, 140, 60, 0.45); }
+  .btn.g { border: 1px solid rgba(255, 241, 230, 0.35); color: var(--ink); }
+  .btn.g:hover { border-color: var(--ink); }
+  .plat {
+    margin-top: 22px; font-size: 12px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: rgba(255, 241, 230, 0.5);
+  }
+
+  .rv {
+    opacity: 0; transform: translateY(18px); filter: blur(10px);
+    animation: rise 1.6s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+    animation-delay: calc(var(--d, 0) * 1ms);
+  }
+  @keyframes rise { to { opacity: 1; transform: none; filter: blur(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .rv { animation: none; opacity: 1; transform: none; filter: none; }
+  }
+  @media (max-width: 760px) {
+    .links { display: none; }
+    .copy { padding-bottom: 28px; }
+    h1 { font-size: 42px; }
+    .sub { font-size: 15px; }
+    .plat, .eyebrow { display: none; }
+    .btn { padding: 14px 20px; }
+    .hero::before {
+      background: linear-gradient(180deg, rgba(30, 4, 4, 0.45), transparent 22%, transparent 45%, rgba(24, 3, 3, 0.88) 72%, var(--bg) 100%);
+    }
+  }
 
   /* CSS mockup of the notch card: no screenshot needed. */
-  .notch-scene { display: flex; justify-content: center; padding: 16px 0 8px; }
+  .notch-scene { display: flex; flex-direction: column; align-items: center; padding: 56px 0 8px; }
   .notch-card {
     width: 432px; max-width: 100%;
     background: #000; border: 1px solid #2a2f42; border-radius: 22px;
@@ -99,10 +144,11 @@
   .nc-opt { margin-top: 8px; background: #10131c; border-radius: 8px; padding: 7px 10px; }
   .nc-opt b { color: var(--cyan); font-family: ui-monospace, monospace; font-weight: 700; }
   .nc-opt p { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  .note { color: var(--faint); font-size: 13.5px; margin-top: 14px; text-align: center; }
 
   section { padding: 56px 0 8px; }
   h2 { font-size: 26px; letter-spacing: -0.02em; font-weight: 750; }
-  .sub { color: var(--muted); margin-top: 8px; max-width: 640px; }
+  .sub2 { color: var(--muted); margin-top: 8px; max-width: 640px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 26px; }
   .feat {
     background: var(--panel); border: 1px solid var(--line);
@@ -130,7 +176,6 @@
     padding: 16px 18px; overflow-x: auto; margin-top: 18px;
     font: 13px/1.7 ui-monospace, "SF Mono", Menlo, monospace; color: #c9d4e8;
   }
-  .note { color: var(--faint); font-size: 13.5px; margin-top: 10px; }
 
   footer {
     margin-top: 72px; border-top: 1px solid var(--line);
@@ -143,58 +188,59 @@
 </head>
 <body>
 
-<header>
-  <div class="wrap nav">
-    <a class="brand" href="#">Bantay<span>-TUI</span></a>
-    <nav>
+<section class="hero">
+  <canvas data-bg aria-hidden="true"></canvas>
+
+  <nav class="rv">
+    <a class="logo" href="#">BANTAY</a>
+    <div class="links">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
       <a href="#install">Install</a>
       <a href="https://github.com/8-BitRhyon/bantay-tui">GitHub</a>
-    </nav>
+    </div>
+    <a class="nb" href="https://github.com/8-BitRhyon/bantay-tui/releases">Download</a>
+  </nav>
+
+  <div class="copy">
+    <p class="eyebrow rv" style="--d:300">Sentinel for coding agents</p>
+    <h1 class="rv" style="--d:500">Agents work.<br>You hold the line.</h1>
+    <p class="sub rv" style="--d:700">
+      Bantay-TUI stands watch in your MacBook notch over every AI coding agent you run.
+      See who is working, answer their questions, and approve their actions,
+      without leaving the pane you are in.
+    </p>
+    <div class="ctas rv" style="--d:900">
+      <a class="btn p" href="https://github.com/8-BitRhyon/bantay-tui/releases">Download for Mac</a>
+      <a class="btn g" href="https://github.com/8-BitRhyon/bantay-tui">View on GitHub</a>
+    </div>
+    <p class="plat rv" style="--d:1100">macOS 13+ · Apple Silicon and Intel · Herdr · tmux · Zellij · OpenCode</p>
   </div>
-</header>
+</section>
 
 <main class="wrap">
 
-  <div class="hero">
-    <canvas class="hero-bg" id="signal-bg" aria-hidden="true"></canvas>
-    <div class="hero-inner">
-    <div class="eyebrow">SENTINEL FOR CODING AGENTS</div>
-    <h1>Every coding agent you run,<br><em>watched from your notch.</em></h1>
-    <p>
-      Bantay-TUI is a native macOS control plane for AI coding agents. It lives in the
-      MacBook notch: see who is working, answer their questions, approve their actions,
-      and never lose track of a background agent again.
-    </p>
-    <div class="cta">
-      <a class="btn primary" href="https://github.com/8-BitRhyon/bantay-tui/releases">Download</a>
-      <a class="btn" href="https://github.com/8-BitRhyon/bantay-tui">View on GitHub</a>
-    </div>
-
-    <div class="notch-scene" aria-hidden="true">
-      <div class="notch-card">
-        <div class="nc-head">
-          <span class="nc-dot"></span> Opencode
-          <span style="color: var(--faint); font-weight: 500;">· monozen-skills</span>
-          <span class="nc-badge">QUESTION</span>
-        </div>
-        <div class="nc-q">Should I execute the audit, and at what scope?</div>
-        <div class="nc-opt"><b>1.</b> Phase 1 (Recommended)
-          <p>Remove two skills, demote three, rewrite one. One commit.</p></div>
-        <div class="nc-opt"><b>2.</b> Full audit plan
-          <p>All three phases: 24 skills reviewed. Larger diff, longer verification.</p></div>
-        <div class="nc-opt"><b>3.</b> Report only
-          <p>Keep the report. No file changes until you decide.</p></div>
+  <div class="notch-scene" aria-hidden="true">
+    <div class="notch-card">
+      <div class="nc-head">
+        <span class="nc-dot"></span> Opencode
+        <span style="color: var(--faint); font-weight: 500;">· monozen-skills</span>
+        <span class="nc-badge">QUESTION</span>
       </div>
+      <div class="nc-q">Should I execute the audit, and at what scope?</div>
+      <div class="nc-opt"><b>1.</b> Phase 1 (Recommended)
+        <p>Remove two skills, demote three, rewrite one. One commit.</p></div>
+      <div class="nc-opt"><b>2.</b> Full audit plan
+        <p>All three phases: 24 skills reviewed. Larger diff, longer verification.</p></div>
+      <div class="nc-opt"><b>3.</b> Report only
+        <p>Keep the report. No file changes until you decide.</p></div>
     </div>
     <p class="note">The notch card mirrors the agent's own form: same question, same options, same order.</p>
-    </div>
   </div>
 
   <section id="features">
     <h2>Built for parallel agents</h2>
-    <p class="sub">
+    <p class="sub2">
       You run Claude Code, OpenCode, Codex, and Gemini across Herdr, tmux, Zellij, and IDEs.
       Bantay gives all of them one surface, and it stays quiet until you are needed.
     </p>
@@ -212,7 +258,7 @@
       <div class="feat">
         <span class="tag d">QUIET BY DEFAULT</span>
         <h3>Done means done</h3>
-        <p>Agents report "done" at every turn boundary. Bantay waits until a finish settles, and while you are working in another pane it holds completions silently. Failures always interrupt. Finishes while you watched the pane never pop at all.</p>
+        <p>Agents report "done" at every turn boundary. Bantay waits until a finish settles, holds completions silently while you work in another pane, and never pops a finish you watched happen. Failures always interrupt.</p>
       </div>
       <div class="feat">
         <span class="tag s">TELEMETRY</span>
@@ -255,12 +301,12 @@
 
   <section id="install">
     <h2>Install</h2>
-    <p class="sub">Bantay-TUI runs on macOS 13 or later, on Apple Silicon and Intel. Build it from source:</p>
+    <p class="sub2">Bantay-TUI runs on macOS 13 or later, on Apple Silicon and Intel. Build it from source:</p>
     <pre>git clone https://github.com/8-BitRhyon/bantay-tui.git
 cd bantay-tui
 swift build -c release
 bash scripts/setup.sh</pre>
-    <p class="note">
+    <p class="note" style="text-align: left;">
       The setup script installs a signed app bundle and a launch agent, so Bantay starts at login.
       Prebuilt downloads land on the <a href="https://github.com/8-BitRhyon/bantay-tui/releases">releases page</a>.
       Herdr, tmux, Zellij, and OpenCode integrations can be enabled from Settings after first launch.
@@ -281,31 +327,54 @@ bash scripts/setup.sh</pre>
 </footer>
 
 <script>
-  // Signal field: a quiet grid of agent status dots with pulses travelling
-  // between them. Pure canvas, no dependencies. Honors reduced motion and
-  // pauses while the tab is hidden.
+  // Ember watch: a dusk gradient, layered ridges, a field of agent status
+  // lights, and rising embers. Original canvas scene in the Sentinel
+  // spirit: no images, no dependencies. Reduced motion gets one still
+  // frame, and the loop pauses while the tab is hidden.
   (() => {
-    const canvas = document.getElementById("signal-bg");
+    const canvas = document.querySelector("canvas[data-bg]");
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const COLORS = ["87,199,227", "74,222,128", "245,177,76", "87,199,227"];
-    let width = 0, height = 0, dots = [], pulses = [], raf = 0, last = 0;
+    const LIGHT_COLORS = ["87,199,227", "74,222,128", "245,177,76", "255,193,122"];
+    let width = 0, height = 0, raf = 0, lights = [], embers = [];
+    let mouseX = 0.5, targetMouseX = 0.5, last = 0;
+
+    function ridge(base, amp, seed) {
+      const points = [];
+      for (let x = 0; x <= width + 40; x += 40) {
+        points.push({
+          x,
+          y: base + Math.sin(x * 0.004 + seed) * amp + Math.sin(x * 0.011 + seed * 2.3) * amp * 0.4,
+        });
+      }
+      return points;
+    }
 
     function build() {
-      const step = 34;
-      dots = [];
-      for (let y = step / 2; y < height; y += step) {
-        for (let x = step / 2; x < width; x += step) {
-          dots.push({ x, y, phase: Math.random() * Math.PI * 2 });
-        }
+      lights = [];
+      const groundTop = height * 0.70;
+      for (let i = 0; i < 90; i++) {
+        lights.push({
+          x: Math.random() * width,
+          y: groundTop + Math.random() * (height - groundTop) * 0.85,
+          r: 0.8 + Math.random() * 1.5,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.4 + Math.random() * 1.1,
+          color: LIGHT_COLORS[Math.floor(Math.random() * LIGHT_COLORS.length)],
+        });
       }
-      pulses = Array.from({ length: 7 }, () => ({
-        y: Math.floor(Math.random() * Math.max(1, Math.floor(height / step))) * step + step / 2,
-        x: -40 - Math.random() * width * 0.5,
-        speed: 60 + Math.random() * 110,
-        color: COLORS[Math.floor(Math.random() * COLORS.length)],
-      }));
+      embers = [];
+      for (let i = 0; i < 42; i++) {
+        embers.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          r: 0.6 + Math.random() * 1.6,
+          rise: 9 + Math.random() * 22,
+          sway: 6 + Math.random() * 16,
+          phase: Math.random() * Math.PI * 2,
+        });
+      }
     }
 
     function resize() {
@@ -318,57 +387,90 @@ bash scripts/setup.sh</pre>
       build();
     }
 
+    function drawRidge(base, amp, seed, offset, color) {
+      const points = ridge(base, amp, seed);
+      ctx.beginPath();
+      ctx.moveTo(-40, height);
+      for (const point of points) ctx.lineTo(point.x + offset, point.y);
+      ctx.lineTo(width + 40, height);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+
     function frame(now) {
       const t = now / 1000;
-      ctx.clearRect(0, 0, width, height);
-      for (const dot of dots) {
-        const glow = 0.10 + 0.08 * (0.5 + 0.5 * Math.sin(t * 0.7 + dot.phase));
+      const horizon = height * 0.62;
+      const sky = ctx.createLinearGradient(0, 0, 0, horizon * 1.25);
+      sky.addColorStop(0, "#160302");
+      sky.addColorStop(0.55, "#3d0d04");
+      sky.addColorStop(1, "#93380f");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, width, height);
+
+      mouseX += (targetMouseX - mouseX) * 0.03;
+      const parallax = (mouseX - 0.5) * 2;
+
+      const sunX = width * 0.70 + parallax * -10;
+      const sunY = horizon * 0.92;
+      const glow = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, height * 0.34);
+      glow.addColorStop(0, "rgba(255,178,102,0.55)");
+      glow.addColorStop(0.35, "rgba(255,140,60,0.18)");
+      glow.addColorStop(1, "rgba(255,140,60,0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, width, height);
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, height * 0.055, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,205,140,0.9)";
+      ctx.fill();
+
+      drawRidge(horizon * 0.98, 14, 1.7, parallax * 6, "#401106");
+      drawRidge(horizon * 1.10, 18, 4.2, parallax * 14, "#2a0806");
+      drawRidge(horizon * 1.24, 16, 8.9, parallax * 24, "#170302");
+
+      ctx.fillStyle = "#100201";
+      ctx.fillRect(0, horizon * 1.24 + 16, width, height);
+      for (const light of lights) {
+        const twinkle = 0.25 + 0.55 * (0.5 + 0.5 * Math.sin(t * light.speed + light.phase));
         ctx.beginPath();
-        ctx.arc(dot.x, dot.y, 1.4, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(140,160,200," + glow.toFixed(3) + ")";
+        ctx.arc(light.x + parallax * 24, light.y, light.r, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(" + light.color + "," + twinkle.toFixed(3) + ")";
         ctx.fill();
       }
-      ctx.lineWidth = 1;
-      for (const pulse of pulses) {
-        const grad = ctx.createLinearGradient(pulse.x - 90, 0, pulse.x, 0);
-        grad.addColorStop(0, "rgba(" + pulse.color + ",0)");
-        grad.addColorStop(1, "rgba(" + pulse.color + ",0.5)");
-        ctx.strokeStyle = grad;
+      for (const ember of embers) {
+        const y = ember.y - ((t * ember.rise + ember.phase * 40) % (height + 30));
+        const yy = y < -20 ? y + height + 30 : y;
+        const xx = ember.x + Math.sin(t * 0.6 + ember.phase) * ember.sway;
+        const flicker = 0.25 + 0.45 * (0.5 + 0.5 * Math.sin(t * 2.1 + ember.phase * 3));
         ctx.beginPath();
-        ctx.moveTo(pulse.x - 90, pulse.y);
-        ctx.lineTo(pulse.x, pulse.y);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(pulse.x, pulse.y, 2, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(" + pulse.color + ",0.85)";
+        ctx.arc(xx, yy, ember.r, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,170,90," + flicker.toFixed(3) + ")";
         ctx.fill();
       }
     }
 
     function loop(now) {
-      const dt = Math.min((now - last) / 1000 || 0, 0.05);
       last = now;
-      for (const pulse of pulses) {
-        pulse.x += pulse.speed * dt;
-        if (pulse.x - 90 > width) {
-          pulse.x = -40 - Math.random() * width * 0.4;
-          pulse.y = (Math.floor(Math.random() * 14) + 0.5) * 34;
-          pulse.color = COLORS[Math.floor(Math.random() * COLORS.length)];
-        }
-      }
       frame(now);
       raf = requestAnimationFrame(loop);
     }
 
     resize();
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", () => {
+      resize();
+      // A resize clears the canvas; reduced motion has no loop to repaint.
+      if (reduced) frame(1600);
+    });
+    window.addEventListener("pointermove", (event) => {
+      targetMouseX = event.clientX / Math.max(window.innerWidth, 1);
+    });
     if (reduced) {
-      frame(1200);
+      frame(1600);
     } else {
       raf = requestAnimationFrame(loop);
       document.addEventListener("visibilitychange", () => {
         if (document.hidden) cancelAnimationFrame(raf);
-        else if (!reduced) raf = requestAnimationFrame(loop);
+        else raf = requestAnimationFrame(loop);
       });
     }
   })();
