@@ -7,6 +7,10 @@ import SwiftUI
 struct NotchTabBarView: View {
     @Binding var selectedTab: ShelfTab
     var shelfDropGlow: Bool = false
+    /// A drop forced the shelf open while its tab is hidden. Keep the shelf
+    /// pill visible so the selected state is clear, and keep the other tabs
+    /// reachable so the panel cannot trap the user.
+    var forceShelfVisible: Bool = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -23,7 +27,7 @@ struct NotchTabBarView: View {
                 tabButton(title: "History", tab: .history, shortcut: "4")
             }
             Spacer(minLength: 0)
-            if NotchHUDConfig.shared.showShelfTab {
+            if NotchHUDConfig.shared.showShelfTab || forceShelfVisible {
                 utilityButton(
                     icon: "tray.and.arrow.down", tab: .shelf, shortcut: "5",
                     glow: shelfDropGlow)

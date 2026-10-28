@@ -473,6 +473,20 @@ final class NotchHUDConfig {
     var clampedShelfLimit: Int {
         min(max(shelfLimit, 1), 50)
     }
+    /// Total storage the shelf may own. Oldest items are evicted first.
+    /// Stored in decimal megabytes so the Settings label matches the bytes.
+    var shelfMaxMegabytes: Int = 1024 {
+        didSet {
+            shelfMaxMegabytes = min(max(shelfMaxMegabytes, 64), 10240)
+            defaults.set(shelfMaxMegabytes, forKey: "shelfMaxMegabytes")
+        }
+    }
+    var clampedShelfMaxMegabytes: Int {
+        min(max(shelfMaxMegabytes, 64), 10240)
+    }
+    var clampedShelfMaxBytes: Int64 {
+        Int64(clampedShelfMaxMegabytes) * 1_000_000
+    }
     /// How long dropped files stay on the shelf before auto-expiring
     /// ("1 Hour", "1 Day", "3 Days", "1 Week", "Forever"). Raw string so the
     /// harness doesn't depend on the enum; `ShelfKeepDuration` maps it.
@@ -755,6 +769,9 @@ final class NotchHUDConfig {
         }
         if let v = defaults.object(forKey: "shelfLimit") as? NSNumber {
             shelfLimit = min(max(v.intValue, 1), 50)
+        }
+        if let v = defaults.object(forKey: "shelfMaxMegabytes") as? NSNumber {
+            shelfMaxMegabytes = min(max(v.intValue, 64), 10240)
         }
         if let v = defaults.object(forKey: "shelfKeepDuration") as? String {
             shelfKeepDuration = v

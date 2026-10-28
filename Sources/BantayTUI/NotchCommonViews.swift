@@ -161,6 +161,7 @@ struct TactileRowButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle(pressedScale: 0.93, reduceMotion: reduceMotion))
+        .accessibilityLabel(title ?? (helpText.isEmpty ? systemName : helpText))
         .animation(
             isHovered ? InteractionMotion.hoverIn : InteractionMotion.hoverOut,
             value: isHovered

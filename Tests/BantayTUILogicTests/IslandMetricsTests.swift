@@ -23,11 +23,45 @@
             #expect(IslandMetrics.notchlessFallbackWidth == 211)
             #expect(IslandMetrics.cornerRadius(expanded: true) == 24)
             #expect(IslandMetrics.cornerRadius(expanded: false) == 8)
+            #expect(IslandMetrics.notificationAutoDismissSeconds == 8)
         }
 
         @Test("fixed window size is invariant")
         func fixedWindowSize() {
             #expect(IslandMetrics.windowSize() == CGSize(width: 504, height: 560))
+        }
+
+        @Test("spend stroke only renders on the collapsed docked notch")
+        func spendStrokeVisibility() {
+            #expect(
+                !IslandMetrics.spendStrokeVisible(
+                    isExpanded: true, isCenteredClosed: false))
+            #expect(
+                IslandMetrics.spendStrokeVisible(
+                    isExpanded: false, isCenteredClosed: false))
+            #expect(
+                !IslandMetrics.spendStrokeVisible(
+                    isExpanded: false, isCenteredClosed: true))
+        }
+
+        @Test("centered notifications restore the opaque island chrome")
+        func islandChromeVisibility() {
+            #expect(
+                IslandMetrics.islandChromeVisible(
+                    isExpanded: false, isCenteredClosed: true,
+                    hasActiveNotification: true))
+            #expect(
+                !IslandMetrics.islandChromeVisible(
+                    isExpanded: false, isCenteredClosed: true,
+                    hasActiveNotification: false))
+            #expect(
+                IslandMetrics.islandChromeVisible(
+                    isExpanded: false, isCenteredClosed: false,
+                    hasActiveNotification: false))
+            #expect(
+                IslandMetrics.islandChromeVisible(
+                    isExpanded: true, isCenteredClosed: false,
+                    hasActiveNotification: false))
         }
 
         @Test("window centered and aligned to pixel grid")
@@ -297,6 +331,16 @@
         func stripsProgressBars() {
             let progress = "[====>    ] 45% Compiling"
             #expect(IslandMetrics.cleanHUDText(progress) == "Compiling")
+        }
+
+        @Test("transient notices wait for a settled finish")
+        func transientNoticeSettle() {
+            #expect(!IslandMetrics.transientNoticeShouldShow(agentKind: .progress))
+            #expect(!IslandMetrics.transientNoticeShouldShow(agentKind: .started))
+            #expect(IslandMetrics.transientNoticeShouldShow(agentKind: .idle))
+            #expect(IslandMetrics.transientNoticeShouldShow(agentKind: .completed))
+            #expect(IslandMetrics.transientNoticeShouldShow(agentKind: nil))
+            #expect(IslandMetrics.transientNoticeSettleSeconds >= 2)
         }
     }
 #endif

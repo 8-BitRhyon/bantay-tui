@@ -87,6 +87,8 @@ struct SettingsView: View {
     @State private var ingestEnabled = NotchHUDConfig.shared.ingestEnabled
     @State private var ingestPort = NotchHUDConfig.shared.ingestPort
     @State private var shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
+    @State private var shelfMaxMegabytes =
+        NotchHUDConfig.shared.clampedShelfMaxMegabytes
     @State private var shelfKeepDuration = NotchHUDConfig.shared.shelfKeepDuration
     @State private var followMouse = NotchHUDConfig.shared.followMouseScreen
     @State private var floatingPill = NotchHUDConfig.shared.floatingPillOnNoNotch
@@ -200,7 +202,9 @@ struct SettingsView: View {
             "hotkey", "shortcut", "h", "l", "f", "r", "c", "a", "vim", "navigation",
         ],
         "Shelf": [
-            "shelf tab", "clipboard history", "dropped files", "shelf limit", "expire", "duration",
+            "shelf tab", "clipboard history", "dropped files", "shelf limit",
+            "shelf size", "storage", "budget", "eviction", "cleanup", "expire",
+            "duration",
         ],
         "Alerts": [
             "alert sounds", "volume", "sound theme preset", "8-bit arcade", "sci-fi synth",
@@ -461,6 +465,7 @@ struct SettingsView: View {
                 Section("Capture") {
                     Toggle("Poll agents", isOn: $captureEnabled)
                         .onChange(of: captureEnabled) { newValue in
+                            guard !isRefreshingConfig else { return }
                             NotchHUDConfig.shared.captureEnabled = newValue
                             if newValue {
                                 AgentEventManager.shared.startCapture()
@@ -492,8 +497,8 @@ struct SettingsView: View {
                         }
                     Toggle("Notch spend edge-glow", isOn: $enableSpendGlow)
                         .help(
-                            "Pulsing cyan/amber/red ambient perimeter stroke around the notch "
-                                + "indicating live daily AI spend."
+                            "Pulsing cyan/amber/red perimeter stroke around the "
+                                + "collapsed notch indicating live daily AI spend."
                         )
                         .onChange(of: enableSpendGlow) { newValue in
                             NotchHUDConfig.shared.enableSpendGlow = newValue
@@ -669,12 +674,14 @@ struct SettingsView: View {
                                 + "`ssh -R <port>:localhost:<port>`."
                         )
                         .onChange(of: ingestEnabled) { newValue in
+                            guard !isRefreshingConfig else { return }
                             NotchHUDConfig.shared.ingestEnabled = newValue
                             AppDelegate.shared?.updateIngestServer()
                         }
                     Stepper("Listen port: \(ingestPort)", value: $ingestPort, in: 1024...65535)
                         .help("Localhost only; tunnel with SSH port forwarding.")
                         .onChange(of: ingestPort) { newValue in
+                            guard !isRefreshingConfig else { return }
                             NotchHUDConfig.shared.ingestPort = newValue
                             AppDelegate.shared?.updateIngestServer()
                         }
@@ -721,6 +728,7 @@ struct SettingsView: View {
                                 + "No repository checkout needed."
                         )
                         .onChange(of: herdrPluginInstalled) { newValue in
+                            guard !isRefreshingConfig else { return }
                             if newValue {
                                 installHerdrPlugin()
                             } else {
@@ -740,6 +748,7 @@ struct SettingsView: View {
                                 + "Bantay isn't running."
                         )
                         .onChange(of: opencodePluginInstalled) { newValue in
+                            guard !isRefreshingConfig else { return }
                             if newValue {
                                 opencodePluginError =
                                     OpenCodePluginInstaller.install() ?? ""
@@ -764,10 +773,36 @@ struct SettingsView: View {
 
             if selectedCategory == .notch && matchesSearch("Shelf") {
                 Section("Shelf") {
-                    Stepper("Shelf limit: \(shelfLimit)", value: $shelfLimit, in: 1...50)
-                        .onChange(of: shelfLimit) { newValue in
-                            NotchHUDConfig.shared.shelfLimit = newValue
+                    Stepper(
+                        "Shelf item limit: \(shelfLimit)",
+                        value: $shelfLimit, in: 1...50
+                    )
+                    .onChange(of: shelfLimit) { newValue in
+                        NotchHUDConfig.shared.shelfLimit = newValue
+                        ShelfStore.shared.maintain()
+                    }
+                    Picker(
+                        "Shelf size limit", selection: $shelfMaxMegabytes
+                    ) {
+                        ForEach(
+                            [64, 128, 256, 512, 1024, 2048, 5120, 10240],
+                            id: \.self
+                        ) { megabytes in
+                            Text(
+                                megabytes >= 1024
+                                    ? "\(megabytes / 1024) GB"
+                                    : "\(megabytes) MB"
+                            )
+                            .tag(megabytes)
                         }
+                    }
+                    .help(
+                        "Oldest items are removed when shelf storage exceeds this limit."
+                    )
+                    .onChange(of: shelfMaxMegabytes) { newValue in
+                        NotchHUDConfig.shared.shelfMaxMegabytes = newValue
+                        ShelfStore.shared.maintain()
+                    }
                     Picker("Keep files for", selection: $shelfKeepDuration) {
                         ForEach(ShelfKeepDuration.allCases) { option in
                             Text(option.rawValue).tag(option.rawValue)
@@ -776,7 +811,7 @@ struct SettingsView: View {
                     .help("Dropped files auto-expire after this long.")
                     .onChange(of: shelfKeepDuration) { newValue in
                         NotchHUDConfig.shared.shelfKeepDuration = newValue
-                        ShelfStore.shared.cleanExpired()
+                        ShelfStore.shared.maintain()
                     }
                 }
             }
@@ -1083,6 +1118,7 @@ struct SettingsView: View {
                 Section("Alerts") {
                     Toggle("Alert sounds", isOn: $enableAlerts)
                         .onChange(of: enableAlerts) { newValue in
+                            guard !isRefreshingConfig else { return }
                             NotchHUDConfig.shared.enableAgentAlerts = newValue
                             if newValue {
                                 playAlertSample()
@@ -1093,6 +1129,7 @@ struct SettingsView: View {
                         value: $soundVolume, in: 0...100, step: 5
                     )
                     .onChange(of: soundVolume) { newValue in
+                        guard !isRefreshingConfig else { return }
                         NotchHUDConfig.shared.soundVolume = Float(newValue) / 100
                         previewAlertVolume()
                     }
@@ -1106,6 +1143,7 @@ struct SettingsView: View {
                         Text("Custom").tag("Custom")
                     }
                     .onChange(of: soundThemePreset) { newValue in
+                        guard !isRefreshingConfig else { return }
                         NotchHUDConfig.shared.soundThemePreset = newValue
                         if newValue != "Custom" {
                             approvalSoundName = NotchHUDConfig.shared.approvalSoundName
@@ -1672,6 +1710,71 @@ struct SettingsView: View {
         riskyPatternsText = NotchHUDConfig.shared.riskyPromptPatterns
             .joined(separator: "\n")
         notifyWhenHidden = NotchHUDConfig.shared.notifyWhenHidden
+        // Every config-backed control re-syncs on open. The settings window
+        // is created once and reused, so any value changed elsewhere (menu,
+        // CLI, hotkeys, onboarding) would otherwise show stale for the life
+        // of the process.
+        captureInterval = Int(NotchHUDConfig.shared.captureInterval)
+        soundVolume = Int(NotchHUDConfig.shared.soundVolume * 100)
+        autoClearTTL = Int(NotchHUDConfig.shared.autoClearTTL)
+        stickyTTL = Int(NotchHUDConfig.shared.stickyApprovalTTL)
+        hideAtStartup = NotchHUDConfig.shared.hideAtStartup
+        showIslandWhenIdle = NotchHUDConfig.shared.showIslandWhenIdle
+        muteInTerminal = NotchHUDConfig.shared.muteInTerminal
+        dockSide = NotchHUDConfig.shared.islandDockSide.rawValue
+        idleStyle = NotchHUDConfig.shared.idleStyle.rawValue
+        idleMaxChips = NotchHUDConfig.shared.clampedIdleMaxChips
+        expandedGroupByState = NotchHUDConfig.shared.expandedGroupByState
+        keyboardShortcuts = NotchHUDConfig.shared.keyboardShortcuts
+        edgeGlow = NotchHUDConfig.shared.edgeGlowEnabled
+        showElapsed = NotchHUDConfig.shared.showElapsedTime
+        menuBadge = NotchHUDConfig.shared.menuBarBadge
+        standaloneScan = NotchHUDConfig.shared.standaloneScanEnabled
+        showUsage = NotchHUDConfig.shared.usageTrackingEnabled
+        dailyBudgetUSD = NotchHUDConfig.shared.dailyBudgetUSD
+        notifyOnBudgetThresholds = NotchHUDConfig.shared.notifyOnBudgetThresholds
+        notifyOnHighBurnRate = NotchHUDConfig.shared.notifyOnHighBurnRate
+        highBurnThresholdTPM = NotchHUDConfig.shared.highBurnThresholdTPM
+        enforceBudgetLimit = NotchHUDConfig.shared.enforceBudgetLimit
+        enableSpendGlow = NotchHUDConfig.shared.enableSpendGlow
+        showNotchMascot = NotchHUDConfig.shared.showNotchMascot
+        selectedMascotArchetype = NotchHUDConfig.shared.selectedMascotArchetype
+        equippedAccessory = NotchHUDConfig.shared.equippedAccessory
+        mascotXP = NotchHUDConfig.shared.mascotXP
+        mascotLevel = NotchHUDConfig.shared.mascotLevel
+        ingestEnabled = NotchHUDConfig.shared.ingestEnabled
+        ingestPort = NotchHUDConfig.shared.ingestPort
+        shelfLimit = NotchHUDConfig.shared.clampedShelfLimit
+        shelfMaxMegabytes = NotchHUDConfig.shared.clampedShelfMaxMegabytes
+        shelfKeepDuration = NotchHUDConfig.shared.shelfKeepDuration
+        followMouse = NotchHUDConfig.shared.followMouseScreen
+        floatingPill = NotchHUDConfig.shared.floatingPillOnNoNotch
+        showInFullScreen = NotchHUDConfig.shared.showInFullScreen
+        avoidMenuBar = NotchHUDConfig.shared.avoidMenuBarIcons
+        preferredTerminal = NotchHUDConfig.shared.preferredTerminalBundleID ?? ""
+        quietHoursStart = NotchHUDConfig.shared.quietHoursStart
+        quietHoursEnd = NotchHUDConfig.shared.quietHoursEnd
+        ntfyTopic = NotchHUDConfig.shared.ntfyTopic
+        ntfyServer = NotchHUDConfig.shared.ntfyServer
+        ntfyCallbackURL = NotchHUDConfig.shared.ntfyCallbackURL
+        tmuxStatusEnabled = NotchHUDConfig.shared.tmuxStatusEnabled
+        attentionFilter = NotchHUDConfig.shared.attentionFilterEnabled
+        opencodePluginInstalled = OpenCodePluginInstaller.isInstalled()
+        showTokenRate = NotchHUDConfig.shared.showTokenRate
+        showAgentsTab = NotchHUDConfig.shared.showAgentsTab
+        showTasksTab = NotchHUDConfig.shared.showTasksTab
+        showHistoryTab = NotchHUDConfig.shared.showHistoryTab
+        showShelfTab = NotchHUDConfig.shared.showShelfTab
+        showMediaTab = NotchHUDConfig.shared.showMediaTab
+        hoverSensitivity = NotchHUDConfig.shared.hoverSensitivityPreset
+        enableQuotaAxiGauge = NotchHUDConfig.shared.enableQuotaAxiGauge
+        soundThemePreset = NotchHUDConfig.shared.soundThemePreset
+        approvalSoundName = NotchHUDConfig.shared.approvalSoundName
+        completionSoundName = NotchHUDConfig.shared.completionSoundName
+        errorSoundName = NotchHUDConfig.shared.errorSoundName
+        workingSoundName = NotchHUDConfig.shared.workingSoundName
+        autoDispatchTasks = NotchHUDConfig.shared.autoDispatchTasks
+        focusTerminalOnDispatch = NotchHUDConfig.shared.focusTerminalOnDispatch
         quietHoursEnabled = NotchHUDConfig.shared.quietHoursEnabled
         mutedSources = NotchHUDConfig.shared.mutedSources
         claudeHookInstalled = NotchHUDConfig.shared.claudeHookInstalled

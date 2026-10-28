@@ -95,6 +95,82 @@
             #expect(waiting.choices.count == 2)
         }
 
+        @Test("boxed OpenCode question keeps its choices")
+        func boxedOpenCodeQuestion() {
+            let single = ApprovalPromptResolver.resolve(
+                rawTail: """
+                    ┃  Pick a fruit
+                    ┃
+                    ┃  Which fruit?
+                    ┃
+                    ┃  1. Apple
+                    ┃  2. Banana
+                    ┃  3. Cherry
+                    ┃  4. Type your own answer
+                    ┃
+                    ┃  ↑↓ select  enter submit  esc dismiss
+                    """,
+                kind: .waiting)
+            #expect(single.choices == ["Apple", "Banana", "Cherry", "Type your own answer"])
+            #expect(single.variance == .choices)
+
+            let multi = ApprovalPromptResolver.resolve(
+                rawTail: """
+                    ┃  Pick toppings
+                    ┃
+                    ┃  Which toppings?  Submit
+                    ┃
+                    ┃  1. [ ] Cheese
+                    ┃  2. [ ] Olives
+                    ┃  3. [ ] Mushrooms
+                    ┃
+                    ┃  ⇆ tab  ↑↓ select  enter toggle  esc dismiss
+                    """,
+                kind: .waiting)
+            #expect(multi.choices == ["Cheese", "Olives", "Mushrooms"])
+            #expect(multi.variance == .multi)
+        }
+
+        @Test("boxed question descriptions and custom row")
+        func boxedQuestionDescriptions() {
+            let prompt = ApprovalPromptResolver.resolve(
+                rawTail: """
+                    ┃  {"title":"Should I execute the audit, and at what scope?","options":[{"value":"phase1"}]}
+                    ┃  [bantay] variance=choices choices=4 [Phase 1 | Full] Should I execute the audit, and at what scope?
+                    ┃  Questions
+                    ┃
+                    ┃  Should I execute the audit, and at what scope?
+                    ┃
+                    ┃  1. Phase 1 (Recommended)
+                    ┃     Remove backpass and firstmate, demote the loops. One commit.
+                    ┃  2. Full audit plan
+                    ┃     All three phases: 24 skills, 4 rewrites, 4 trims.
+                    ┃  3. Report only
+                    ┃     Keep the report only. I will make no file changes.
+                    ┃  4. Type your own answer
+                    ┃  5. Type your own answer
+                    ┃
+                    ┃  ↑↓ select  enter submit  esc dismiss
+                    """,
+                kind: .waiting)
+            #expect(
+                prompt.choices == [
+                    "Phase 1 (Recommended)", "Full audit plan", "Report only",
+                    "Type your own answer",
+                ])
+            #expect(prompt.choiceDetails.first?.contains("Remove backpass") == true)
+            #expect(prompt.choiceDetails[1].contains("24 skills"))
+            #expect(prompt.customChoiceNumber == 4)
+            #expect(prompt.detail == "Should I execute the audit, and at what scope?")
+            #expect(prompt.variance == .choices)
+
+            let tall = IslandMetrics.notificationCardHeight(
+                for: .waiting, choices: prompt.choices,
+                details: prompt.choiceDetails, hasFreeText: true)
+            let plain = IslandMetrics.notificationCardHeight(for: .waiting)
+            #expect(tall > plain + 80)
+        }
+
         @Test("structured roster height grows and caps")
         func rosterHeight() {
             let metrics = IslandMetrics.RosterLayoutMetrics(

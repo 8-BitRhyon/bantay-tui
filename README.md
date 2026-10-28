@@ -17,7 +17,7 @@ Bantay supports agents running in Herdr, tmux, Zellij, standard terminals, and d
   - **State-Grouped Roster**: Organizes agents into `Needs you`, `Working`, and `Idle`. Subagents fold under their project with an expander.
   - **Peek Drawer**: Click Review to view live output and git diff summaries. Reply from the row menu or press `R`.
   - **Session Viewer**: Open a structured session report in your web browser from the row menu.
-  - **File Shelf**: Drag files over the notch to save them to a persistent shelf with QuickLook previews.
+  - **Media Shelf**: Drag files, images, links, or text over the notch to save them to a persistent shelf. Drag a card back into Finder, an upload field, or an editor. A 1 GB budget evicts the oldest items first, and expired or unreferenced files are cleaned up automatically.
   - **Task Manager**: Add tasks with natural language input. Tasks synchronize with Apple Reminders.
 
 ### 2. Infinite Strip Window Manager
@@ -50,7 +50,8 @@ Bantay includes a horizontal window tiling engine for macOS:
 | Focus agent application | Click the agent row |
 | Stop or abort agent (`^C`) | Use the row More menu |
 | Toggle Desktop HUD | Press `⌃⌥Space` |
-| Add file to shelf | Drag file over the notch |
+| Add media to shelf | Drag a file, image, link, or text over the notch |
+| Use a shelf item | Drag a shelf card into any app or input |
 | Toggle Infinite Strip | Run `bantay strip toggle` |
 | Move between columns | Press `⌃⌥←` or `⌃⌥→` |
 | Cycle windows in the active column | Press `⌃⌥↑` or `⌃⌥↓` |
@@ -168,7 +169,8 @@ Settings are stored in `UserDefaults` under domain `BantayTUI`. Open the Setting
 | `globalHotkeyApproveEnabled` / `globalHotkeyDenyEnabled` / `globalHotkeySnoozeEnabled` | `true` / `true` / `false` | Toggle each global hotkey separately |
 | `keyboardShortcuts` | `true` | Enable `Y`, `N`, and number keys in the HUD |
 | `edgeGlowEnabled` | `true` | Show amber edge glow when an approval is waiting |
-| `showShelfTab` / `shelfLimit` | `true` / `20` | Enable the Shelf tab and set item limit |
+| `enableSpendGlow` | `true` | Show a cyan, amber, or red spend stroke around the collapsed notch |
+| `showShelfTab` / `shelfLimit` / `shelfMaxMegabytes` | `true` / `20` / `1024` | Enable the Shelf tab, set the item limit, and cap storage in MB (64 to 10240) |
 | `showTasksTab` | `true` | Enable the Tasks tab |
 | `dailyBudgetUSD` | `10.0` | Daily spend budget in USD |
 | `ntfyTopic` / `ntfyServer` | `""` / `https://ntfy.sh` | Topic and server for ntfy push alerts |
@@ -205,6 +207,16 @@ swift build
 Run unit tests:
 ```bash
 swift test
+```
+
+On a Command Line Tools only setup, `swift test` can report zero tests. Point SwiftPM at the bundled Testing framework:
+```bash
+FRAMEWORKS="$(xcode-select -p)/Library/Developer/Frameworks"
+INTEROP="$(xcode-select -p)/Library/Developer/usr/lib"
+swift test -Xswiftc -F -Xswiftc "$FRAMEWORKS" \
+  -Xlinker -F"$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$INTEROP"
 ```
 
 Run the 153-layer logic harness:
