@@ -87,6 +87,16 @@ public enum IslandMetrics: Sendable {
         default: return true
         }
     }
+
+    /// While the user is working in a terminal or IDE panel, a finished
+    /// agent must not pop a card over their work. Completions defer and
+    /// coalesce into one card when attention returns; failures always show,
+    /// because a stuck agent costs more than an interruption.
+    static func shouldDeferTransientNotice(
+        kind: AgentEventKind, userFocusedInPanel: Bool
+    ) -> Bool {
+        kind == .completed && userFocusedInPanel
+    }
     public static let headerHeight: CGFloat = 40
     public static let rowHeight: CGFloat = 26
     /// Height of the horizontal thumbnail strip on the shelf tab.

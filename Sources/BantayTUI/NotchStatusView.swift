@@ -70,6 +70,10 @@ struct NotchStatusView: View {
     /// Pending completion/failure cards waiting out their settle window,
     /// keyed by event id so different panes never cancel each other.
     @State private var transientNoticeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Finished agents held silently while the user works in another
+    /// panel, keyed by pane. Only the latest surfaces when attention
+    /// returns; the rest live in Sessions and History.
+    @State private var deferredDoneEvents: [String: AgentEvent] = [:]
     /// Live pane excerpt for approvals whose event carries no command or
     /// prompt (multiplexer status events). Fetched asynchronously.
     @State private var notificationDetail: String = ""
@@ -2355,6 +2359,7 @@ struct NotchStatusView: View {
         hoverTask?.cancel()
         isHovered = hovering
         if hovering {
+            flushDeferredDoneNotices(force: true)
             dragOutTask?.cancel()
             guard
                 IslandMetrics.shouldExpandOnHover(
@@ -2423,6 +2428,15 @@ struct NotchStatusView: View {
                     }
                     guard IslandMetrics.transientNoticeShouldShow(agentKind: agent?.kind)
                     else { return }
+                    // The user is heads-down in another panel: hold the
+                    // finish silently instead of popping over their work.
+                    // It surfaces once when their attention returns.
+                    if IslandMetrics.shouldDeferTransientNotice(
+                        kind: pending.kind, userFocusedInPanel: isTerminalFocused())
+                    {
+                        deferredDoneEvents[pending.paneId ?? pending.sourceKey] = pending
+                        return
+                    }
                     withAnimation(morphAnimation) {
                         notificationQueue = IslandMetrics.notificationQueueInsert(
                             notificationQueue, event: pending)
@@ -2553,8 +2567,26 @@ struct NotchStatusView: View {
         }
     }
 
+    /// Surface the latest held finish once the user stops working in a
+    /// terminal or IDE panel. Older held finishes stay in Sessions.
+    /// Hovering the island counts as attention returned, so it forces the
+    /// flush even while a terminal is still frontmost.
+    private func flushDeferredDoneNotices(force: Bool = false) {
+        guard !deferredDoneEvents.isEmpty, force || !isTerminalFocused() else { return }
+        let latest = deferredDoneEvents.values.max(by: { $0.createdAt < $1.createdAt })
+        deferredDoneEvents.removeAll()
+        guard let latest else { return }
+        withAnimation(morphAnimation) {
+            notificationQueue = IslandMetrics.notificationQueueInsert(
+                notificationQueue, event: latest)
+            queueIndex = 0
+        }
+        scheduleNotificationDismiss(latest.id)
+    }
+
     private func handleAgentsChange() {
         updateIslandVisibility()
+        flushDeferredDoneNotices()
         // Prune multi-select state for panes that are no longer blocked so a
         // new prompt never renders with stale pre-selected options.
         let blocked = Set(

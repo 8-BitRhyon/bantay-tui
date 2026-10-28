@@ -341,6 +341,15 @@
             #expect(IslandMetrics.transientNoticeShouldShow(agentKind: .completed))
             #expect(IslandMetrics.transientNoticeShouldShow(agentKind: nil))
             #expect(IslandMetrics.transientNoticeSettleSeconds >= 2)
+            #expect(
+                IslandMetrics.shouldDeferTransientNotice(
+                    kind: .completed, userFocusedInPanel: true))
+            #expect(
+                !IslandMetrics.shouldDeferTransientNotice(
+                    kind: .completed, userFocusedInPanel: false))
+            #expect(
+                !IslandMetrics.shouldDeferTransientNotice(
+                    kind: .failed, userFocusedInPanel: true))
         }
     }
 #endif

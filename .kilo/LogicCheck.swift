@@ -969,6 +969,15 @@ struct LogicCheckMain {
         check(
             IslandMetrics.transientNoticeSettleSeconds >= 2,
             "L143 settle window outlasts a turn boundary")
+        check(
+            IslandMetrics.shouldDeferTransientNotice(kind: .completed, userFocusedInPanel: true),
+            "L144 done popup defers while the user works in another panel")
+        check(
+            !IslandMetrics.shouldDeferTransientNotice(kind: .completed, userFocusedInPanel: false),
+            "L144 done popup shows when the user is not in a panel")
+        check(
+            !IslandMetrics.shouldDeferTransientNotice(kind: .failed, userFocusedInPanel: true),
+            "L144 failures never defer")
 
         // -- Multi-select answers: every surface gates empty Submit, shows
         // up to six options, and banners/push never partial-answer.
