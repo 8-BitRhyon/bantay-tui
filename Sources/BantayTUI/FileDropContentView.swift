@@ -1,15 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// File URL pasteboard types recognized for Finder file drags.
-private enum FileDropTypes {
-    static let all: [NSPasteboard.PasteboardType] = [
-        .fileURL,
-        NSPasteboard.PasteboardType(rawValue: "public.file-url"),
-        NSPasteboard.PasteboardType(rawValue: "NSFilenamesPboardType"),
-    ]
-}
-
 /// Tracks the active on-screen interactive bounds of the island.
 @MainActor
 public enum IslandHitTracker {
@@ -49,7 +40,7 @@ final class FileDropContentView<Content: View>: NSView {
             hosting.leadingAnchor.constraint(equalTo: leadingAnchor),
             hosting.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
-        registerForDraggedTypes(FileDropTypes.all)
+        registerForDraggedTypes(ShelfPasteboardReader.acceptedTypes)
     }
 
     @available(*, unavailable)
@@ -59,7 +50,7 @@ final class FileDropContentView<Content: View>: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        registerForDraggedTypes(FileDropTypes.all)
+        registerForDraggedTypes(ShelfPasteboardReader.acceptedTypes)
     }
 
     override var isFlipped: Bool { true }
@@ -84,32 +75,30 @@ final class FileDropContentView<Content: View>: NSView {
     // MARK: - NSDraggingDestination
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let pb = sender.draggingPasteboard
-        let hasFile = FileDropTypes.all.contains { pb.availableType(from: [$0]) != nil }
-        NSLog("bantay-drop: draggingEntered hasFile=%d", hasFile)
-        guard hasFile else { return [] }
+        guard ShelfPasteboardReader.canAccept(sender.draggingPasteboard) else {
+            return []
+        }
         // Announce so the island expands to the shelf while hovering.
         NotificationCenter.default.post(name: .notchFileDragEntered, object: nil)
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        .copy
+        guard ShelfPasteboardReader.canAccept(sender.draggingPasteboard) else {
+            return []
+        }
+        return .copy
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        NSLog("bantay-drop: draggingExited")
         // No-op: keep the shelf open while the drop is in flight.
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]
-        NSLog("bantay-drop: performDragOperation urls=%d", urls?.count ?? -1)
-        guard let urls, !urls.isEmpty else {
-            return false
-        }
+        let drops = ShelfPasteboardReader.readDrops(from: sender.draggingPasteboard)
+        guard !drops.isEmpty else { return false }
         NotificationCenter.default.post(
-            name: .notchFilesDropped, object: nil, userInfo: ["urls": urls])
+            name: .notchFilesDropped, object: nil, userInfo: ["drops": drops])
         return true
     }
 }

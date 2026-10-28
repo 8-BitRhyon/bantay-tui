@@ -2,6 +2,7 @@ import AppKit
 import EventKit
 import Foundation
 import SQLite3
+import UniformTypeIdentifiers
 
 @main
 struct LogicCheckMain {
@@ -661,6 +662,41 @@ struct LogicCheckMain {
         check(IslandMetrics.notchlessFallbackWidth == 211, "notchlessFallbackWidth 211")
         check(IslandMetrics.cornerRadius(expanded: true) == 24, "expanded cornerRadius 24")
         check(IslandMetrics.cornerRadius(expanded: false) == 8, "closed cornerRadius 8")
+        check(
+            IslandMetrics.notificationAutoDismissSeconds == 8,
+            "completion notifications keep an 8 second read window")
+        check(
+            !IslandMetrics.spendStrokeVisible(
+                isExpanded: true, isCenteredClosed: false),
+            "expanded notch hides the spend stroke")
+        check(
+            IslandMetrics.spendStrokeVisible(
+                isExpanded: false, isCenteredClosed: false),
+            "collapsed docked notch shows the spend stroke")
+        check(
+            !IslandMetrics.spendStrokeVisible(
+                isExpanded: false, isCenteredClosed: true),
+            "centered closed notch hides the spend stroke")
+        check(
+            IslandMetrics.islandChromeVisible(
+                isExpanded: false, isCenteredClosed: true,
+                hasActiveNotification: true),
+            "centered notification keeps the opaque island chrome")
+        check(
+            !IslandMetrics.islandChromeVisible(
+                isExpanded: false, isCenteredClosed: true,
+                hasActiveNotification: false),
+            "centered idle strip leaves the island chrome transparent")
+        check(
+            IslandMetrics.islandChromeVisible(
+                isExpanded: false, isCenteredClosed: false,
+                hasActiveNotification: false),
+            "docked closed notch keeps the opaque island chrome")
+        check(
+            IslandMetrics.islandChromeVisible(
+                isExpanded: true, isCenteredClosed: false,
+                hasActiveNotification: false),
+            "expanded notch keeps the opaque island chrome")
 
         // -- Fixed window size (invariant 1)
 
@@ -915,6 +951,53 @@ struct LogicCheckMain {
         check(
             qCapped.count == IslandMetrics.maxNotificationQueueCount,
             "queue caps at five cards")
+        check(
+            !IslandMetrics.transientNoticeShouldShow(agentKind: .progress),
+            "L143 resumed agent suppresses the done popup")
+        check(
+            !IslandMetrics.transientNoticeShouldShow(agentKind: .started),
+            "L143 restarted agent suppresses the done popup")
+        check(
+            IslandMetrics.transientNoticeShouldShow(agentKind: .idle),
+            "L143 idle agent keeps the done popup")
+        check(
+            IslandMetrics.transientNoticeShouldShow(agentKind: .completed),
+            "L143 finished agent keeps the done popup")
+        check(
+            IslandMetrics.transientNoticeShouldShow(agentKind: nil),
+            "L143 vanished agent keeps the done popup")
+        check(
+            IslandMetrics.transientNoticeSettleSeconds >= 2,
+            "L143 settle window outlasts a turn boundary")
+        check(
+            IslandMetrics.shouldDeferTransientNotice(kind: .completed, userFocusedInPanel: true),
+            "L144 done popup defers while the user works in another panel")
+        check(
+            !IslandMetrics.shouldDeferTransientNotice(kind: .completed, userFocusedInPanel: false),
+            "L144 done popup shows when the user is not in a panel")
+        check(
+            !IslandMetrics.shouldDeferTransientNotice(kind: .failed, userFocusedInPanel: true),
+            "L144 failures never defer")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .completed, isFinishedPaneFocused: true, userFocusedInPanel: true)
+                == .suppress,
+            "L145 watching the agent finish needs no popup")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .completed, isFinishedPaneFocused: false, userFocusedInPanel: true)
+                == .defer,
+            "L145 another pane in the same terminal defers the popup")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .completed, isFinishedPaneFocused: false, userFocusedInPanel: false)
+                == .show,
+            "L145 outside the terminal the popup shows")
+        check(
+            IslandMetrics.transientNoticeDisposition(
+                kind: .failed, isFinishedPaneFocused: true, userFocusedInPanel: true)
+                == .show,
+            "L145 failures show even on the watched pane")
 
         // -- Multi-select answers: every surface gates empty Submit, shows
         // up to six options, and banners/push never partial-answer.
@@ -1466,7 +1549,7 @@ struct LogicCheckMain {
                 capture: false)
             manager.pendingApprovals["1-1"] = PendingApproval(
                 eventID: UUID(), title: nil, message: nil, variance: .multi,
-                choices: ["lint", "test", "deploy"], actionable: false,
+                choices: ["lint", "test", "deploy"], choiceDetails: nil, actionable: false,
                 risk: .low, prompt: nil)
             let merged = manager.mergeApprovals(into: [snapshot])
             guard let m = merged.first else {
@@ -1560,7 +1643,7 @@ struct LogicCheckMain {
             let start = Date(timeIntervalSince1970: 500_000)
             manager.pendingApprovals["1-1"] = PendingApproval(
                 eventID: UUID(), title: nil, message: nil, variance: nil,
-                choices: nil, actionable: false, risk: .low, prompt: nil)
+                choices: nil, choiceDetails: nil, actionable: false, risk: .low, prompt: nil)
             let merged = manager.mergeApprovals(into: [working, done])
             check(
                 merged[0].startedAt == nil,
@@ -2020,8 +2103,10 @@ struct LogicCheckMain {
             let cfg = NotchHUDConfig.shared
             let origShow = cfg.showShelfTab
             let origLimit = cfg.shelfLimit
+            let origMax = cfg.shelfMaxMegabytes
             check(cfg.showShelfTab, "L13 shelf tab default on")
             check(cfg.clampedShelfLimit == 20, "L13 default shelf limit 20")
+            check(cfg.clampedShelfMaxMegabytes == 1024, "L13 default shelf size 1 GB")
             cfg.showShelfTab = false
             check(defaults.bool(forKey: "showShelfTab") == false, "L13 shelf tab persisted")
             cfg.shelfLimit = 500
@@ -2030,12 +2115,757 @@ struct LogicCheckMain {
             check(cfg.clampedShelfLimit == 1, "L13 shelf limit clamps at 1")
             cfg.shelfLimit = 12
             check(defaults.integer(forKey: "shelfLimit") == 12, "L13 shelf limit persisted")
+            cfg.shelfMaxMegabytes = 1
+            check(cfg.clampedShelfMaxMegabytes == 64, "L13 shelf size clamps at 64 MB")
+            cfg.shelfMaxMegabytes = 50_000
+            check(cfg.clampedShelfMaxMegabytes == 10240, "L13 shelf size clamps at 10 GB")
+            cfg.shelfMaxMegabytes = 512
+            check(
+                defaults.integer(forKey: "shelfMaxMegabytes") == 512,
+                "L13 shelf size persisted")
             cfg.showShelfTab = origShow
             cfg.shelfLimit = origLimit
+            cfg.shelfMaxMegabytes = origMax
             defaults.removeObject(forKey: "showShelfTab")
             defaults.removeObject(forKey: "shelfLimit")
+            defaults.removeObject(forKey: "shelfMaxMegabytes")
         }
 
+        // L13b. Browser drag-in and drag-out payloads. These use real AppKit
+        // pasteboards, real files, and the real NSItemProvider output, so the
+        // check covers the same path a browser drop and a card drag take.
+        func shelfPasteboard() -> NSPasteboard {
+            let pasteboard = NSPasteboard(
+                name: NSPasteboard.Name("bantay.logic.shelf.\(UUID().uuidString)"))
+            pasteboard.clearContents()
+            return pasteboard
+        }
+
+        func shelfImageData(tiff: Bool = false) -> Data? {
+            guard
+                let rep = NSBitmapImageRep(
+                    bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                    isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,
+                    bitsPerPixel: 0)
+            else { return nil }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            NSColor.systemBlue.setFill()
+            NSRect(x: 0, y: 0, width: 4, height: 4).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            if tiff { return rep.tiffRepresentation }
+            return rep.representation(using: .png, properties: [:])
+        }
+
+        func spinShelfRunLoop(until done: () -> Bool) {
+            let deadline = Date().addingTimeInterval(4)
+            while !done() && Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            }
+        }
+
+        let shelfPNG = shelfImageData() ?? Data()
+        let shelfTIFF = shelfImageData(tiff: true)
+        check(!shelfPNG.isEmpty, "L13b generated a real PNG fixture")
+        check(shelfTIFF != nil, "L13b generated a real TIFF fixture")
+
+        let imagePasteboard = shelfPasteboard()
+        let imageItem = NSPasteboardItem()
+        imageItem.setData(shelfPNG, forType: .png)
+        imageItem.setString("https://cdn.example.com/cat.png", forType: .URL)
+        imageItem.setString("A cat", forType: .init(rawValue: "public.url-name"))
+        imagePasteboard.writeObjects([imageItem])
+        check(
+            ShelfPasteboardReader.canAccept(imagePasteboard),
+            "L13b drop view accepts a browser image")
+        let imageDrops = ShelfPasteboardReader.readDrops(from: imagePasteboard)
+        if case .data(let data, let name, let kind, let source)? = imageDrops.first {
+            check(
+                data == shelfPNG && kind == .image && name == "cat.png"
+                    && source?.absoluteString == "https://cdn.example.com/cat.png",
+                "L13b browser image keeps bytes, name, and source URL")
+        } else {
+            check(false, "L13b browser image becomes an image data drop")
+        }
+
+        let tiffPasteboard = shelfPasteboard()
+        let tiffItem = NSPasteboardItem()
+        if let shelfTIFF { tiffItem.setData(shelfTIFF, forType: .tiff) }
+        tiffPasteboard.writeObjects([tiffItem])
+        let tiffDrops = ShelfPasteboardReader.readDrops(from: tiffPasteboard)
+        if case .data(let data, let name, let kind, _)? = tiffDrops.first {
+            check(
+                kind == .image && name.hasSuffix(".png")
+                    && data.starts(with: [0x89, 0x50, 0x4E, 0x47]),
+                "L13b TIFF browser image becomes PNG")
+        } else {
+            check(false, "L13b TIFF browser image becomes an image data drop")
+        }
+
+        let linkPasteboard = shelfPasteboard()
+        let linkItem = NSPasteboardItem()
+        linkItem.setString("https://example.com/watch?v=1", forType: .URL)
+        linkItem.setString("A video", forType: .init(rawValue: "public.url-name"))
+        linkPasteboard.writeObjects([linkItem])
+        let linkDrops = ShelfPasteboardReader.readDrops(from: linkPasteboard)
+        if case .link(let url, let title)? = linkDrops.first {
+            check(
+                url.absoluteString == "https://example.com/watch?v=1"
+                    && title == "A video",
+                "L13b dragged link keeps URL and title")
+        } else {
+            check(false, "L13b dragged link becomes a link drop")
+        }
+
+        let textPasteboard = shelfPasteboard()
+        let textItem = NSPasteboardItem()
+        textItem.setString("hello from a browser", forType: .string)
+        textPasteboard.writeObjects([textItem])
+        let textDrops = ShelfPasteboardReader.readDrops(from: textPasteboard)
+        if case .text(let text)? = textDrops.first {
+            check(text == "hello from a browser", "L13b dragged text keeps content")
+        } else {
+            check(false, "L13b dragged text becomes a text drop")
+        }
+
+        let shelfRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "bantay-shelf-logic-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: shelfRoot) }
+        let fileSource = shelfRoot.appendingPathComponent("source.png")
+        try? shelfPNG.write(to: fileSource)
+        let filePasteboard = shelfPasteboard()
+        let fileItem = NSPasteboardItem()
+        fileItem.setString(fileSource.absoluteString, forType: .fileURL)
+        fileItem.setData(shelfPNG, forType: .png)
+        filePasteboard.writeObjects([fileItem])
+        let fileDrops = ShelfPasteboardReader.readDrops(from: filePasteboard)
+        if case .file(let url)? = fileDrops.first {
+            check(
+                url == fileSource && fileDrops.count == 1,
+                "L13b file URL wins over a preview image")
+        } else {
+            check(false, "L13b file URL becomes a file drop")
+        }
+
+        let writtenImage = ShelfDropWriter.write(
+            .data(
+                shelfPNG, fileName: "cat.png", kind: .image,
+                sourceURL: URL(string: "https://cdn.example.com/cat.png")),
+            root: shelfRoot)
+        check(
+            writtenImage.map { FileManager.default.fileExists(atPath: $0.url.path) }
+                == true,
+            "L13b image drop writes a real shelf file")
+        check(
+            writtenImage.flatMap { try? Data(contentsOf: $0.url) } == shelfPNG,
+            "L13b shelf image bytes match the drop")
+        check(
+            writtenImage?.kind == .image && writtenImage?.name == "cat.png",
+            "L13b image drop keeps kind and name")
+        let writtenLink = ShelfDropWriter.write(
+            .link(URL(string: "https://example.com/a")!, title: "Example"),
+            root: shelfRoot)
+        check(
+            writtenLink?.linkURL == URL(string: "https://example.com/a")!
+                && writtenLink?.url.pathExtension == "webloc",
+            "L13b link drop writes a readable .webloc")
+        let writtenText = ShelfDropWriter.write(
+            .text("first line\nsecond"), root: shelfRoot)
+        check(
+            writtenText?.textContent == "first line\nsecond"
+                && writtenText?.displayName == "first line",
+            "L13b text drop writes readable text")
+        let missingSource = shelfRoot.appendingPathComponent("missing-\(UUID()).png")
+        check(
+            ShelfDropWriter.write(.file(missingSource), root: shelfRoot) == nil,
+            "L13b uncopyable file is skipped instead of staging the source")
+
+        if let writtenImage {
+            let imageProvider = ShelfDragProvider.itemProvider(for: writtenImage)
+            let types = imageProvider.registeredTypeIdentifiers
+            check(
+                types.contains(UTType.fileURL.identifier)
+                    && types.contains(UTType.png.identifier),
+                "L13b image drag offers file URL and PNG")
+            check(
+                types.contains(UTType.tiff.identifier),
+                "L13b image drag offers TIFF for rich editors")
+            var loadedPNG: Data?
+            var pngLoaded = false
+            imageProvider.loadDataRepresentation(
+                forTypeIdentifier: UTType.png.identifier
+            ) { data, _ in
+                loadedPNG = data
+                pngLoaded = true
+            }
+            spinShelfRunLoop { pngLoaded }
+            check(loadedPNG == shelfPNG, "L13b image drag loads PNG bytes")
+            var loadedFileData: Data?
+            var fileLoaded = false
+            imageProvider.loadFileRepresentation(
+                forTypeIdentifier: UTType.png.identifier
+            ) { url, _ in
+                if let url { loadedFileData = try? Data(contentsOf: url) }
+                fileLoaded = true
+            }
+            spinShelfRunLoop { fileLoaded }
+            check(
+                loadedFileData == shelfPNG,
+                "L13b image drag loads a file representation for upload fields")
+            var loadedTIFF: Data?
+            var tiffLoaded = false
+            imageProvider.loadDataRepresentation(
+                forTypeIdentifier: UTType.tiff.identifier
+            ) { data, _ in
+                loadedTIFF = data
+                tiffLoaded = true
+            }
+            spinShelfRunLoop { tiffLoaded }
+            check(
+                loadedTIFF.map {
+                    $0.starts(with: [0x49, 0x49, 0x2A, 0x00])
+                        || $0.starts(with: [0x4D, 0x4D, 0x00, 0x2A])
+                } == true,
+                "L13b image drag loads TIFF bytes")
+        } else {
+            check(false, "L13b image provider fixture exists")
+        }
+
+        if let writtenLink {
+            let linkProvider = ShelfDragProvider.itemProvider(for: writtenLink)
+            check(
+                linkProvider.registeredTypeIdentifiers.contains(UTType.url.identifier)
+                    && linkProvider.registeredTypeIdentifiers.contains(
+                        UTType.utf8PlainText.identifier),
+                "L13b link drag offers URL and text")
+            var loadedLinkText: String?
+            var linkTextLoaded = false
+            linkProvider.loadItem(
+                forTypeIdentifier: UTType.utf8PlainText.identifier, options: nil
+            ) { item, _ in
+                if let data = item as? Data {
+                    loadedLinkText = String(data: data, encoding: .utf8)
+                } else if let string = item as? String {
+                    loadedLinkText = string
+                }
+                linkTextLoaded = true
+            }
+            spinShelfRunLoop { linkTextLoaded }
+            check(
+                loadedLinkText == "https://example.com/a",
+                "L13b link drag loads the address as text")
+        } else {
+            check(false, "L13b link provider fixture exists")
+        }
+
+        if let writtenText {
+            let textProvider = ShelfDragProvider.itemProvider(for: writtenText)
+            check(
+                textProvider.registeredTypeIdentifiers.contains(
+                    UTType.utf8PlainText.identifier),
+                "L13b text drag offers plain text")
+            var loadedText: String?
+            var textLoaded = false
+            textProvider.loadItem(
+                forTypeIdentifier: UTType.utf8PlainText.identifier, options: nil
+            ) { item, _ in
+                if let data = item as? Data {
+                    loadedText = String(data: data, encoding: .utf8)
+                } else if let string = item as? String {
+                    loadedText = string
+                }
+                textLoaded = true
+            }
+            spinShelfRunLoop { textLoaded }
+            check(
+                loadedText == "first line\nsecond",
+                "L13b text drag loads the stored text")
+        } else {
+            check(false, "L13b text provider fixture exists")
+        }
+
+        let shelfChrome = IslandMetrics.shelfTabBarHeight + IslandMetrics.dividerHeight
+        let emptyShelfSize = IslandMetrics.shelfPanelSize(
+            topInset: 38, fileCount: 0, clipboardCount: 0)
+        let fileShelfSize = IslandMetrics.shelfPanelSize(
+            topInset: 38, fileCount: 1, clipboardCount: 0)
+        let mixedShelfSize = IslandMetrics.shelfPanelSize(
+            topInset: 38, fileCount: 1, clipboardCount: 2)
+        check(
+            emptyShelfSize.height
+                == 38 + IslandMetrics.headerHeight + shelfChrome
+                    + IslandMetrics.shelfEmptyHeight + IslandMetrics.shelfFooterHeight
+                    + IslandMetrics.contentSpacing,
+            "L13b empty shelf height fits the empty state and footer")
+        check(
+            fileShelfSize.height
+                == 38 + IslandMetrics.headerHeight + shelfChrome
+                    + IslandMetrics.shelfStripHeight + IslandMetrics.shelfFooterHeight
+                    + IslandMetrics.contentSpacing,
+            "L13b file shelf height fits the thumbnail strip and footer")
+        check(
+            mixedShelfSize.height == fileShelfSize.height + 2 * IslandMetrics.rowHeight,
+            "L13b shelf height grows for clipboard rows")
+
+        // L13c. Shelf hardening: byte budgets, retention boundaries, orphan
+        // cleanup, unsafe sources, and failure reporting. Every filesystem
+        // check uses a disposable temp root, never the live shelf.
+        func shelfHardeningRoot() -> URL {
+            FileManager.default.temporaryDirectory.appendingPathComponent(
+                "bantay-shelf-hardening-\(UUID().uuidString)", isDirectory: true)
+        }
+
+        func shelfWrite(_ bytes: Int, to url: URL) -> Bool {
+            do {
+                try Data(repeating: 0x41, count: bytes).write(to: url)
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        func shelfMakeDir(_ url: URL) -> Bool {
+            (try? FileManager.default.createDirectory(
+                at: url, withIntermediateDirectories: true)) != nil
+        }
+
+        func shelfEntryCount(_ url: URL) -> Int {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return 0
+            }
+            return (try? FileManager.default.contentsOfDirectory(atPath: url.path).count)
+                ?? -1
+        }
+
+        let budgetNow = Date(timeIntervalSince1970: 1_000_000)
+        let budgetA = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/budget-a"), createdAt: budgetNow)
+        let budgetB = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/budget-b"), createdAt: budgetNow)
+        let budgetC = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/budget-c"), createdAt: budgetNow)
+
+        let budgetFit = ShelfFiles.enforcingByteBudget(
+            [
+                ShelfSizedFile(file: budgetA, bytes: 4),
+                ShelfSizedFile(file: budgetB, bytes: 4),
+                ShelfSizedFile(file: budgetC, bytes: 4),
+            ], maxBytes: 8)
+        check(
+            budgetFit.kept == [budgetA, budgetB]
+                && budgetFit.evicted == [budgetC],
+            "L13c byte budget keeps newest and evicts oldest")
+        let budgetExact = ShelfFiles.enforcingByteBudget(
+            [ShelfSizedFile(file: budgetA, bytes: 12)], maxBytes: 12)
+        check(
+            budgetExact.kept == [budgetA] && budgetExact.evicted.isEmpty,
+            "L13c byte budget accepts an exact fit")
+        let budgetZero = ShelfFiles.enforcingByteBudget(
+            [ShelfSizedFile(file: budgetA, bytes: 1)], maxBytes: 0)
+        check(
+            budgetZero.kept.isEmpty && budgetZero.evicted == [budgetA],
+            "L13c zero byte budget evicts everything")
+        let budgetOversized = ShelfFiles.enforcingByteBudget(
+            [
+                ShelfSizedFile(file: budgetA, bytes: 20),
+                ShelfSizedFile(file: budgetB, bytes: 4),
+                ShelfSizedFile(file: budgetC, bytes: 4),
+            ], maxBytes: 8)
+        check(
+            budgetOversized.kept == [budgetB, budgetC]
+                && budgetOversized.evicted == [budgetA],
+            "L13c a single oversized item is evicted without wiping smaller items")
+        let budgetAllOversized = ShelfFiles.enforcingByteBudget(
+            [
+                ShelfSizedFile(file: budgetA, bytes: 20),
+                ShelfSizedFile(file: budgetB, bytes: 30),
+            ], maxBytes: 8)
+        check(
+            budgetAllOversized.kept.isEmpty
+                && budgetAllOversized.evicted == [budgetA, budgetB],
+            "L13c an all-oversized shelf is emptied")
+        let budgetNegativeSize = ShelfFiles.enforcingByteBudget(
+            [
+                ShelfSizedFile(file: budgetA, bytes: -10),
+                ShelfSizedFile(file: budgetB, bytes: 4),
+            ], maxBytes: 4)
+        check(
+            budgetNegativeSize.kept == [budgetA, budgetB],
+            "L13c negative sizes cannot erase real usage")
+
+        let retentionNow = Date(timeIntervalSince1970: 2_000_000)
+        let freshShelfFile = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/fresh"), createdAt: retentionNow)
+        let exactAge = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/exact"), createdAt: retentionNow.addingTimeInterval(-3600))
+        let staleShelfFile = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/old"), createdAt: retentionNow.addingTimeInterval(-3601))
+        let future = ShelfFile(
+            url: URL(fileURLWithPath: "/tmp/future"), createdAt: retentionNow.addingTimeInterval(30))
+        let retention = ShelfRetention.keep(
+            [freshShelfFile, exactAge, staleShelfFile, future], now: retentionNow,
+            interval: 3600, limit: 10, maxBytes: 10_000, sizes: [:])
+        check(
+            retention.kept == [freshShelfFile, exactAge, future]
+                && retention.removed == [staleShelfFile],
+            "L13c expiry keeps the exact boundary and future stamps")
+        let forever = ShelfRetention.keep(
+            [freshShelfFile, staleShelfFile], now: retentionNow, interval: nil,
+            limit: 10, maxBytes: 10_000, sizes: [:])
+        check(
+            forever.kept == [freshShelfFile, staleShelfFile]
+                && forever.removed.isEmpty,
+            "L13c forever retention removes nothing")
+        let cappedRetention = ShelfRetention.keep(
+            [freshShelfFile, exactAge, staleShelfFile], now: retentionNow,
+            interval: nil, limit: 2, maxBytes: 10_000, sizes: [:])
+        check(
+            cappedRetention.kept == [freshShelfFile, exactAge]
+                && cappedRetention.removed == [staleShelfFile],
+            "L13c item limit keeps the newest rows")
+        let zeroLimit = ShelfRetention.keep(
+            [freshShelfFile, exactAge], now: retentionNow, interval: nil,
+            limit: 0, maxBytes: 10_000, sizes: [:])
+        check(
+            zeroLimit.kept == [freshShelfFile]
+                && zeroLimit.removed == [exactAge],
+            "L13c item limit never drops below one")
+        let retentionBudget = ShelfRetention.keep(
+            [freshShelfFile, exactAge, staleShelfFile], now: retentionNow,
+            interval: nil, limit: 10, maxBytes: 8,
+            sizes: [
+                freshShelfFile.url: 4, exactAge.url: 4, staleShelfFile.url: 4,
+            ])
+        check(
+            retentionBudget.kept == [freshShelfFile, exactAge]
+                && retentionBudget.removed == [staleShelfFile],
+            "L13c byte budget runs after the item limit")
+        let combined = ShelfRetention.keep(
+            [staleShelfFile, freshShelfFile, exactAge, future],
+            now: retentionNow, interval: 3600, limit: 2, maxBytes: 4,
+            sizes: [
+                freshShelfFile.url: 4, exactAge.url: 4, future.url: 4,
+            ])
+        check(
+            combined.kept == [freshShelfFile]
+                && combined.removed == [
+                    staleShelfFile, exactAge, future,
+                ],
+            "L13c retention composes expiry, limit, and budget")
+        let noBudget = ShelfRetention.keep(
+            [freshShelfFile, exactAge], now: retentionNow, interval: nil,
+            limit: 10, maxBytes: 0,
+            sizes: [freshShelfFile.url: 1, exactAge.url: 1])
+        check(
+            noBudget.kept.isEmpty
+                && noBudget.removed == [freshShelfFile, exactAge],
+            "L13c zero budget removes every retained file")
+
+        let hardeningBase = shelfHardeningRoot()
+        defer { try? FileManager.default.removeItem(at: hardeningBase) }
+        let sources = hardeningBase.appendingPathComponent("sources", isDirectory: true)
+        check(shelfMakeDir(sources), "L13c hardening fixture sources exist")
+
+        let oversizedStorage =
+            hardeningBase.appendingPathComponent("storage-oversized", isDirectory: true)
+        let oversizedDrop = ShelfDrop.data(
+            Data(repeating: 7, count: 10), fileName: "big.bin",
+            kind: .file, sourceURL: nil)
+        let oversizedWrite = ShelfDropWriter.write(
+            [oversizedDrop], root: oversizedStorage, maxItemBytes: 5)
+        check(
+            oversizedWrite.files.isEmpty && oversizedWrite.failures.count == 1,
+            "L13c oversized data is reported, not silently skipped")
+        check(
+            oversizedWrite.failures.first?.reason
+                == .tooLarge(limit: 5, actual: 10),
+            "L13c oversized data names the actual size and limit")
+        check(
+            shelfEntryCount(oversizedStorage) == 0,
+            "L13c oversized data leaves no partial directory")
+
+        let exactStorage =
+            hardeningBase.appendingPathComponent("storage-exact", isDirectory: true)
+        let exactWrite = ShelfDropWriter.write(
+            [
+                ShelfDrop.data(
+                    Data(repeating: 7, count: 5), fileName: "exact.bin",
+                    kind: .file, sourceURL: nil)
+            ], root: exactStorage, maxItemBytes: 5)
+        check(
+            exactWrite.files.count == 1 && exactWrite.failures.isEmpty,
+            "L13c exact byte limit is accepted")
+
+        let bigSource = sources.appendingPathComponent("big.mov")
+        check(shelfWrite(10, to: bigSource), "L13c big source fixture exists")
+        let fileStorage =
+            hardeningBase.appendingPathComponent("storage-file", isDirectory: true)
+        let fileWrite = ShelfDropWriter.write(
+            [.file(bigSource)], root: fileStorage, maxItemBytes: 5)
+        check(
+            fileWrite.failures.first?.reason
+                == .tooLarge(limit: 5, actual: 10),
+            "L13c oversized source file is rejected before copying")
+        check(
+            FileManager.default.fileExists(atPath: bigSource.path),
+            "L13c rejecting a source never deletes the original")
+        check(
+            shelfEntryCount(fileStorage) == 0,
+            "L13c oversized source file leaves no partial directory")
+
+        let folderSource = sources.appendingPathComponent("folder", isDirectory: true)
+        check(shelfMakeDir(folderSource), "L13c folder fixture exists")
+        let folderStorage =
+            hardeningBase.appendingPathComponent("storage-folder", isDirectory: true)
+        let folderWrite = ShelfDropWriter.write(
+            [.file(folderSource)], root: folderStorage, maxItemBytes: 1000)
+        check(
+            folderWrite.failures.first?.reason == .sourceIsDirectory,
+            "L13c folders are rejected with a specific reason")
+        check(
+            FileManager.default.fileExists(atPath: folderSource.path),
+            "L13c rejecting a folder never deletes it")
+
+        let targetSource = sources.appendingPathComponent("target.txt")
+        check(shelfWrite(4, to: targetSource), "L13c symlink target exists")
+        let linkSource = sources.appendingPathComponent("link.txt")
+        try? FileManager.default.createSymbolicLink(
+            at: linkSource, withDestinationURL: targetSource)
+        let linkStorage =
+            hardeningBase.appendingPathComponent("storage-symlink", isDirectory: true)
+        let linkWrite = ShelfDropWriter.write(
+            [.file(linkSource)], root: linkStorage, maxItemBytes: 1000)
+        check(
+            linkWrite.failures.first?.reason == .sourceIsSymlink,
+            "L13c symbolic links are rejected instead of copied")
+        check(
+            FileManager.default.fileExists(atPath: targetSource.path),
+            "L13c rejecting a symlink never touches its target")
+
+        let missingShelfSource = sources.appendingPathComponent("missing.png")
+        let missingStorage =
+            hardeningBase.appendingPathComponent("storage-missing", isDirectory: true)
+        let missingWrite = ShelfDropWriter.write(
+            [.file(missingShelfSource)], root: missingStorage, maxItemBytes: 1000)
+        check(
+            missingWrite.failures.first?.reason == .sourceUnavailable,
+            "L13c missing source is reported as unavailable")
+
+        let badRoot = hardeningBase.appendingPathComponent("bad-root")
+        check(shelfWrite(1, to: badRoot), "L13c bad root fixture exists")
+        let badRootWrite = ShelfDropWriter.write(
+            [.text("hello")], root: badRoot, maxItemBytes: 1000)
+        check(
+            badRootWrite.failures.first?.reason == .storageUnavailable,
+            "L13c a file at the storage root is reported, not overwritten")
+        check(
+            (try? Data(contentsOf: badRoot)) == Data([0x41]),
+            "L13c storage root file keeps its bytes")
+
+        if getuid() != 0 {
+            let readOnlyRoot =
+                hardeningBase.appendingPathComponent("readonly", isDirectory: true)
+            check(shelfMakeDir(readOnlyRoot), "L13c read-only fixture exists")
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o555], ofItemAtPath: readOnlyRoot.path)
+            let readOnlyWrite = ShelfDropWriter.write(
+                [.text("hello")], root: readOnlyRoot, maxItemBytes: 1000)
+            check(
+                readOnlyWrite.failures.first?.reason == .storageUnavailable,
+                "L13c unwritable storage is reported")
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: readOnlyRoot.path)
+        }
+
+        let batchStorage =
+            hardeningBase.appendingPathComponent("storage-batch", isDirectory: true)
+        let batchWrite = ShelfDropWriter.write(
+            [
+                .text("ok"),
+                .data(
+                    Data(repeating: 7, count: 10), fileName: "too-big.bin",
+                    kind: .file, sourceURL: nil),
+            ], root: batchStorage, maxItemBytes: 5)
+        check(
+            batchWrite.files.count == 1 && batchWrite.failures.count == 1,
+            "L13c one bad item never discards a good batch item")
+        check(
+            batchWrite.files.first?.textContent == "ok"
+                && batchWrite.failures.first?.name == "too-big.bin",
+            "L13c batch report keeps the good file and names the bad one")
+        check(
+            shelfEntryCount(batchStorage) == 1,
+            "L13c failed batch item leaves only the good directory")
+
+        let linkLimitStorage =
+            hardeningBase.appendingPathComponent("storage-link-limit", isDirectory: true)
+        let linkLimitWrite = ShelfDropWriter.write(
+            [.link(URL(string: "https://example.com/a")!, title: "Example")],
+            root: linkLimitStorage, maxItemBytes: 1)
+        check(
+            linkLimitWrite.failures.count == 1,
+            "L13c link payload obeys the byte limit")
+
+        let sweepBase = shelfHardeningRoot()
+        defer { try? FileManager.default.removeItem(at: sweepBase) }
+        let sweepRoot = sweepBase.appendingPathComponent("storage", isDirectory: true)
+        let keepDir = sweepRoot.appendingPathComponent("keep", isDirectory: true)
+        check(shelfMakeDir(keepDir), "L13c sweep keep directory exists")
+        let keepFile = keepDir.appendingPathComponent("keep.bin")
+        check(shelfWrite(4, to: keepFile), "L13c referenced file exists")
+        let extraFile = keepDir.appendingPathComponent("extra.bin")
+        check(shelfWrite(4, to: extraFile), "L13c unreferenced child exists")
+        let orphanDir = sweepRoot.appendingPathComponent("orphan", isDirectory: true)
+        check(shelfMakeDir(orphanDir), "L13c orphan directory exists")
+        check(
+            shelfWrite(4, to: orphanDir.appendingPathComponent("orphan.bin")),
+            "L13c orphan file exists")
+        let emptyDir = sweepRoot.appendingPathComponent("empty", isDirectory: true)
+        check(shelfMakeDir(emptyDir), "L13c empty orphan directory exists")
+        let looseFile = sweepRoot.appendingPathComponent("loose.bin")
+        check(shelfWrite(4, to: looseFile), "L13c loose file exists")
+        let outsideFile = sweepBase.appendingPathComponent("outside.txt")
+        check(shelfWrite(4, to: outsideFile), "L13c outside target exists")
+        let escapeLink = sweepRoot.appendingPathComponent("escape")
+        try? FileManager.default.createSymbolicLink(
+            at: escapeLink, withDestinationURL: outsideFile)
+        let swept = ShelfOrphanSweeper.sweep(
+            root: sweepRoot, referenced: [keepFile])
+        check(
+            FileManager.default.fileExists(atPath: keepFile.path),
+            "L13c sweep keeps a referenced file")
+        check(
+            !FileManager.default.fileExists(atPath: extraFile.path),
+            "L13c sweep removes an unreferenced file inside a kept directory")
+        check(
+            !FileManager.default.fileExists(atPath: orphanDir.path)
+                && !FileManager.default.fileExists(atPath: emptyDir.path),
+            "L13c sweep removes unreferenced and empty directories")
+        check(
+            !FileManager.default.fileExists(atPath: looseFile.path),
+            "L13c sweep removes unreferenced root files")
+        check(
+            !FileManager.default.fileExists(atPath: escapeLink.path),
+            "L13c sweep removes a symlink instead of following it")
+        check(
+            FileManager.default.fileExists(atPath: outsideFile.path),
+            "L13c sweep never deletes a symlink target")
+        check(
+            swept.count == 5,
+            "L13c sweep reports every removed entry (got \(swept.count))")
+        check(
+            ShelfOrphanSweeper.sweep(
+                root: sweepBase.appendingPathComponent("missing"),
+                referenced: []).isEmpty,
+            "L13c sweep tolerates a missing root")
+
+        let directRoot = shelfHardeningRoot()
+        defer { try? FileManager.default.removeItem(at: directRoot) }
+        check(shelfMakeDir(directRoot), "L13c direct root exists")
+        let directFile = directRoot.appendingPathComponent("direct.bin")
+        check(shelfWrite(4, to: directFile), "L13c direct root file exists")
+        let directSwept = ShelfOrphanSweeper.sweep(
+            root: directRoot, referenced: [directFile])
+        check(
+            directSwept.isEmpty
+                && FileManager.default.fileExists(atPath: directFile.path),
+            "L13c sweep keeps a referenced root file")
+
+        let report = ShelfDropReport(
+            added: 2, failed: 0, removed: 1, failures: [])
+        check(
+            report.shortMessage == "Added 2 items, removed 1"
+                && !report.isError,
+            "L13c report summarizes a successful batch")
+        let failedReport = ShelfDropReport(
+            added: 0, failed: 1, removed: 0,
+            failures: [
+                ShelfDropFailure(
+                    name: "huge.mov",
+                    reason: .tooLarge(limit: 1_000_000, actual: 2_000_000))
+            ])
+        check(
+            failedReport.isError && failedReport.hasFailure,
+            "L13c report marks a total failure")
+        check(
+            failedReport.shortMessage.contains("huge.mov")
+                && failedReport.shortMessage.contains("too large"),
+            "L13c a single failure names the item in the footer")
+        let multiFailureReport = ShelfDropReport(
+            added: 0, failed: 2, removed: 0,
+            failures: [
+                ShelfDropFailure(name: "a.mov", reason: .sourceUnavailable),
+                ShelfDropFailure(name: "b.mov", reason: .sourceIsDirectory),
+            ])
+        check(
+            multiFailureReport.shortMessage == "Couldn't add 2 items",
+            "L13c a multi-item failure summarizes the count")
+        check(
+            failedReport.detail.contains("huge.mov")
+                && failedReport.detail.contains("too large"),
+            "L13c failure detail names the item and reason")
+        check(
+            ShelfFormat.bytes(0) == "0 bytes",
+            "L13c zero usage is human readable")
+
+        check(
+            IslandMetrics.shelfTabBarVisible(
+                showShelfTab: true, shelfSelected: false),
+            "L13c shelf tab bar follows a visible tab")
+        check(
+            !IslandMetrics.shelfTabBarVisible(
+                showShelfTab: false, shelfSelected: false),
+            "L13c shelf tab bar stays hidden normally")
+        check(
+            IslandMetrics.shelfTabBarVisible(
+                showShelfTab: false, shelfSelected: true),
+            "L13c forced shelf keeps its tab bar for an escape route")
+
+        let hardenedEmpty = IslandMetrics.shelfPanelSize(
+            topInset: 38, fileCount: 0, clipboardCount: 0)
+        check(
+            hardenedEmpty.height
+                == 38 + IslandMetrics.headerHeight + shelfChrome
+                    + IslandMetrics.shelfEmptyHeight
+                    + IslandMetrics.shelfFooterHeight
+                    + IslandMetrics.contentSpacing,
+            "L13c shelf footer is included in the empty panel height")
+        let overflowShelf = IslandMetrics.shelfPanelSize(
+            topInset: 38, fileCount: 1, clipboardCount: 50)
+        check(
+            overflowShelf.height == IslandMetrics.maxExpandedHeight,
+            "L13c a long clipboard list stops at the panel cap")
+        let overflowFixed =
+            38 + IslandMetrics.headerHeight + shelfChrome
+            + IslandMetrics.shelfStripHeight + IslandMetrics.shelfFooterHeight
+            + IslandMetrics.contentSpacing
+        check(
+            overflowShelf.height - overflowFixed
+                < 50 * IslandMetrics.rowHeight,
+            "L13c overflowing clipboard rows require a scroll view")
+        let clipsOnlyShelf = IslandMetrics.shelfPanelSize(
+            topInset: 38, fileCount: 0, clipboardCount: 50)
+        let clipsOnlyFixed =
+            38 + IslandMetrics.headerHeight + shelfChrome
+            + IslandMetrics.shelfFooterHeight + IslandMetrics.contentSpacing
+        check(
+            clipsOnlyShelf.height == IslandMetrics.maxExpandedHeight
+                && clipsOnlyShelf.height - clipsOnlyFixed
+                    < 50 * IslandMetrics.rowHeight,
+            "L13c clips-only shelf also scrolls instead of clipping")
+        let noTabShelf = IslandMetrics.shelfPanelSize(
+            topInset: 38, fileCount: 0, clipboardCount: 0,
+            shelfTabVisible: false)
+        check(
+            noTabShelf.height
+                == 38 + IslandMetrics.headerHeight
+                    + IslandMetrics.shelfEmptyHeight
+                    + IslandMetrics.shelfFooterHeight
+                    + IslandMetrics.contentSpacing,
+            "L13c hidden tab bar removes only the tab chrome")
+
+        // floating-pill geometry, plus config persistence.
         // L12. Multi-monitor: screen selection (mouse/notch preference) and
         // floating-pill geometry, plus config persistence.
         let notchMain = IslandMetrics.ScreenInfo(
@@ -2146,10 +2976,10 @@ struct LogicCheckMain {
                 capture: false)
             manager.pendingApprovals["1-1"] = PendingApproval(
                 eventID: UUID(), title: nil, message: nil, variance: .yesNo,
-                choices: nil, actionable: false, risk: .low, prompt: nil)
+                choices: nil, choiceDetails: nil, actionable: false, risk: .low, prompt: nil)
             manager.pendingApprovals["1-2"] = PendingApproval(
                 eventID: UUID(), title: nil, message: nil, variance: .multi,
-                choices: ["a", "b"], actionable: false, risk: .low, prompt: nil)
+                choices: ["a", "b"], choiceDetails: nil, actionable: false, risk: .low, prompt: nil)
             manager.heartbeatVerify(liveStatuses: ["1-1": "blocked", "1-2": "done"])
             check(
                 manager.pendingApprovals["1-1"] != nil && manager.pendingApprovals["1-2"] == nil,
@@ -9636,6 +10466,85 @@ struct LogicCheckMain {
             kind: .waiting)
         check(!waitingQuestion.actionable, "P6 waiting question never offers approval")
         check(waitingQuestion.choices.count == 2, "P6 waiting question keeps its choices")
+
+        let boxedQuestion = ApprovalPromptResolver.resolve(
+            rawTail: """
+                ┃  Pick a fruit
+                ┃
+                ┃  Which fruit?
+                ┃
+                ┃  1. Apple
+                ┃  2. Banana
+                ┃  3. Cherry
+                ┃  4. Type your own answer
+                ┃
+                ┃  ↑↓ select  enter submit  esc dismiss
+                """,
+            kind: .waiting)
+        check(
+            boxedQuestion.choices == ["Apple", "Banana", "Cherry", "Type your own answer"],
+            "L142 OpenCode boxed question keeps numbered choices")
+        check(
+            boxedQuestion.variance == .choices,
+            "L142 OpenCode boxed question is a single choice prompt")
+
+        let boxedMulti = ApprovalPromptResolver.resolve(
+            rawTail: """
+                ┃  Pick toppings
+                ┃
+                ┃  Which toppings?  Submit
+                ┃
+                ┃  1. [ ] Cheese
+                ┃  2. [ ] Olives
+                ┃  3. [ ] Mushrooms
+                ┃
+                ┃  ⇆ tab  ↑↓ select  enter toggle  esc dismiss
+                """,
+            kind: .waiting)
+        check(
+            boxedMulti.choices == ["Cheese", "Olives", "Mushrooms"],
+            "L142 OpenCode boxed multiselect keeps option labels")
+        check(
+            boxedMulti.variance == .multi,
+            "L142 OpenCode boxed checklist is a multi select prompt")
+
+        let boxedDescriptions = ApprovalPromptResolver.resolve(
+            rawTail: """
+                ┃  [bantay] variance=choices choices=4 [Phase 1 | Full] Should I execute the audit, and at what scope?
+                ┃  Questions
+                ┃
+                ┃  Should I execute the audit, and at what scope?
+                ┃
+                ┃  1. Phase 1 (Recommended)
+                ┃     Remove backpass and firstmate. One commit.
+                ┃  2. Full audit plan
+                ┃     All three phases: 24 skills, 4 rewrites.
+                ┃  3. Report only
+                ┃     Keep the report only.
+                ┃  4. Type your own answer
+                ┃  5. Type your own answer
+                ┃
+                ┃  ↑↓ select  enter submit  esc dismiss
+                """,
+            kind: .waiting)
+        check(
+            boxedDescriptions.choices == [
+                "Phase 1 (Recommended)", "Full audit plan", "Report only",
+                "Type your own answer",
+            ],
+            "L142 TUI option descriptions do not become choices and duplicate custom rows collapse")
+        check(
+            boxedDescriptions.choiceDetails.first?.contains("Remove backpass") == true,
+            "L142 TUI option description is captured")
+        check(
+            boxedDescriptions.choiceDetails[1].contains("24 skills"),
+            "L142 second option keeps its own description")
+        check(
+            boxedDescriptions.customChoiceNumber == 4,
+            "L142 custom answer row is detected")
+        check(
+            boxedDescriptions.detail == "Should I execute the audit, and at what scope?",
+            "L142 question headline is the line above the first option, not transcript echoes")
 
         check(
             ControlGateway.route(method: "strip.hud") == .stripHud,

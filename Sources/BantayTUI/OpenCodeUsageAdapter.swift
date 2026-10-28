@@ -361,9 +361,9 @@ enum OpenCodeUsageAdapter {
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
         return GoBundledSpend(
             spend5h: goSpendSince(hours: 5, now: now, home: home),
-            spend7d: statsGoCost(days: 7, opencodeBinary: opencodeBinary)
+            spend7d: statsGoCost(days: 7, opencodeBinary: opencodeBinary, home: home)
                 ?? goSpendSince(hours: 24 * 7, now: now, home: home),
-            spend30d: statsGoCost(days: 30, opencodeBinary: opencodeBinary)
+            spend30d: statsGoCost(days: 30, opencodeBinary: opencodeBinary, home: home)
                 ?? goSpendSince(hours: 24 * 30, now: now, home: home),
             oldest5hMs: goOldestSince(hours: 5, nowMs: nowMs, home: home),
             oldest7dMs: goOldestSince(hours: 24 * 7, nowMs: nowMs, home: home),
@@ -373,9 +373,9 @@ enum OpenCodeUsageAdapter {
     /// Total opencode-go cost from opencode's own accounting for the range.
     /// Nil when the CLI is missing, slow, or unparsable so callers fall back
     /// to ledger sums.
-    private static func statsGoCost(days: Int, opencodeBinary: String?) -> Double? {
+    private static func statsGoCost(days: Int, opencodeBinary: String?, home: String) -> Double? {
         guard
-            let output = runStatsJSON(days: days, opencodeBinary: opencodeBinary),
+            let output = runStatsJSON(days: days, opencodeBinary: opencodeBinary, home: home),
             let data = output.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let models = obj["models"] as? [[String: Any]]
@@ -394,15 +394,23 @@ enum OpenCodeUsageAdapter {
         return found ? total : nil
     }
 
-    private static func runStatsJSON(days: Int, opencodeBinary: String?) -> String? {
+    private static func runStatsJSON(days: Int, opencodeBinary: String?, home: String) -> String? {
         let binary =
             opencodeBinary
-            ?? ["/opt/homebrew/bin/opencode", "\(NSHomeDirectory())/.local/bin/opencode"]
+            ?? ["/opt/homebrew/bin/opencode", "\(home)/.local/bin/opencode"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
             ?? "opencode"
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [binary, "stats", "--json", "--days", "\(days)"]
+        // Scope the CLI to the requested home: without this, a sandboxed or
+        // test home silently reads the real user's opencode data.
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home
+        environment["XDG_DATA_HOME"] = home + "/.local/share"
+        environment["XDG_CONFIG_HOME"] = home + "/.config"
+        environment["XDG_STATE_HOME"] = home + "/.local/state"
+        proc.environment = environment
         proc.standardOutput = Pipe()
         proc.standardError = FileHandle.nullDevice
         guard (try? proc.run()) != nil else { return nil }

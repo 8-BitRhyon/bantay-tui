@@ -51,9 +51,7 @@ public enum IslandMetrics: Sendable {
     /// Approval cards carry the command, file path, or prompt text, so they
     /// need room for several wrapped lines plus the action row.
     public static let approvalNotificationHeight: CGFloat = 160
-    /// Two-column labeled toggle grid for multi-select popups: one row per
-    /// pair of options, so buttons never collide with the footer. Capped at
-    /// six options with the rest behind the inbox overflow.
+    /// Labeled toggle row height for the control-plane multi-select list.
     public static let multiOptionRowHeight: CGFloat = 28
     public static func multiOptionsExtraHeight(optionCount: Int, cap: Int = 6) -> CGFloat {
         let shown = min(max(optionCount, 0), max(cap, 1))
@@ -69,8 +67,65 @@ public enum IslandMetrics: Sendable {
     /// Clearance between the physical notch and a closed notification card.
     /// Without it the card's top row renders inside the notch cutout.
     public static let notificationTopGap: CGFloat = 8
+
+    /// How long a completion or failure card stays visible before it dismisses
+    /// itself. The countdown pauses while the pointer is over the notch.
+    public static let notificationAutoDismissSeconds: Double = 8
+
+    /// Agents report "done" at the end of every turn, then resume within a
+    /// second while autonomous work continues. A completion card is only
+    /// worth showing once the agent stays finished for this settle window;
+    /// a resume inside the window drops the notice silently.
+    public static let transientNoticeSettleSeconds: Double = 4
+
+    /// Whether a settled completion or failure notice should appear for an
+    /// agent in `agentKind`. Working agents suppress it; idle, finished, or
+    /// vanished agents show it.
+    static func transientNoticeShouldShow(agentKind: AgentEventKind?) -> Bool {
+        switch agentKind {
+        case .progress, .started: return false
+        default: return true
+        }
+    }
+
+    /// While the user is working in a terminal or IDE panel, a finished
+    /// agent must not pop a card over their work. Completions defer and
+    /// coalesce into one card when attention returns; failures always show,
+    /// because a stuck agent costs more than an interruption.
+    static func shouldDeferTransientNotice(
+        kind: AgentEventKind, userFocusedInPanel: Bool
+    ) -> Bool {
+        kind == .completed && userFocusedInPanel
+    }
+
+    /// What to do with a settled completion or failure, with pane-level
+    /// attention: watching that agent finish needs no card at all; working
+    /// in another pane of the same terminal defers it; being outside the
+    /// terminal entirely is the one case a popup earns its interruption.
+    enum TransientNoticeDisposition: Equatable {
+        case show
+        case `defer`
+        case suppress
+    }
+
+    static func transientNoticeDisposition(
+        kind: AgentEventKind,
+        isFinishedPaneFocused: Bool,
+        userFocusedInPanel: Bool
+    ) -> TransientNoticeDisposition {
+        if kind == .failed { return .show }
+        if isFinishedPaneFocused { return .suppress }
+        if userFocusedInPanel { return .defer }
+        return .show
+    }
     public static let headerHeight: CGFloat = 40
     public static let rowHeight: CGFloat = 26
+    /// Height of the horizontal thumbnail strip on the shelf tab.
+    public static let shelfStripHeight: CGFloat = 84
+    /// Height of the shelf empty state when no files or clips exist.
+    public static let shelfEmptyHeight: CGFloat = 100
+    /// Footer that shows usage, budget, loading, and drop failures.
+    public static let shelfFooterHeight: CGFloat = 18
     public static let taskRowHeight: CGFloat = 34
     public static let taskSearchBarHeight: CGFloat = 38
     public static let contentSpacing: CGFloat = 10
@@ -412,6 +467,58 @@ public enum IslandMetrics: Sendable {
         return CGSize(width: expandedWidth, height: min(h, maxExpandedHeight))
     }
 
+    /// Panel height for the shelf tab. The shelf uses a fixed thumbnail strip,
+    /// a scrolling clipboard list, and a status footer. Keeping this pure lets
+    /// the view and the harness agree.
+    public static func shelfPanelSize(
+        topInset: CGFloat, fileCount: Int, clipboardCount: Int,
+        shelfTabVisible: Bool = true
+    ) -> CGSize {
+        let chrome = shelfTabVisible ? shelfTabBarHeight + dividerHeight : 0
+        let strip: CGFloat
+        if fileCount > 0 {
+            strip = shelfStripHeight
+        } else if clipboardCount > 0 {
+            strip = 0
+        } else {
+            strip = shelfEmptyHeight
+        }
+        let contentH =
+            headerHeight + chrome + strip + shelfFooterHeight
+            + CGFloat(max(clipboardCount, 0)) * rowHeight
+            + contentSpacing
+        return CGSize(
+            width: expandedWidth,
+            height: min(topInset + contentH, maxExpandedHeight))
+    }
+
+    /// A hidden Shelf tab must still render its bar while a drop forces the
+    /// shelf open. Otherwise the panel has no way back to another tab.
+    public static func shelfTabBarVisible(
+        showShelfTab: Bool, shelfSelected: Bool
+    ) -> Bool {
+        showShelfTab || shelfSelected
+    }
+
+    /// The spend perimeter is a peripheral-vision cue for the collapsed notch.
+    /// When the panel is open, the cost badge already carries the signal, and a
+    /// full-panel red ring reads as an error state.
+    public static func spendStrokeVisible(
+        isExpanded: Bool, isCenteredClosed: Bool
+    ) -> Bool {
+        !isExpanded && !isCenteredClosed
+    }
+
+    /// The black island chrome stays transparent for the centered idle strip
+    /// because the physical notch already supplies the surface. A notification
+    /// replaces that strip, so it must restore the opaque chrome: white card
+    /// text otherwise sits directly on the window behind the notch.
+    public static func islandChromeVisible(
+        isExpanded: Bool, isCenteredClosed: Bool, hasActiveNotification: Bool
+    ) -> Bool {
+        isExpanded || !isCenteredClosed || hasActiveNotification
+    }
+
     /// Structured v2 roster layout. Replaces flat `agentCount * rowHeight`
     /// math so approval cards, working rows, and idle rows can each have
     /// their own height without clipping the panel.
@@ -707,16 +814,52 @@ public enum IslandMetrics: Sendable {
     struct ApprovalControls: Equatable, Sendable {
         public let variance: ApprovalVariance
         public let choices: [String]
+        /// Parallel to `choices`: option descriptions when the prompt has
+        /// them. Empty means every option is label-only.
+        public let details: [String]
 
-        init(variance: ApprovalVariance?, choices: [String]?) {
+        init(variance: ApprovalVariance?, choices: [String]?, details: [String]? = nil) {
             self.variance = variance ?? .yesNo
             self.choices = choices ?? []
+            self.details = details ?? []
         }
 
         static func make(
-            variance: ApprovalVariance?, choices: [String]?
+            variance: ApprovalVariance?, choices: [String]?, details: [String]? = nil
         ) -> ApprovalControls {
-            ApprovalControls(variance: variance, choices: choices)
+            ApprovalControls(variance: variance, choices: choices, details: details)
+        }
+
+        /// Description for the option at `index`, or nil when the prompt did
+        /// not include one.
+        func detail(at index: Int) -> String? {
+            guard index >= 0, index < details.count else { return nil }
+            let detail = details[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            return detail.isEmpty ? nil : detail
+        }
+
+        /// 1-based row for a free-text answer when the prompt offers one
+        /// ("Type your own answer", "Other", ...). Nil when typing goes
+        /// straight into the prompt.
+        var customChoiceNumber: Int? {
+            Self.customChoiceNumber(in: choices)
+        }
+
+        static func customChoiceNumber(in choices: [String]) -> Int? {
+            for (index, label) in choices.enumerated() {
+                let lower = label.lowercased()
+                if lower.contains("type your own")
+                    || lower.contains("type an answer")
+                    || lower.contains("write your own")
+                    || lower.contains("custom answer")
+                    || lower == "other"
+                    || lower.hasPrefix("other ")
+                    || lower == "something else"
+                {
+                    return index + 1
+                }
+            }
+            return nil
         }
 
         var isYesNo: Bool {
@@ -1446,13 +1589,43 @@ public enum IslandMetrics: Sendable {
         return CGSize(width: min(max(notchWidth, 0), expandedWidth), height: topInset + pillHeight)
     }
 
-    /// Card height for a notification. Approvals get the taller detail card;
-    /// completion and failure notices keep the compact height.
-    static func notificationCardHeight(for kind: AgentEventKind?) -> CGFloat {
+    /// One TUI-style choice row in a closed notification: a number, a label,
+    /// and optional context. Distinct from the taller control-plane row.
+    public static let notificationChoiceRowHeight: CGFloat = 21
+    public static let notificationChoiceDetailLineHeight: CGFloat = 11
+
+    /// Card height for a notification. Approvals get the taller detail card
+    /// plus one row per choice; completion and failure notices keep the
+    /// compact height.
+    static func notificationCardHeight(
+        for kind: AgentEventKind?,
+        choices: [String] = [],
+        details: [String] = [],
+        hasFreeText: Bool = false,
+        hasFailure: Bool = false
+    ) -> CGFloat {
         switch kind {
-        case .accessRequest, .waiting: return approvalNotificationHeight
+        case .accessRequest, .waiting: break
         default: return notificationHeight
         }
+        var height = approvalNotificationHeight
+        let shown = min(choices.count, ApprovalControls.maxDisplayedOptions)
+        if shown > 0 {
+            height += CGFloat(shown) * notificationChoiceRowHeight
+            for index in 0..<shown {
+                let detail =
+                    index < details.count
+                    ? details[index].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                if !detail.isEmpty {
+                    // Long descriptions wrap to two lines at the card width.
+                    height += notificationChoiceDetailLineHeight * (detail.count > 76 ? 2 : 1)
+                }
+            }
+            height += 6
+        }
+        if hasFreeText { height += 26 }
+        if hasFailure { height += 30 }
+        return height
     }
 
     /// Content origin for a closed notification: below the notch plus a small

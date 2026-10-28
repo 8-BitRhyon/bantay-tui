@@ -14,13 +14,23 @@ struct ApprovalPrompt: Equatable, Sendable {
     let kind: Kind
     let detail: String?
     let choices: [String]
+    /// Parallel to `choices`: the option's second line when the prompt has
+    /// one, otherwise an empty string. The card shows it under the label.
+    let choiceDetails: [String]
     let variance: ApprovalVariance?
     let actionable: Bool
     let risk: AgentRisk
 
     static let empty = ApprovalPrompt(
-        kind: .unknown, detail: nil, choices: [], variance: nil,
+        kind: .unknown, detail: nil, choices: [], choiceDetails: [], variance: nil,
         actionable: false, risk: .low)
+
+    /// 1-based row for a free-text answer when the prompt offers one
+    /// ("Type your own answer", "Other", ...). Nil when typing goes straight
+    /// into the prompt.
+    var customChoiceNumber: Int? {
+        IslandMetrics.ApprovalControls.customChoiceNumber(in: choices)
+    }
 
     var isEmpty: Bool {
         detail == nil && choices.isEmpty
@@ -39,8 +49,8 @@ enum ApprovalPromptResolver {
     /// "request" the user is asked to approve.
     private static let chromePrefixes: [String] = [
         "esc to interrupt", "ctrl+c", "ctrl-c", "press ", "tokens:",
-        "context:", "shift+tab", "tab to", "↑/↓", "⏎", "enter to",
-        "running…", "working…", "thinking…", "waiting…",
+        "context:", "shift+tab", "tab to", "↑/↓", "↑↓", "⇆", "esc ",
+        "⏎", "enter to", "running…", "working…", "thinking…", "waiting…",
     ]
 
     private static let permissionWords: [String] = [
@@ -58,6 +68,28 @@ enum ApprovalPromptResolver {
         "edit ", "write ", "read ", "file_path", "path:",
     ]
 
+    /// OpenCode and other boxed TUI prompts put every line behind a vertical
+    /// gutter. Strip the gutter before classification so `1. Option` and
+    /// `[ ] Option` stay visible to the choice extractor.
+    private static let boxGutterCharacters: Set<Character> = [
+        "│", "┃", "║", "╎", "╏", "┆", "┇", "┊", "┋", "|",
+        "▏", "▎", "▍", "▌", "▋", "▊", "▉",
+    ]
+
+    private static let boxBorderCharacters: Set<Character> = [
+        "╭", "╮", "╰", "╯", "┌", "┐", "└", "┘",
+        "├", "┤", "┬", "┴", "┼",
+    ]
+
+    static func strippingBoxGutter(_ line: String) -> String {
+        var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let first = trimmed.first, boxGutterCharacters.contains(first) {
+            trimmed.removeFirst()
+            trimmed = trimmed.trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
+    }
+
     static func resolve(
         rawTail: String,
         fallbackTitle: String? = nil,
@@ -74,6 +106,7 @@ enum ApprovalPromptResolver {
         let lower = text.lowercased()
         let extracted = ChoiceExtractor.extractChoices(fromLines: block)
         let choices = extracted.map(\.label)
+        let choiceDetails = extracted.map { $0.detail ?? "" }
         let hasPermission = permissionWords.contains { lower.contains($0) }
         let hasQuestion =
             text.contains("?") || lower.contains("[y/n]") || lower.contains("(y/n)")
@@ -84,7 +117,9 @@ enum ApprovalPromptResolver {
         let isMulti =
             block.contains {
                 $0.contains("[ ]") || $0.contains("[x]") || $0.contains("[X]")
+                    || $0.contains("[✓]") || $0.contains("[✔]")
                     || $0.contains("( )") || $0.contains("(x)") || $0.contains("(X)")
+                    || $0.contains("☐") || $0.contains("☑")
             } || lower.contains("select all") || lower.contains("select one or more")
 
         let variance: ApprovalVariance? = {
@@ -100,7 +135,9 @@ enum ApprovalPromptResolver {
             return .unknown
         }()
 
-        let detail = detailText(block: block, fallback: fallback)
+        let detail =
+            questionDetail(block: block, choiceCount: choices.count)
+            ?? detailText(block: block, fallback: fallback)
         let actionable =
             kind == .accessRequest
             && (choices.count >= 2
@@ -113,6 +150,7 @@ enum ApprovalPromptResolver {
             kind: promptKind,
             detail: detail,
             choices: choices,
+            choiceDetails: choiceDetails,
             variance: variance,
             actionable: actionable,
             risk: risk)
@@ -133,20 +171,25 @@ enum ApprovalPromptResolver {
         let cleaned = LogFormatter.cleanedTail(raw, maxLines: 30, maxLineLength: 240)
         var result: [String] = []
         for line in cleaned {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-            let lower = trimmed.lowercased()
+            let content = strippingBoxGutter(line)
+            guard !content.isEmpty else { continue }
+            let lower = content.lowercased()
             if chromePrefixes.contains(where: { lower.hasPrefix($0) }) { continue }
-            if trimmed.count <= 2 { continue }
-            if trimmed.allSatisfy({ "─━═╌╍▁▔_=- ".contains($0) }) { continue }
-            if trimmed.hasPrefix("╭") || trimmed.hasPrefix("╰")
-                || trimmed.hasPrefix("│") || trimmed.hasPrefix("┌")
-                || trimmed.hasPrefix("└") || trimmed.hasPrefix("├")
-            {
+            if content.count <= 2 { continue }
+            if content.allSatisfy({
+                "─━═╌╍▁▔▀▄█▌▐░▒▓_=- ".contains($0)
+            }) {
                 continue
             }
-            if result.last == trimmed { continue }
-            result.append(trimmed)
+            if let first = content.first, boxBorderCharacters.contains(first) {
+                continue
+            }
+            // Keep the indent after the gutter: the choice extractor uses it
+            // to tell an option's description apart from the next option.
+            let indent = ChoiceExtractor.gutterSplit(line).indent
+            let rendered = String(repeating: " ", count: indent) + content
+            if result.last == rendered { continue }
+            result.append(rendered)
         }
         return result
     }
@@ -166,7 +209,10 @@ enum ApprovalPromptResolver {
             return Array(lines.suffix(4))
         }
         let start = max(index - 3, 0)
-        return Array(lines[start...].suffix(10))
+        // A question can carry six options plus one description line each.
+        // Ten lines cut the prompt in half; keep the whole block so every
+        // choice and its context survives.
+        return Array(lines[start...].suffix(24))
     }
 
     private static func detailText(block: [String], fallback: String?) -> String? {
@@ -178,7 +224,7 @@ enum ApprovalPromptResolver {
                 lower.contains("?") || lower.contains("[y/n]")
                 || lower.contains("(y/n)") || lower.hasPrefix("allow")
                 || lower.hasPrefix("approve") || lower.hasPrefix("permission")
-            if isCommand || isQuestion {
+            if (isCommand || isQuestion) && !isJSONPayload(line) {
                 picked.append(line)
             }
         }
@@ -193,6 +239,56 @@ enum ApprovalPromptResolver {
             text = String(text.prefix(317)).trimmingCharacters(in: .whitespaces) + "..."
         }
         return text
+    }
+
+    /// A pane transcript can echo the raw form payload as JSON. That line
+    /// contains the question text but is not the question: the rendered form
+    /// repeats it cleanly below.
+    private static func isJSONPayload(_ line: String) -> Bool {
+        line.contains("{\"") || line.contains("\"options\":")
+            || (line.contains("\":") && line.contains("\",\""))
+    }
+
+    /// For a choice prompt the question is the line directly above the first
+    /// option. Taking every line that contains "?" merges transcript echoes
+    /// and tool output into the headline; the structural position is the
+    /// reliable signal.
+    private static func questionDetail(block: [String], choiceCount: Int) -> String? {
+        guard choiceCount >= 2,
+            let firstOption = block.firstIndex(where: {
+                isOptionLine(ChoiceExtractor.gutterSplit($0).content)
+            })
+        else { return nil }
+        let candidates =
+            block[..<firstOption]
+            .map { ChoiceExtractor.gutterSplit($0).content }
+            .filter { !$0.isEmpty && !isJSONPayload($0) }
+        guard
+            var picked = candidates.last(where: { $0.contains("?") }) ?? candidates.last
+        else { return nil }
+        picked = picked.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !picked.isEmpty else { return nil }
+        if picked.count > 320 {
+            picked = String(picked.prefix(317)).trimmingCharacters(in: .whitespaces) + "..."
+        }
+        return picked
+    }
+
+    private static func isOptionLine(_ content: String) -> Bool {
+        if let first = content.first, first.isNumber {
+            let rest = content.drop(while: { $0.isNumber })
+            if let marker = rest.first, marker == "." || marker == ")" || marker == ":" {
+                return true
+            }
+        }
+        // Bracketed and radio rows only: "[1]", "[ ]", "(x)". A log prefix
+        // such as "[bantay]" must never count as an option.
+        if content.hasPrefix("[") || content.hasPrefix("(") {
+            guard let marker = content.dropFirst().first else { return false }
+            return marker.isNumber || marker == " " || marker == "x" || marker == "X"
+                || marker == "*" || marker == "✓" || marker == "✔"
+        }
+        return content.hasPrefix("☐") || content.hasPrefix("☑")
     }
 
     private static func fallbackText(title: String?, message: String?) -> String? {

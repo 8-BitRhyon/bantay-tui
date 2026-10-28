@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bantay-TUI: Agentic Control Plane in Your Notch</title>
+<meta name="description" content="Bantay-TUI is a native macOS control plane for AI coding agents. It lives in your MacBook notch: watch agents work, answer their questions, and approve actions without leaving your current task.">
+<style>
+  :root {
+    --bg: #07080c;
+    --panel: #0e1016;
+    --card: #131722;
+    --line: #232838;
+    --text: #f2f4f8;
+    --muted: #9aa3b5;
+    --faint: #6b7387;
+    --cyan: #57c7e3;
+    --green: #4ade80;
+    --amber: #f5b14c;
+    --red: #f26d6d;
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(7, 8, 12, 0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav { display: flex; align-items: center; gap: 24px; height: 60px; }
+  .brand { font-weight: 700; font-size: 17px; color: var(--text); letter-spacing: -0.01em; }
+  .brand:hover { text-decoration: none; }
+  .brand span { color: var(--cyan); }
+  .nav nav { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  .nav nav a { color: var(--muted); }
+  .nav nav a:hover { color: var(--text); text-decoration: none; }
+
+  .hero { padding: 88px 0 64px; text-align: center; }
+  .hero h1 {
+    font-size: clamp(38px, 6vw, 58px);
+    line-height: 1.08; letter-spacing: -0.03em; font-weight: 800;
+  }
+  .hero h1 em { font-style: normal; color: var(--cyan); }
+  .hero p {
+    max-width: 640px; margin: 20px auto 0;
+    color: var(--muted); font-size: 18px;
+  }
+  .cta { display: flex; gap: 12px; justify-content: center; margin-top: 32px; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 11px 22px; border-radius: 999px;
+    font-size: 15px; font-weight: 600; border: 1px solid var(--line);
+    color: var(--text); background: var(--card);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--faint); }
+  .btn.primary { background: var(--cyan); border-color: var(--cyan); color: #06121a; }
+  .btn.primary:hover { background: #77d4ec; }
+
+  /* CSS mockup of the notch card: no screenshot needed. */
+  .notch-scene { display: flex; justify-content: center; padding: 16px 0 8px; }
+  .notch-card {
+    width: 432px; max-width: 100%;
+    background: #000; border: 1px solid #2a2f42; border-radius: 22px;
+    padding: 16px 18px 14px; text-align: left;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    font-size: 13px;
+  }
+  .nc-head { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; }
+  .nc-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); flex: none; }
+  .nc-badge {
+    margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--red); background: rgba(242, 109, 109, 0.16);
+    padding: 2px 7px; border-radius: 999px;
+  }
+  .nc-q { margin-top: 8px; font-weight: 600; }
+  .nc-opt { margin-top: 8px; background: #10131c; border-radius: 8px; padding: 7px 10px; }
+  .nc-opt b { color: var(--cyan); font-family: ui-monospace, monospace; font-weight: 700; }
+  .nc-opt p { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+
+  section { padding: 56px 0 8px; }
+  h2 { font-size: 26px; letter-spacing: -0.02em; font-weight: 750; }
+  .sub { color: var(--muted); margin-top: 8px; max-width: 640px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 26px; }
+  .feat {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .feat h3 { font-size: 16px; margin-bottom: 6px; }
+  .feat p { color: var(--muted); font-size: 14.5px; }
+  .feat .tag {
+    display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+    padding: 2px 8px; border-radius: 999px; margin-bottom: 10px;
+  }
+  .tag.a { color: var(--amber); background: rgba(245, 177, 76, 0.14); }
+  .tag.q { color: var(--red); background: rgba(242, 109, 109, 0.14); }
+  .tag.d { color: var(--green); background: rgba(74, 222, 128, 0.14); }
+  .tag.s { color: var(--cyan); background: rgba(87, 199, 227, 0.14); }
+
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 26px; }
+  .step { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; background: var(--panel); }
+  .step .n { font-family: ui-monospace, monospace; color: var(--cyan); font-size: 13px; font-weight: 700; }
+  .step h3 { font-size: 15px; margin: 6px 0 4px; }
+  .step p { color: var(--muted); font-size: 14px; }
+
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; overflow-x: auto; margin-top: 18px;
+    font: 13px/1.7 ui-monospace, "SF Mono", Menlo, monospace; color: #c9d4e8;
+  }
+  .note { color: var(--faint); font-size: 13.5px; margin-top: 10px; }
+
+  footer {
+    margin-top: 72px; border-top: 1px solid var(--line);
+    padding: 28px 0 40px; color: var(--faint); font-size: 13.5px;
+  }
+  .foot { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  .foot nav { margin-left: auto; display: flex; gap: 18px; }
+  .foot nav a { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="#">Bantay<span>-TUI</span></a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/8-BitRhyon/bantay-tui">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero">
+    <h1>Every coding agent you run,<br><em>watched from your notch.</em></h1>
+    <p>
+      Bantay-TUI is a native macOS control plane for AI coding agents. It lives in the
+      MacBook notch: see who is working, answer their questions, approve their actions,
+      and never lose track of a background agent again.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/8-BitRhyon/bantay-tui/releases">Download</a>
+      <a class="btn" href="https://github.com/8-BitRhyon/bantay-tui">View on GitHub</a>
+    </div>
+
+    <div class="notch-scene" aria-hidden="true">
+      <div class="notch-card">
+        <div class="nc-head">
+          <span class="nc-dot"></span> Opencode
+          <span style="color: var(--faint); font-weight: 500;">· monozen-skills</span>
+          <span class="nc-badge">QUESTION</span>
+        </div>
+        <div class="nc-q">Should I execute the audit, and at what scope?</div>
+        <div class="nc-opt"><b>1.</b> Phase 1 (Recommended)
+          <p>Remove two skills, demote three, rewrite one. One commit.</p></div>
+        <div class="nc-opt"><b>2.</b> Full audit plan
+          <p>All three phases: 24 skills reviewed. Larger diff, longer verification.</p></div>
+        <div class="nc-opt"><b>3.</b> Report only
+          <p>Keep the report. No file changes until you decide.</p></div>
+      </div>
+    </div>
+    <p class="note">The notch card mirrors the agent's own form: same question, same options, same order.</p>
+  </div>
+
+  <section id="features">
+    <h2>Built for parallel agents</h2>
+    <p class="sub">
+      You run Claude Code, OpenCode, Codex, and Gemini across Herdr, tmux, Zellij, and IDEs.
+      Bantay gives all of them one surface, and it stays quiet until you are needed.
+    </p>
+    <div class="grid">
+      <div class="feat">
+        <span class="tag a">APPROVALS</span>
+        <h3>Answer from the notch</h3>
+        <p>Permission requests show the exact command, path, or question with a risk badge. Allow once, deny, or answer numbered choices and multi-selects inline. Nothing approves blind.</p>
+      </div>
+      <div class="feat">
+        <span class="tag q">QUESTIONS</span>
+        <h3>Forms, mirrored faithfully</h3>
+        <p>When an agent asks a question, the card copies its form: one tappable row per option, with each option's description underneath. Type a custom answer when none of the options fit.</p>
+      </div>
+      <div class="feat">
+        <span class="tag d">QUIET BY DEFAULT</span>
+        <h3>Done means done</h3>
+        <p>Agents report "done" at every turn boundary. Bantay waits until a finish settles, and while you are working in another pane it holds completions silently. Failures always interrupt. Finishes while you watched the pane never pop at all.</p>
+      </div>
+      <div class="feat">
+        <span class="tag s">TELEMETRY</span>
+        <h3>Spend, quota, sessions</h3>
+        <p>Timeline, spend, quota, and session history live one hover away. Track tokens and cost per agent, watch quota windows before they wall you, and replay what finished while you were away.</p>
+      </div>
+      <div class="feat">
+        <span class="tag s">SHELF</span>
+        <h3>A shelf in the notch</h3>
+        <p>Drag files, images, links, or text onto the notch to stash them. Drag a card back into Finder, a browser upload field, or an editor. Old items evict themselves.</p>
+      </div>
+      <div class="feat">
+        <span class="tag s">WINDOW STRIP</span>
+        <h3>Infinite strip tiling</h3>
+        <p>A horizontal window manager with spring physics, column presets, an overview mode, and auto-chaining that lines up your IDE, browser, and terminal. Toggle it from the CLI or a hotkey.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="n">01</div>
+        <h3>Agents report in</h3>
+        <p>Herdr, tmux, and Zellij panes stream status directly. Standalone terminals and OpenCode report through a small local plugin. No cloud, no account.</p>
+      </div>
+      <div class="step">
+        <div class="n">02</div>
+        <h3>The notch triages</h3>
+        <p>Blocked agents pin to the top with the exact request. Working agents tick quietly. Finished agents settle before they are allowed to interrupt you.</p>
+      </div>
+      <div class="step">
+        <div class="n">03</div>
+        <h3>You answer once</h3>
+        <p>Click a choice, press a number key, or type a reply. Bantay confirms the write reached the agent before the card leaves, and records a receipt for every decision.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p class="sub">Bantay-TUI runs on macOS 13 or later, on Apple Silicon and Intel. Build it from source:</p>
+    <pre>git clone https://github.com/8-BitRhyon/bantay-tui.git
+cd bantay-tui
+swift build -c release
+bash scripts/setup.sh</pre>
+    <p class="note">
+      The setup script installs a signed app bundle and a launch agent, so Bantay starts at login.
+      Prebuilt downloads land on the <a href="https://github.com/8-BitRhyon/bantay-tui/releases">releases page</a>.
+      Herdr, tmux, Zellij, and OpenCode integrations can be enabled from Settings after first launch.
+    </p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>Bantay-TUI. MIT licensed. Bantay: to watch over.</span>
+    <nav>
+      <a href="https://github.com/8-BitRhyon/bantay-tui">GitHub</a>
+      <a href="https://github.com/8-BitRhyon/bantay-tui/releases">Releases</a>
+      <a href="https://github.com/8-BitRhyon/bantay-tui/blob/main/README.md">Docs</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -17,7 +17,7 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 | - State-grouped Roster  |                     | - Canvas Window Tiling  |
 | - Inline Approvals      |                     | - Spring Physics        |
 | - Live Peek Drawer      |                     | - Overview Zoom Mode    |
-| - File Shelf            |                     | - Agent Auto-Chaining   |
+| - Media Shelf           |                     | - Agent Auto-Chaining   |
 | - Reminders & Tasks     |                     | - Status Edge Halos     |
 +------------+------------+                     +------------+------------+
              |                                               |
@@ -40,6 +40,11 @@ Bantay-TUI is a native macOS application for managing AI coding agents. It ancho
 ### 1. Control Plane & User Interface
 - `DynamicIslandApp.swift`: Main application entry point running as an accessory application (`LSUIElement`). Manages the top-level `NSPanel`, menu bar tray item, global hotkeys (`⌥Y`/`⌥N`/`⌥S`/`⌥,`), and screen configuration observers.
 - `NotchStatusView.swift`: Root view for the expanded notch control plane. Hosts the counts header bar, roster scroll view, and core tabs (Inbox, Tasks, History) with utility pills (Shelf, Media).
+- `ShelfPasteboardReader.swift`: Reads browser, Finder, and app drags. Files win. Images normalize TIFF to PNG. Links and text become their own shelf drops.
+- `ShelfDrop.swift`: Defines shelf payloads and writes them into Bantay storage. Images, media, links, and text become real files. Folders, symbolic links, and missing sources are rejected with a specific reason, and an oversized item is refused before any file lands.
+- `ShelfStorage.swift`: Pure storage policy. Enforces the byte budget oldest-first, composes expiry with the item limit, and sweeps orphaned files, empty directories, extra children, and symlinks without following them.
+- `ShelfDragProvider.swift`: Builds drag-out providers. Images offer a file URL, PNG, and TIFF. Links offer a URL and text. Text offers plain text. The drag session keeps the island open until the mouse button is released.
+- `ShelfModel.swift` and `ShelfStore.swift`: Hold shelf kinds, thumbnail previews, persistence, retention, and owned storage cleanup. Writes are serialized, maintenance runs at launch, after drops, on settings changes, every 15 minutes, and on shelf open, and each batch publishes a drop report for the footer.
 - `ApprovalCardView.swift`: Unified approval card for blocked agents. Shows the exact request, risk badge, queue position, and actions. Waiting states show Review and Open instead of blind Approve and Deny.
 - `ApprovalPromptResolver.swift`: Pure parser for live pane prompts. Extracts the exact command, path, question, numbered choices, multi-select choices, and risk tier from terminal text.
 - `AgentPresentation.swift`: Pure presentation logic. Humanizes raw tool text, classifies risk, and groups subagents under their project workspace.

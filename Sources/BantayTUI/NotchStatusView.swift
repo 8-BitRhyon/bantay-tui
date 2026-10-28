@@ -9,6 +9,10 @@ struct NotchStatusView: View {
     @State private var isExpanded = false
     @State private var isHovered = false
     @State private var hoverTask: Task<Void, Never>?
+    /// True while a shelf card is being dragged to another app. The island
+    /// must stay expanded: the pointer leaves it during the drag.
+    @State private var isDraggingShelfItem = false
+    @State private var dragOutTask: Task<Void, Never>?
     @State private var opacity: Double = 0
     @State private var showDetail = false
     @State private var hoveredRow: String?
@@ -20,6 +24,9 @@ struct NotchStatusView: View {
     @State private var composeNotice: String?
     /// Free-text answer for the closed card. Choices never trap an answer.
     @State private var cardAnswer = ""
+    /// Focus for the card's custom-answer row, so tapping "Type your own
+    /// answer" or "Other" in the list lands in the field.
+    @FocusState private var cardAnswerFocused: Bool
     /// Inline failure from the last card action, with a retry closure.
     @State private var cardFailure: String?
     @State private var cardRetry: (() -> Void)?
@@ -60,6 +67,13 @@ struct NotchStatusView: View {
     @State private var notificationQueue: [AgentEvent] = []
     @State private var queueIndex = 0
     @State private var notificationDismissTask: Task<Void, Never>? = nil
+    /// Pending completion/failure cards waiting out their settle window,
+    /// keyed by event id so different panes never cancel each other.
+    @State private var transientNoticeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Finished agents held silently while the user works in another
+    /// panel, keyed by pane. Only the latest surfaces when attention
+    /// returns; the rest live in Sessions and History.
+    @State private var deferredDoneEvents: [String: AgentEvent] = [:]
     /// Live pane excerpt for approvals whose event carries no command or
     /// prompt (multiplexer status events). Fetched asynchronously.
     @State private var notificationDetail: String = ""
@@ -189,7 +203,24 @@ struct NotchStatusView: View {
     }
 
     private var activeNotificationCardHeight: CGFloat {
-        IslandMetrics.notificationCardHeight(for: activeNotification?.kind)
+        guard let event = activeNotification else { return IslandMetrics.notificationHeight }
+        guard event.kind == .accessRequest || event.kind == .waiting else {
+            return IslandMetrics.notificationCardHeight(for: event.kind)
+        }
+        let agent = mergedRoster.first {
+            (event.paneId != nil && $0.paneId == event.paneId)
+                || $0.source == event.sourceKey
+        }
+        let controls =
+            agent?.approval
+            ?? IslandMetrics.ApprovalControls(
+                variance: event.variance, choices: event.choices)
+        let isQuestion = controls.choices.count >= 2
+        return IslandMetrics.notificationCardHeight(
+            for: event.kind,
+            choices: isQuestion ? controls.choices : [],
+            details: isQuestion ? controls.details : [],
+            hasFreeText: isQuestion)
     }
 
     /// Closed notifications start below the physical notch. Idle chips still
@@ -268,6 +299,25 @@ struct NotchStatusView: View {
             shelfTabVisible: shelfVisible, footerVisible: false)
     }
 
+    /// The tab bar normally follows the Shelf setting. A drop can force the
+    /// shelf open while that tab is hidden, so keep the bar (and its escape
+    /// routes) visible in that state.
+    private var shelfTabBarVisible: Bool {
+        IslandMetrics.shelfTabBarVisible(
+            showShelfTab: NotchHUDConfig.shared.showShelfTab,
+            shelfSelected: showShelf)
+    }
+
+    /// The shelf mixes a fixed thumbnail strip with variable clipboard rows,
+    /// so it has its own height calculation instead of the roster row math.
+    private var shelfPanelSize: CGSize {
+        IslandMetrics.shelfPanelSize(
+            topInset: chipTopOffset,
+            fileCount: shelfStore.files.count,
+            clipboardCount: clipboardItems.count,
+            shelfTabVisible: shelfTabBarVisible)
+    }
+
     private var islandHeight: CGFloat {
         if isExpanded {
             if showTasks {
@@ -282,12 +332,11 @@ struct NotchStatusView: View {
                 return min(
                     max(historyContentHeight + chipTopOffset, IslandMetrics.minExpandedHeight),
                     IslandMetrics.maxExpandedHeight)
-            } else if showShelf || showMedia {
-                let itemCount =
-                    showShelf
-                    ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
+            } else if showShelf {
+                return shelfPanelSize.height
+            } else if showMedia {
                 return IslandMetrics.expandedSize(
-                    topInset: chipTopOffset, agentCount: itemCount,
+                    topInset: chipTopOffset, agentCount: 3,
                     queueCount: 0,
                     shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
                     overflowCount: 0, groupCount: 0, footerVisible: false
@@ -326,13 +375,14 @@ struct NotchStatusView: View {
                 sectionCount: 3,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab
             )
-        } else if showShelf || showMedia {
-            let itemCount =
-                showShelf
-                ? max(shelfStore.files.count + clipboardItems.count, 2) : 3
+        } else if showShelf {
+            return isExpanded
+                ? shelfPanelSize.height - chipTopOffset
+                : IslandMetrics.pillHeight
+        } else if showMedia {
             return IslandMetrics.contentHeight(
                 isExpanded: isExpanded, topInset: chipTopOffset,
-                agentCount: itemCount, queueCount: 0,
+                agentCount: 3, queueCount: 0,
                 shelfTabVisible: NotchHUDConfig.shared.showShelfTab,
                 overflowCount: 0,
                 groupCount: 0,
@@ -499,8 +549,30 @@ struct NotchStatusView: View {
         .onReceive(
             NotificationCenter.default.publisher(for: .notchFilesDropped)
         ) { note in
-            if let urls = note.userInfo?["urls"] as? [URL] {
-                handleFilesDropped(urls)
+            if let drops = note.userInfo?["drops"] as? [ShelfDrop] {
+                handleDrops(drops)
+            } else if let urls = note.userInfo?["urls"] as? [URL] {
+                handleDrops(urls.map(ShelfDrop.file))
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchDragOutStarted)
+        ) { _ in
+            dragOutTask?.cancel()
+            isDraggingShelfItem = true
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .notchDragOutEnded)
+        ) { _ in
+            isDraggingShelfItem = false
+            guard !isHovered, !NotchHUDConfig.shared.panelPinned else { return }
+            dragOutTask = Task { @MainActor in
+                try? await Task.sleep(
+                    for: .milliseconds(Int(IslandMetrics.hoverExitGrace * 1000)))
+                guard !Task.isCancelled, !isHovered, !isDraggingShelfItem else {
+                    return
+                }
+                expandTo(false)
             }
         }
         .onReceive(
@@ -823,9 +895,12 @@ struct NotchStatusView: View {
 
     // MARK: - Island chrome
 
+    /// Perimeter color for the collapsed notch. The expanded panel relies on
+    /// the cost badge instead, so a budget overrun cannot paint a red ring
+    /// around the full control plane.
     private var spendStrokeColor: Color {
         guard NotchHUDConfig.shared.enableSpendGlow else {
-            return .white.opacity(isExpanded ? 0.09 : 0.04)
+            return .white.opacity(0.04)
         }
         let cost = eventManager.usage.costUSD
         let budget = max(NotchHUDConfig.shared.dailyBudgetUSD, 0.5)
@@ -835,7 +910,7 @@ struct NotchStatusView: View {
         } else if ratio >= 0.70 {
             return .orange
         } else {
-            return .white.opacity(isExpanded ? 0.22 : 0.04)
+            return .white.opacity(0.04)
         }
     }
 
@@ -860,7 +935,9 @@ struct NotchStatusView: View {
                 height: islandHeight
             )
             .overlay {
-                if isExpanded || !isCenteredClosed {
+                if IslandMetrics.spendStrokeVisible(
+                    isExpanded: isExpanded, isCenteredClosed: isCenteredClosed)
+                {
                     RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
                         .strokeBorder(
                             spendStrokeColor,
@@ -869,7 +946,12 @@ struct NotchStatusView: View {
                         .frame(width: islandWidth, height: islandHeight)
                 }
             }
-            .opacity(isCenteredClosed && !isExpanded ? 0 : 1)
+            .opacity(
+                IslandMetrics.islandChromeVisible(
+                    isExpanded: isExpanded,
+                    isCenteredClosed: isCenteredClosed,
+                    hasActiveNotification: hasActiveNotification) ? 1 : 0
+            )
             .overlay {
                 if isExpanded {
                     RoundedRectangle(cornerRadius: cornerRad, style: .continuous)
@@ -1031,6 +1113,15 @@ struct NotchStatusView: View {
             actionable: canApprove,
             choiceCount: controls.choices.count)
         let detail: String = {
+            // The merged roster title carries the parsed question. The raw
+            // event title is often only the terminal title ("OC | ..."), which
+            // says nothing about what the agent is asking.
+            if let title = agent?.title,
+                !IslandMetrics.isGenericApprovalText(title)
+            {
+                let cleaned = IslandMetrics.cleanApprovalDetail(title)
+                if !cleaned.isEmpty { return cleaned }
+            }
             if let title = event.title, hasTitle {
                 let cleaned = IslandMetrics.cleanApprovalDetail(title)
                 if !cleaned.isEmpty { return cleaned }
@@ -1065,7 +1156,6 @@ struct NotchStatusView: View {
             }
             return parts.isEmpty ? nil : parts.joined(separator: " · ")
         }()
-        let choiceSummary = notificationChoiceSummary(controls)
         let fromLivePane = !hasTitle && !notificationDetail.isEmpty
 
         return VStack(alignment: .leading, spacing: 4) {
@@ -1137,18 +1227,14 @@ struct NotchStatusView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if let choiceSummary, !(surface == .question && controls.isMulti) {
-                Text(choiceSummary)
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.cyan.opacity(0.85))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-            }
-
-            // Multi-select toggles get their own row so the footer never
-            // collides with the options. Submit stays in the footer.
-            if surface == .question, controls.isMulti, let paneId {
-                notificationMultiOptions(
+            // One vertical row per option, matching the TUI form: number,
+            // label, and the option's consequence underneath. Multi-select
+            // swaps the number badge for a checkbox; single choice sends the
+            // row's number immediately.
+            if surface == .question, !controls.isYesNo, !controls.choices.isEmpty,
+                let paneId
+            {
+                notificationChoiceList(
                     event: event, paneId: paneId, controls: controls,
                     resolving: resolving)
             }
@@ -1159,9 +1245,10 @@ struct NotchStatusView: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.white)
-                        .onSubmit { sendCardAnswer(paneId: paneId) }
+                        .focused($cardAnswerFocused)
+                        .onSubmit { sendCardAnswer(eventID: event.id, paneId: paneId) }
                     Button {
-                        sendCardAnswer(paneId: paneId)
+                        sendCardAnswer(eventID: event.id, paneId: paneId)
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 13))
@@ -1254,12 +1341,14 @@ struct NotchStatusView: View {
         .padding(.vertical, 8)
         .frame(
             width: IslandMetrics.notificationWidth,
-            height: IslandMetrics.approvalNotificationHeight
-                + ((surface == .question && controls.isMulti)
-                    ? IslandMetrics.multiOptionsExtraHeight(
-                        optionCount: controls.choices.count) : 0)
-                + (IslandMetrics.promptAcceptsFreeText(surface: surface) ? 26 : 0)
-                + (cardFailure == nil ? 0 : 30)
+            height: IslandMetrics.notificationCardHeight(
+                for: event.kind,
+                choices: surface == .question && !controls.isYesNo
+                    ? controls.choices : [],
+                details: surface == .question && !controls.isYesNo
+                    ? controls.details : [],
+                hasFreeText: IslandMetrics.promptAcceptsFreeText(surface: surface),
+                hasFailure: cardFailure != nil)
         )
         .contentShape(Rectangle())
         .modifier(ShakeEffect(animatableData: reduceMotion ? 0 : shakeTrigger))
@@ -1283,7 +1372,7 @@ struct NotchStatusView: View {
             }.flatMap { $0.isEmpty ? nil : $0 }
             ?? (isCompleted ? "Task completed successfully" : "Agent requires input")
 
-        return HStack(spacing: 12) {
+        return HStack(alignment: .center, spacing: 12) {
             ZStack {
                 Circle()
                     .fill(Color(hex: event.kind.color).opacity(0.18))
@@ -1300,69 +1389,92 @@ struct NotchStatusView: View {
                 .foregroundColor(Color(hex: event.kind.color))
             }
             .padding(.leading, 4)
+            .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text(event.sourceKey.capitalized)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    if let projectLabel {
-                        Text("· \(projectLabel)")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.6))
-                            .lineLimit(1)
+                    Button {
+                        withAnimation(morphAnimation) { expandTo(true) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(event.sourceKey.capitalized)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            if let projectLabel {
+                                Text("· \(projectLabel)")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            Text(event.kind.label)
+                                .font(.system(size: 9, weight: .bold))
+                                .textCase(.uppercase)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Color(hex: event.kind.color).opacity(0.25), in: Capsule()
+                                )
+                                .foregroundColor(Color(hex: event.kind.color))
+                                .fixedSize()
+                        }
+                        .contentShape(Rectangle())
                     }
-                    Spacer(minLength: 2)
-                    Text(event.kind.label)
-                        .font(.system(size: 9, weight: .bold))
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color(hex: event.kind.color).opacity(0.25), in: Capsule())
-                        .foregroundColor(Color(hex: event.kind.color))
-                        .fixedSize()
+                    .buttonStyle(.plain)
+                    .help("Open control plane")
+                    .accessibilityHint("Opens the control plane")
+
+                    Spacer(minLength: 6)
+
+                    HStack(spacing: 6) {
+                        if isCompleted {
+                            TactileRowButton(
+                                systemName: "safari",
+                                title: "View Diff",
+                                color: Color.blue.opacity(0.85),
+                                helpText: "Open session viewer in browser"
+                            ) {
+                                let slug =
+                                    agent?.cwd.map {
+                                        URL(fileURLWithPath: $0).lastPathComponent
+                                    } ?? event.sourceKey
+                                RichSessionViewer.openInBrowser(
+                                    agentName: event.sourceKey,
+                                    projectSlug: slug,
+                                    cwd: agent?.cwd,
+                                    isWorking: false,
+                                    sessionPath: agent?.sessionPath
+                                )
+                            }
+                        } else if isFailed, let paneId {
+                            TactileRowButton(
+                                systemName: "arrow.up.right",
+                                title: "Focus",
+                                color: Color.orange.opacity(0.85),
+                                helpText: "Focus agent"
+                            ) {
+                                focusAgentPane(paneId)
+                            }
+                        }
+                        notificationDismissButton(event.id, paneId: paneId)
+                    }
                 }
 
-                Text(prompt)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.85))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-            }
-
-            Spacer(minLength: 4)
-
-            HStack(spacing: 6) {
-                if isCompleted {
-                    TactileRowButton(
-                        systemName: "safari",
-                        title: "View Diff",
-                        color: Color.blue.opacity(0.85),
-                        helpText: "Open session viewer in browser"
-                    ) {
-                        let slug =
-                            agent?.cwd.map {
-                                URL(fileURLWithPath: $0).lastPathComponent
-                            } ?? event.sourceKey
-                        RichSessionViewer.openInBrowser(
-                            agentName: event.sourceKey,
-                            projectSlug: slug,
-                            cwd: agent?.cwd,
-                            isWorking: false,
-                            sessionPath: agent?.sessionPath
-                        )
-                    }
-                } else if isFailed, let paneId {
-                    TactileRowButton(
-                        systemName: "arrow.up.right",
-                        title: "Focus",
-                        color: Color.orange.opacity(0.85),
-                        helpText: "Focus agent"
-                    ) {
-                        focusAgentPane(paneId)
-                    }
+                Button {
+                    withAnimation(morphAnimation) { expandTo(true) }
+                } label: {
+                    Text(prompt)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
-                notificationDismissButton(event.id, paneId: paneId)
+                .buttonStyle(.plain)
+                .help("Open control plane")
+                .accessibilityHint("Opens the control plane")
             }
         }
         .padding(.horizontal, 14)
@@ -1450,6 +1562,29 @@ struct NotchStatusView: View {
         }
         if activeNotification?.id != topBefore {
             cancelNotificationDetail()
+        }
+    }
+
+    /// Completion and failure cards are transient, but a card the pointer rests
+    /// on must not vanish mid-read. The countdown pauses while hovered and
+    /// resumes when the pointer leaves.
+    private func scheduleNotificationDismiss(_ id: UUID) {
+        notificationDismissTask?.cancel()
+        let tickMilliseconds = 250
+        let totalTicks = Int(
+            IslandMetrics.notificationAutoDismissSeconds * 1000
+                / Double(tickMilliseconds))
+        notificationDismissTask = Task { @MainActor in
+            var elapsedTicks = 0
+            while elapsedTicks < totalTicks {
+                try? await Task.sleep(for: .milliseconds(tickMilliseconds))
+                guard !Task.isCancelled else { return }
+                if isHovered { continue }
+                elapsedTicks += 1
+            }
+            withAnimation(morphAnimation) {
+                dismissNotification(id)
+            }
         }
     }
 
@@ -1561,29 +1696,14 @@ struct NotchStatusView: View {
         return !IslandMetrics.isGenericApprovalText(title)
     }
 
-    private func notificationChoiceSummary(
-        _ controls: IslandMetrics.ApprovalControls
-    ) -> String? {
-        guard !controls.isYesNo, !controls.choices.isEmpty else { return nil }
-        let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
-        let shown = controls.choices.prefix(cap).enumerated().map {
-            "\($0.offset + 1). \($0.element)"
-        }
-        var summary = shown.joined(separator: "  ")
-        if controls.choices.count > cap {
-            summary += "  +\(controls.choices.count - cap)"
-        }
-        return summary
-    }
-
     @ViewBuilder
     private func notificationApprovalActions(
         event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
         resolving: Bool
     ) -> some View {
         if controls.isMulti {
-            notificationMultiActions(
-                event: event, paneId: paneId, controls: controls, resolving: resolving)
+            notificationMultiSubmit(
+                event: event, paneId: paneId, resolving: resolving)
         } else if controls.isYesNo {
             notificationActionButton(
                 title: "Approve", systemName: "checkmark", color: .green,
@@ -1607,140 +1727,67 @@ struct NotchStatusView: View {
                     await eventManager.deny(paneId: paneId)
                 }
             }
-        } else {
-            notificationChoiceActions(
-                event: event, paneId: paneId, controls: controls, resolving: resolving)
         }
     }
 
+    /// TUI-shaped option list: one row per choice, in the agent's order.
+    /// Single choice sends the row's number. Multi-select toggles the row and
+    /// leaves Submit in the footer. The custom row focuses the free-text
+    /// field instead of sending a bare number.
     @ViewBuilder
-    private func notificationChoiceActions(
-        event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
-        resolving: Bool
-    ) -> some View {
-        let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
-        let options = Array(controls.choices.prefix(cap))
-        if options.isEmpty {
-            notificationActionButton(
-                title: "Approve", systemName: "checkmark", color: .green,
-                helpText: "Approve request (Y)", disabled: resolving
-            ) {
-                performCardAction(
-                    paneId: paneId, prompt: event.title ?? event.message ?? "",
-                    onSent: { dismissNotification(event.id) }
-                ) {
-                    await eventManager.approve(paneId: paneId)
-                }
-            }
-        } else {
-            ForEach(Array(options.enumerated()), id: \.offset) { index, label in
-                approvalActionButton(
-                    label: Text("\(index + 1)"),
-                    color: .white,
-                    help: label,
-                    disabled: resolving,
-                    accessibilityLabel: label
-                ) {
-                    performCardAction(
-                        paneId: paneId, prompt: event.title ?? event.message ?? "",
-                        onSent: { dismissNotification(event.id) }
-                    ) {
-                        await eventManager.approveChoice(
-                            paneId: paneId, choice: index + 1)
-                    }
-                }
-            }
-            if controls.choices.count > cap {
-                approvalActionButton(
-                    label: Text("+\(controls.choices.count - cap)"),
-                    color: .white.opacity(0.6),
-                    help: "More options — open the inbox to answer",
-                    accessibilityLabel: "More options, open inbox"
-                ) {
-                    withAnimation(morphAnimation) { expandTo(true) }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func notificationMultiActions(
-        event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
-        resolving: Bool
-    ) -> some View {
-        // Toggles live on their own row above the footer
-        // (notificationMultiOptions). Only Submit stays in the footer so the
-        // stepper and focus buttons never collide with the options.
-        notificationMultiSubmit(
-            event: event, paneId: paneId, resolving: resolving)
-    }
-
-    /// Labeled multi-select toggle grid, rendered above the card footer.
-    /// Every option is a tappable chip with its number and label — never a
-    /// bare number pointing at a text line. Two columns, capped at six with
-    /// a `+N` inbox overflow, matching single-choice popups.
-    @ViewBuilder
-    private func notificationMultiOptions(
+    private func notificationChoiceList(
         event: AgentEvent, paneId: String, controls: IslandMetrics.ApprovalControls,
         resolving: Bool
     ) -> some View {
         let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
         let options = Array(controls.choices.prefix(cap))
         let selection = queueSelections[paneId] ?? []
-        LazyVGrid(
-            columns: [GridItem(.flexible()), GridItem(.flexible())],
-            alignment: .leading, spacing: 6
-        ) {
+        let custom = controls.customChoiceNumber
+        VStack(alignment: .leading, spacing: 3) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, label in
-                let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+                let number = index + 1
                 let selected = selection.contains(number)
-                Button {
-                    queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
-                        selection, index: index)
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(
-                            systemName: selected
-                                ? "checkmark.square.fill" : "square"
-                        )
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(
-                            selected ? .green : .white.opacity(0.5))
-                        Text("\(number) · \(label)")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.white.opacity(0.9))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 0)
+                let isCustom = !controls.isMulti && number == custom
+                NotificationChoiceRow(
+                    number: number,
+                    label: label,
+                    detail: controls.detail(at: index),
+                    isMulti: controls.isMulti,
+                    isSelected: selected,
+                    disabled: resolving,
+                    helpText: isCustom
+                        ? "Type your own answer in the field below"
+                        : label
+                ) {
+                    if isCustom {
+                        cardAnswerFocused = true
+                    } else if controls.isMulti {
+                        queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
+                            selection, index: index)
+                    } else {
+                        performCardAction(
+                            paneId: paneId,
+                            prompt: event.title ?? event.message ?? label,
+                            onSent: { dismissNotification(event.id) }
+                        ) {
+                            await eventManager.approveChoice(
+                                paneId: paneId, choice: number)
+                        }
                     }
-                    .padding(.horizontal, 8)
-                    .frame(height: IslandMetrics.multiOptionRowHeight)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(
-                                selected
-                                    ? Color.green.opacity(0.18)
-                                    : Color.white.opacity(0.06))
-                    )
+                }
+            }
+            if controls.choices.count > cap {
+                Button {
+                    withAnimation(morphAnimation) { expandTo(true) }
+                } label: {
+                    Text("+\(controls.choices.count - cap) more - open inbox")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.6))
                 }
                 .buttonStyle(.plain)
-                .disabled(resolving)
-                .help(label)
-                .accessibilityLabel(
-                    "Option \(number): \(label)\(selected ? ", selected" : "")")
+                .help("More options - open the inbox to answer")
+                .accessibilityLabel("More options, open inbox")
             }
-        }
-        if controls.choices.count > cap {
-            Button {
-                withAnimation(morphAnimation) { expandTo(true) }
-            } label: {
-                Text("+\(controls.choices.count - cap) more — open inbox")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-            .buttonStyle(.plain)
-            .help("More options — open the inbox to answer")
-            .accessibilityLabel("More options, open inbox")
         }
     }
 
@@ -2006,6 +2053,9 @@ struct NotchStatusView: View {
     private var expandedList: some View {
         let counts = IslandMetrics.agentCounts(
             kinds: visibleAgents.map(\.kind))
+        let tabBarVisible = shelfTabBarVisible
+        let forcedShelf =
+            showShelf && !NotchHUDConfig.shared.showShelfTab
         return VStack(spacing: 0) {
             NotchHeaderBarView(
                 eventManager: eventManager,
@@ -2037,8 +2087,11 @@ struct NotchStatusView: View {
                 }
             }
 
-            if NotchHUDConfig.shared.showShelfTab {
-                NotchTabBarView(selectedTab: $selectedTab, shelfDropGlow: shelfDropGlow)
+            if tabBarVisible {
+                NotchTabBarView(
+                    selectedTab: $selectedTab,
+                    shelfDropGlow: shelfDropGlow,
+                    forceShelfVisible: forcedShelf)
             }
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
@@ -2283,17 +2336,16 @@ struct NotchStatusView: View {
     /// tab so the drop target is visible and armed. Mirrors NotchDrop's
     /// drop-on-notch behavior.
     private func handleFileDragEntered() {
-        NSLog("bantay-drop: handleFileDragEntered")
         selectedTab = .shelf
         expandTo(true)
     }
 
-    /// Files were dropped onto the notch: land them on the shelf.
-    private func handleFilesDropped(_ urls: [URL]) {
-        NSLog("bantay-drop: handleFilesDropped count=%d", urls.count)
+    /// Items were dropped onto the notch: land them on the shelf.
+    private func handleDrops(_ drops: [ShelfDrop]) {
+        guard !drops.isEmpty else { return }
         // The ShelfStore owns persistence, copy-to-storage, and retention.
-        ShelfStore.shared.add(urls: urls)
-        // Show the shelf so the landed files are immediately visible.
+        ShelfStore.shared.add(drops: drops)
+        // Show the shelf so the landed items are immediately visible.
         selectedTab = .shelf
         expandTo(true)
         // Brief glow so the drop "lands" with feedback.
@@ -2307,6 +2359,8 @@ struct NotchStatusView: View {
         hoverTask?.cancel()
         isHovered = hovering
         if hovering {
+            flushDeferredDoneNotices(force: true)
+            dragOutTask?.cancel()
             guard
                 IslandMetrics.shouldExpandOnHover(
                     hovering: hovering, isExpanded: isExpanded,
@@ -2320,14 +2374,15 @@ struct NotchStatusView: View {
                 guard !Task.isCancelled, isHovered, !hasActiveNotification else { return }
                 expandTo(true)
             }
-        } else if IslandMetrics.shouldCollapseOnHoverExit(
-            isExpanded: isExpanded, isComposing: composingPaneId != nil,
-            isPinned: NotchHUDConfig.shared.panelPinned)
+        } else if !isDraggingShelfItem,
+            IslandMetrics.shouldCollapseOnHoverExit(
+                isExpanded: isExpanded, isComposing: composingPaneId != nil,
+                isPinned: NotchHUDConfig.shared.panelPinned)
         {
             hoverTask = Task { @MainActor in
                 try? await Task.sleep(
                     for: .milliseconds(Int(IslandMetrics.hoverExitGrace * 1000)))
-                guard !Task.isCancelled, !isHovered,
+                guard !Task.isCancelled, !isHovered, !isDraggingShelfItem,
                     !NotchHUDConfig.shared.panelPinned
                 else { return }
                 expandTo(false)
@@ -2340,9 +2395,7 @@ struct NotchStatusView: View {
         updateIslandVisibility()
         showDetail = false
         if let event = eventManager.currentEvent {
-            if event.kind == .accessRequest || event.kind == .waiting
-                || event.kind == .completed || event.kind == .failed
-            {
+            if event.kind == .accessRequest || event.kind == .waiting {
                 withAnimation(morphAnimation) {
                     notificationQueue = IslandMetrics.notificationQueueInsert(
                         notificationQueue, event: event)
@@ -2358,14 +2411,49 @@ struct NotchStatusView: View {
                     cancelNotificationDetail()
                 }
                 notificationDismissTask?.cancel()
-                if event.kind == .completed || event.kind == .failed {
-                    notificationDismissTask = Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(5))
-                        guard !Task.isCancelled else { return }
-                        withAnimation(morphAnimation) {
-                            dismissNotification(event.id)
-                        }
+            } else if event.kind == .completed || event.kind == .failed {
+                // Agents report done at every turn boundary and usually
+                // resume at once. Hold the card for the settle window; if
+                // the roster shows the agent working again by then, the
+                // card never appears.
+                let pending = event
+                transientNoticeTasks[pending.id] = Task { @MainActor in
+                    try? await Task.sleep(
+                        for: .seconds(IslandMetrics.transientNoticeSettleSeconds))
+                    transientNoticeTasks[pending.id] = nil
+                    guard !Task.isCancelled else { return }
+                    let agent = eventManager.agents.first {
+                        (pending.paneId != nil && $0.paneId == pending.paneId)
+                            || $0.source == pending.sourceKey
                     }
+                    guard IslandMetrics.transientNoticeShouldShow(agentKind: agent?.kind)
+                    else { return }
+                    // Pane-level attention: watching this agent finish
+                    // needs no card; working in another pane of the same
+                    // terminal holds it silently until attention returns.
+                    switch IslandMetrics.transientNoticeDisposition(
+                        kind: pending.kind,
+                        isFinishedPaneFocused: pending.paneId != nil
+                            && pending.paneId == eventManager.focusedPaneId,
+                        userFocusedInPanel: isTerminalFocused())
+                    {
+                    case .suppress:
+                        return
+                    case .defer:
+                        deferredDoneEvents[pending.paneId ?? pending.sourceKey] = pending
+                        return
+                    case .show:
+                        break
+                    }
+                    withAnimation(morphAnimation) {
+                        notificationQueue = IslandMetrics.notificationQueueInsert(
+                            notificationQueue, event: pending)
+                        queueIndex = 0
+                    }
+                    if pending.playSound && eventManager.shouldPlaySound(for: pending) {
+                        playSound(for: pending)
+                    }
+                    scheduleNotificationDismiss(pending.id)
                 }
             } else {
                 let visibleKinds = Set(notificationQueue.map(\.kind))
@@ -2387,7 +2475,11 @@ struct NotchStatusView: View {
                     withAnimation(.easeInOut(duration: 0.25)) { pulse = false }
                 }
             }
-            if event.playSound && eventManager.shouldPlaySound(for: event) {
+            // Transient notices play their sound only if they survive the
+            // settle window (handled above), never at the turn boundary.
+            if event.kind != .completed && event.kind != .failed,
+                event.playSound && eventManager.shouldPlaySound(for: event)
+            {
                 playSound(for: event)
             }
             // Dispatch notification if approval arrives while the island is hidden or snoozed.
@@ -2483,8 +2575,26 @@ struct NotchStatusView: View {
         }
     }
 
+    /// Surface the latest held finish once the user stops working in a
+    /// terminal or IDE panel. Older held finishes stay in Sessions.
+    /// Hovering the island counts as attention returned, so it forces the
+    /// flush even while a terminal is still frontmost.
+    private func flushDeferredDoneNotices(force: Bool = false) {
+        guard !deferredDoneEvents.isEmpty, force || !isTerminalFocused() else { return }
+        let latest = deferredDoneEvents.values.max(by: { $0.createdAt < $1.createdAt })
+        deferredDoneEvents.removeAll()
+        guard let latest else { return }
+        withAnimation(morphAnimation) {
+            notificationQueue = IslandMetrics.notificationQueueInsert(
+                notificationQueue, event: latest)
+            queueIndex = 0
+        }
+        scheduleNotificationDismiss(latest.id)
+    }
+
     private func handleAgentsChange() {
         updateIslandVisibility()
+        flushDeferredDoneNotices()
         // Prune multi-select state for panes that are no longer blocked so a
         // new prompt never renders with stale pre-selected options.
         let blocked = Set(
@@ -2628,11 +2738,19 @@ struct NotchStatusView: View {
         }
     }
 
-    private func sendCardAnswer(paneId: String) {
+    private func clearCardAnswer(eventID: UUID) {
+        cardAnswer = ""
+        cardAnswerFocused = false
+        dismissNotification(eventID)
+    }
+
+    private func sendCardAnswer(eventID: UUID, paneId: String) {
         let text = cardAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
-        performCardAction(paneId: paneId, prompt: text) {
-            await eventManager.sendText(paneId: paneId, text: text)
-        }
+        guard !text.isEmpty else { return }
+        performCardAction(
+            paneId: paneId, prompt: text,
+            onSent: { clearCardAnswer(eventID: eventID) },
+            action: { await eventManager.sendText(paneId: paneId, text: text) })
     }
 
     private func submitPrompt() {
@@ -2705,5 +2823,77 @@ struct NotchStatusView: View {
             "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.google.antigravity-ide",
         ]
         return terminals.contains(bundleID)
+    }
+}
+
+/// One option in a closed notification card, shaped like the TUI form the
+/// agent is showing: number, label, and the option's consequence underneath.
+/// The whole row is the target, so a single click answers without hunting for
+/// a tiny number button.
+private struct NotificationChoiceRow: View {
+    let number: Int
+    let label: String
+    let detail: String?
+    let isMulti: Bool
+    let isSelected: Bool
+    let disabled: Bool
+    let helpText: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var fill: Color {
+        if isSelected { return Color.green.opacity(0.16) }
+        return isHovered ? Color.white.opacity(0.10) : Color.white.opacity(0.04)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 8) {
+                Text("\(number).")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(.cyan.opacity(0.9))
+                    .frame(width: 16, alignment: .leading)
+                if isMulti {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(isSelected ? .green : .white.opacity(0.5))
+                        .padding(.top, 1)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(0.94))
+                        .lineLimit(1)
+                    if let detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.55))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous).fill(fill)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.5 : 1)
+        .onHover { isHovered = $0 }
+        .animation(reduceMotion ? nil : InteractionMotion.hoverIn, value: isHovered)
+        .help(helpText)
+        .accessibilityLabel(
+            "Option \(number): \(label)"
+                + (detail.map { ". \($0)" } ?? "")
+                + (isSelected ? ", selected" : "")
+        )
     }
 }

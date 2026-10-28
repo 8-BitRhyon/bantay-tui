@@ -46,6 +46,8 @@ struct AgentSnapshot: Identifiable, Equatable {
     /// multi-select inline. Nil for agents not blocked on an approval.
     let variance: ApprovalVariance?
     let choices: [String]?
+    /// Parallel to `choices`: option descriptions when the prompt has them.
+    let choiceDetails: [String]?
     /// When this agent's current working burst began (elapsed timers).
     let startedAt: Date?
     /// Cached project context (project + git branch) derived from `cwd`.
@@ -72,6 +74,7 @@ struct AgentSnapshot: Identifiable, Equatable {
         cwd: String?,
         variance: ApprovalVariance?,
         choices: [String]?,
+        choiceDetails: [String]? = nil,
         startedAt: Date?,
         projectContext: ProjectContext?,
         sessionPath: String? = nil,
@@ -88,6 +91,7 @@ struct AgentSnapshot: Identifiable, Equatable {
         self.cwd = cwd
         self.variance = variance
         self.choices = choices
+        self.choiceDetails = choiceDetails
         self.startedAt = startedAt
         self.projectContext = projectContext
         self.sessionPath = sessionPath
@@ -96,7 +100,8 @@ struct AgentSnapshot: Identifiable, Equatable {
     }
 
     var approval: IslandMetrics.ApprovalControls {
-        IslandMetrics.ApprovalControls(variance: variance, choices: choices)
+        IslandMetrics.ApprovalControls(
+            variance: variance, choices: choices, details: choiceDetails)
     }
 
     var isWorking: Bool {
@@ -274,6 +279,8 @@ struct PendingApproval: Equatable, Sendable {
     let message: String?
     let variance: ApprovalVariance?
     let choices: [String]?
+    /// Parallel to `choices`: option descriptions when the prompt has them.
+    let choiceDetails: [String]?
     let actionable: Bool
     let risk: AgentRisk
     let prompt: ApprovalPrompt?
@@ -286,10 +293,23 @@ struct PendingApproval: Equatable, Sendable {
         ].joined(separator: "|")
     }
 
+    var customChoiceNumber: Int? {
+        prompt?.customChoiceNumber
+    }
+
     var needsEnrichment: Bool {
         guard let prompt else { return true }
-        return prompt.isEmpty
-            || (prompt.actionable && prompt.choices.isEmpty && prompt.variance == nil)
+        if prompt.isEmpty { return true }
+        // Waiting events often carry only a status. Capture the pane even when
+        // the title is concrete, because an OpenCode question keeps its
+        // choices in the rendered form rather than in the event payload.
+        if prompt.choices.isEmpty,
+            prompt.kind == .question || prompt.kind == .waiting
+                || prompt.kind == .unknown
+        {
+            return true
+        }
+        return prompt.actionable && prompt.choices.isEmpty && prompt.variance == nil
     }
 }
 
@@ -299,6 +319,10 @@ final class AgentEventManager: ObservableObject {
 
     @Published private(set) var currentEvent: AgentEvent?
     @Published private(set) var agents: [AgentSnapshot] = []
+    /// The multiplexer pane the user is currently looking at, when the
+    /// adapter reports focus (herdr does). A finish on this pane needs no
+    /// popup: the user watched it happen.
+    @Published private(set) var focusedPaneId: String?
     @Published private(set) var recentCompletions: [RecentCompletion] = []
     /// Aggregate token/cost usage from agent transcripts (gauge in footer).
     @Published private(set) var usage: UsageSnapshot = .zero
@@ -403,6 +427,9 @@ final class AgentEventManager: ObservableObject {
     /// new prompt still shows immediately.
     private var acknowledgedApprovalFingerprints: [String: Set<String>] = [:]
     private var approvalEnrichmentTasks: [String: Task<Void, Never>] = [:]
+    /// Last pane capture per approval. Repeated `blocked` heartbeats must not
+    /// spawn a fresh terminal read on every roster refresh.
+    private var lastApprovalCaptureAt: [String: Date] = [:]
     /// Panes with an in-flight user action to prevent duplicate clicks.
     private var resolvingPanes: Set<String> = []
     /// Caps how long a pane stays in the resolving state if the next poll
@@ -548,6 +575,9 @@ final class AgentEventManager: ObservableObject {
     private func handleStreamEvent(_ event: HerdrEventStream.StreamEvent) {
         switch event {
         case .paneUpdated(let pane):
+            if pane.focused, focusedPaneId != pane.paneId {
+                focusedPaneId = pane.paneId
+            }
             if pane.agentStatus != lastStreamStatus[pane.paneId]
                 || pane.terminalTitle != lastStreamTitle[pane.paneId]
             {
@@ -559,6 +589,7 @@ final class AgentEventManager: ObservableObject {
             // Prune dedup state so closed panes can't accumulate forever.
             lastStreamStatus.removeValue(forKey: paneId)
             lastStreamTitle.removeValue(forKey: paneId)
+            if focusedPaneId == paneId { focusedPaneId = nil }
             scheduleStreamRefresh()
         case .agentDetected, .disconnected:
             scheduleStreamRefresh()
@@ -721,6 +752,7 @@ final class AgentEventManager: ObservableObject {
                 message: prompt.detail == nil ? event.message : nil,
                 variance: variance,
                 choices: prompt.choices.isEmpty ? event.choices : prompt.choices,
+                choiceDetails: prompt.choiceDetails.isEmpty ? nil : prompt.choiceDetails,
                 actionable: actionable,
                 risk: prompt.risk,
                 prompt: prompt)
@@ -732,6 +764,7 @@ final class AgentEventManager: ObservableObject {
             pendingApprovals.removeValue(forKey: key)
             approvalEnrichmentTasks[key]?.cancel()
             approvalEnrichmentTasks.removeValue(forKey: key)
+            lastApprovalCaptureAt.removeValue(forKey: key)
             // The pane stopped blocking: drop any pending notification so a
             // stale Approve/Deny can't inject a keypress into the pane now.
             if event.paneId != nil || event.source != nil {
@@ -1458,6 +1491,7 @@ extension AgentEventManager {
             var message = agent.message
             var variance = agent.variance
             var choices = agent.choices
+            var choiceDetails = agent.choiceDetails
             var actionable = agent.approvalActionable
             var risk = agent.approvalRisk
             if agent.kind == .accessRequest || agent.kind == .waiting,
@@ -1467,6 +1501,7 @@ extension AgentEventManager {
                 message = pending.message ?? message
                 variance = pending.variance ?? variance
                 choices = pending.choices ?? choices
+                choiceDetails = pending.choiceDetails ?? choiceDetails
                 // The roster re-checks transport: a pane that lost its route
                 // (input synthesis disabled mid-session) drops to review-only.
                 actionable =
@@ -1486,6 +1521,7 @@ extension AgentEventManager {
                 cwd: agent.cwd,
                 variance: variance,
                 choices: choices,
+                choiceDetails: choiceDetails,
                 startedAt: startedAt,
                 projectContext: agent.projectContext,
                 sessionPath: agent.sessionPath,
@@ -1500,6 +1536,13 @@ extension AgentEventManager {
     /// the exact request and choices arrive.
     private func enrichApproval(event: AgentEvent, key: String, paneId: String?) {
         guard approvalEnrichmentTasks[key] == nil else { return }
+        let now = Date()
+        if let last = lastApprovalCaptureAt[key],
+            now.timeIntervalSince(last) < 5
+        {
+            return
+        }
+        lastApprovalCaptureAt[key] = now
         let adapter = activeAdapter
         let source = event.sourceKey
         let eventID = event.id
@@ -1543,6 +1586,8 @@ extension AgentEventManager {
                 message: prompt.detail == nil ? current.message : nil,
                 variance: prompt.variance ?? current.variance,
                 choices: prompt.choices.isEmpty ? current.choices : prompt.choices,
+                choiceDetails: prompt.choiceDetails.isEmpty
+                    ? current.choiceDetails : prompt.choiceDetails,
                 actionable: (prompt.actionable
                     || (kind == .accessRequest
                         && (prompt.choices.count >= 2
@@ -1859,20 +1904,49 @@ extension AgentEventManager {
         paneId: String, decision: DecisionKind
     ) async -> ApprovalOutcome {
         let adapter = activeAdapter
-        let ok: Bool
+        // OpenCode's question form treats a digit as a hotkey: it picks a
+        // single option immediately and toggles a multi-select row without
+        // submitting. Enter toggles the focused row, so multi-select needs
+        // Tab (to the Submit control) before Enter.
+        let isOpenCodeForm = agent(forPaneId: paneId)?.source.lowercased() == "opencode"
+        var ok: Bool
         switch decision {
         case .approve:
             ok = await adapter.sendKeysConfirmed(paneId: paneId, keys: ["y", "enter"])
         case .deny:
             ok = await adapter.sendKeysConfirmed(paneId: paneId, keys: ["n", "enter"])
         case .choice(let number):
-            ok = await adapter.sendLineConfirmed(paneId: paneId, text: String(number))
+            if isOpenCodeForm {
+                ok = await adapter.sendKeysConfirmed(
+                    paneId: paneId, keys: [String(number)])
+            } else {
+                ok = await adapter.sendLineConfirmed(paneId: paneId, text: String(number))
+            }
         case .multi(let selections):
-            ok = await adapter.sendLineConfirmed(
-                paneId: paneId, text: selections.map(String.init).joined(separator: ","))
+            if isOpenCodeForm {
+                var keys = selections.sorted().map(String.init)
+                keys.append("tab")
+                keys.append("enter")
+                ok = await adapter.sendKeysConfirmed(paneId: paneId, keys: keys)
+            } else {
+                ok = await adapter.sendLineConfirmed(
+                    paneId: paneId, text: selections.map(String.init).joined(separator: ","))
+            }
         case .reply(let text):
-            ok = await adapter.sendLineConfirmed(paneId: paneId, text: text)
-            adapter.focusPane(paneId: paneId)
+            // A numbered "Type your own answer" / "Other" row means the form
+            // is still in its option list. Typing alone does nothing there:
+            // select the custom row first, then write the answer.
+            if let custom = pendingApprovals[paneId]?.customChoiceNumber {
+                ok = await adapter.sendKeysConfirmed(
+                    paneId: paneId, keys: [String(custom)])
+                if ok {
+                    try? await Task.sleep(for: .milliseconds(200))
+                    ok = await adapter.sendLineConfirmed(paneId: paneId, text: text)
+                }
+            } else {
+                ok = await adapter.sendLineConfirmed(paneId: paneId, text: text)
+                adapter.focusPane(paneId: paneId)
+            }
         }
         return ok ? .sent : .failed(.transport)
     }
@@ -2013,6 +2087,9 @@ extension AgentEventManager {
                     pending.fingerprint)
             }
             pendingApprovals.removeValue(forKey: key)
+            approvalEnrichmentTasks[key]?.cancel()
+            approvalEnrichmentTasks.removeValue(forKey: key)
+            lastApprovalCaptureAt.removeValue(forKey: key)
         }
         for key in keys {
             if let rawFingerprint {
@@ -2151,6 +2228,9 @@ extension AgentEventManager {
                 Array(pendingApprovals.keys), liveStatuses: liveStatuses))
         for key in stale {
             pendingApprovals.removeValue(forKey: key)
+            approvalEnrichmentTasks[key]?.cancel()
+            approvalEnrichmentTasks.removeValue(forKey: key)
+            lastApprovalCaptureAt.removeValue(forKey: key)
         }
         if let current = currentEvent,
             current.kind == .accessRequest || current.kind == .waiting,

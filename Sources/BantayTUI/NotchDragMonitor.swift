@@ -3,9 +3,13 @@ import AppKit
 extension Notification.Name {
     /// Posted when a file drag enters the notch rectangle (before any drop).
     static let notchFileDragEntered = Notification.Name("notchFileDragEntered")
-    /// Posted when file(s) are dropped onto the island window; `userInfo`
-    /// carries `"urls"` as `[URL]`.
+    /// Posted when items are dropped onto the island window; `userInfo`
+    /// carries `"drops"` as `[ShelfDrop]`.
     static let notchFilesDropped = Notification.Name("notchFilesDropped")
+    /// Posted when a shelf card starts a drag to another application.
+    static let notchDragOutStarted = Notification.Name("notchDragOutStarted")
+    /// Posted when that drag ends, whether it was accepted or cancelled.
+    static let notchDragOutEnded = Notification.Name("notchDragOutEnded")
 }
 
 /// Monitors global mouse drag gestures approaching the screen notch.
@@ -79,12 +83,11 @@ final class NotchDragMonitor {
             wasNearNotch = false
             return
         }
-        // A file drag is in progress iff the pasteboard carries file URLs.
-        let isFileDrag =
-            NSPasteboard(name: .drag)
-            .canReadObject(forClasses: [NSURL.self])
+        // A stageable drag is in progress iff the drag pasteboard carries a
+        // file, image, media, URL, or text type the shelf accepts.
+        let isStageable = ShelfPasteboardReader.canAccept(NSPasteboard(name: .drag))
         let rect = notchRect(screen: screen)
-        let near = isFileDrag && rect.insetBy(dx: -8, dy: -8).contains(screenPoint)
+        let near = isStageable && rect.insetBy(dx: -8, dy: -8).contains(screenPoint)
 
         if near && !wasNearNotch {
             wasNearNotch = true

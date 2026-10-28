@@ -171,13 +171,21 @@ public final class QuotaAxiTracker: Sendable {
         home: String = NSHomeDirectory(),
         goMonthlyAllowanceUSD: Double = 60
     ) -> [ProviderQuota] {
-        // 1. Try quota-axi CLI if installed
-        let candidateBins = [
-            "/opt/homebrew/bin/quota-axi",
-            "/usr/local/bin/quota-axi",
-            home + "/.cargo/bin/quota-axi",
-            home + "/.local/bin/quota-axi",
-        ]
+        // 1. Try quota-axi CLI if installed. The CLI reads the real user's
+        // config, so it only applies when probing the real home; a custom
+        // home (tests, sandboxed probes) must stay home-scoped below.
+        let candidateBins: [String] =
+            home == NSHomeDirectory()
+            ? [
+                "/opt/homebrew/bin/quota-axi",
+                "/usr/local/bin/quota-axi",
+                home + "/.cargo/bin/quota-axi",
+                home + "/.local/bin/quota-axi",
+            ]
+            : [
+                home + "/.cargo/bin/quota-axi",
+                home + "/.local/bin/quota-axi",
+            ]
         for bin in candidateBins {
             if FileManager.default.isExecutableFile(atPath: bin) {
                 let proc = Process()
