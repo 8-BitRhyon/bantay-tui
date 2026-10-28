@@ -46,7 +46,19 @@
   .nav nav a { color: var(--muted); }
   .nav nav a:hover { color: var(--text); text-decoration: none; }
 
-  .hero { padding: 88px 0 64px; text-align: center; }
+  .hero { padding: 88px 0 64px; text-align: center; position: relative; overflow: hidden; }
+  .hero-bg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    opacity: 0.55; pointer-events: none;
+  }
+  .hero-inner { position: relative; z-index: 1; }
+  .eyebrow {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.22em; color: var(--cyan);
+    border: 1px solid rgba(87, 199, 227, 0.35); border-radius: 999px;
+    padding: 5px 14px; margin-bottom: 22px;
+    background: rgba(87, 199, 227, 0.07);
+  }
   .hero h1 {
     font-size: clamp(38px, 6vw, 58px);
     line-height: 1.08; letter-spacing: -0.03em; font-weight: 800;
@@ -72,7 +84,8 @@
     width: 432px; max-width: 100%;
     background: #000; border: 1px solid #2a2f42; border-radius: 22px;
     padding: 16px 18px 14px; text-align: left;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(87, 199, 227, 0.08),
+      0 0 44px rgba(87, 199, 227, 0.07);
     font-size: 13px;
   }
   .nc-head { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; }
@@ -145,6 +158,9 @@
 <main class="wrap">
 
   <div class="hero">
+    <canvas class="hero-bg" id="signal-bg" aria-hidden="true"></canvas>
+    <div class="hero-inner">
+    <div class="eyebrow">SENTINEL FOR CODING AGENTS</div>
     <h1>Every coding agent you run,<br><em>watched from your notch.</em></h1>
     <p>
       Bantay-TUI is a native macOS control plane for AI coding agents. It lives in the
@@ -173,6 +189,7 @@
       </div>
     </div>
     <p class="note">The notch card mirrors the agent's own form: same question, same options, same order.</p>
+    </div>
   </div>
 
   <section id="features">
@@ -263,5 +280,98 @@ bash scripts/setup.sh</pre>
   </div>
 </footer>
 
+<script>
+  // Signal field: a quiet grid of agent status dots with pulses travelling
+  // between them. Pure canvas, no dependencies. Honors reduced motion and
+  // pauses while the tab is hidden.
+  (() => {
+    const canvas = document.getElementById("signal-bg");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const COLORS = ["87,199,227", "74,222,128", "245,177,76", "87,199,227"];
+    let width = 0, height = 0, dots = [], pulses = [], raf = 0, last = 0;
+
+    function build() {
+      const step = 34;
+      dots = [];
+      for (let y = step / 2; y < height; y += step) {
+        for (let x = step / 2; x < width; x += step) {
+          dots.push({ x, y, phase: Math.random() * Math.PI * 2 });
+        }
+      }
+      pulses = Array.from({ length: 7 }, () => ({
+        y: Math.floor(Math.random() * Math.max(1, Math.floor(height / step))) * step + step / 2,
+        x: -40 - Math.random() * width * 0.5,
+        speed: 60 + Math.random() * 110,
+        color: COLORS[Math.floor(Math.random() * COLORS.length)],
+      }));
+    }
+
+    function resize() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      width = rect.width; height = rect.height;
+      canvas.width = Math.max(1, Math.floor(width * dpr));
+      canvas.height = Math.max(1, Math.floor(height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      build();
+    }
+
+    function frame(now) {
+      const t = now / 1000;
+      ctx.clearRect(0, 0, width, height);
+      for (const dot of dots) {
+        const glow = 0.10 + 0.08 * (0.5 + 0.5 * Math.sin(t * 0.7 + dot.phase));
+        ctx.beginPath();
+        ctx.arc(dot.x, dot.y, 1.4, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(140,160,200," + glow.toFixed(3) + ")";
+        ctx.fill();
+      }
+      ctx.lineWidth = 1;
+      for (const pulse of pulses) {
+        const grad = ctx.createLinearGradient(pulse.x - 90, 0, pulse.x, 0);
+        grad.addColorStop(0, "rgba(" + pulse.color + ",0)");
+        grad.addColorStop(1, "rgba(" + pulse.color + ",0.5)");
+        ctx.strokeStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(pulse.x - 90, pulse.y);
+        ctx.lineTo(pulse.x, pulse.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(pulse.x, pulse.y, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(" + pulse.color + ",0.85)";
+        ctx.fill();
+      }
+    }
+
+    function loop(now) {
+      const dt = Math.min((now - last) / 1000 || 0, 0.05);
+      last = now;
+      for (const pulse of pulses) {
+        pulse.x += pulse.speed * dt;
+        if (pulse.x - 90 > width) {
+          pulse.x = -40 - Math.random() * width * 0.4;
+          pulse.y = (Math.floor(Math.random() * 14) + 0.5) * 34;
+          pulse.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+        }
+      }
+      frame(now);
+      raf = requestAnimationFrame(loop);
+    }
+
+    resize();
+    window.addEventListener("resize", resize);
+    if (reduced) {
+      frame(1200);
+    } else {
+      raf = requestAnimationFrame(loop);
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) cancelAnimationFrame(raf);
+        else if (!reduced) raf = requestAnimationFrame(loop);
+      });
+    }
+  })();
+</script>
 </body>
 </html>
