@@ -44,6 +44,15 @@
     background: var(--ember); color: var(--ink);
   }
   [data-bg] { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -2; display: block; }
+  /* Paper Shaders mount point: a grain-gradient sky layered under the
+     canvas ridges and agent lights. Hidden until the shader is live, so
+     the canvas scene alone remains a complete fallback. */
+  #paper-hero {
+    position: absolute; inset: 0; z-index: -2; display: none;
+    width: 100%; height: 100%;
+  }
+  #paper-hero.live { display: block; }
+  #paper-hero canvas { display: block; width: 100%; height: 100%; }
   .hero::before {
     content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
     background:
@@ -255,6 +264,7 @@
 <body>
 
 <section class="hero">
+  <div id="paper-hero" aria-hidden="true"></div>
   <canvas data-bg aria-hidden="true"></canvas>
 
   <nav class="rv">
@@ -508,12 +518,18 @@ bash scripts/setup.sh</pre>
     function frame(now) {
       const t = now / 1000;
       const horizon = height * 0.62;
-      const sky = ctx.createLinearGradient(0, 0, 0, horizon * 1.25);
-      sky.addColorStop(0, "#160302");
-      sky.addColorStop(0.55, "#3d0d04");
-      sky.addColorStop(1, "#93380f");
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, width, height);
+      if (window.__bantayPaperSky) {
+        // The Paper grain-gradient sky owns the backdrop; this canvas
+        // keeps only the ridges, sun, agent lights, and embers.
+        ctx.clearRect(0, 0, width, height);
+      } else {
+        const sky = ctx.createLinearGradient(0, 0, 0, horizon * 1.25);
+        sky.addColorStop(0, "#160302");
+        sky.addColorStop(0.55, "#3d0d04");
+        sky.addColorStop(1, "#93380f");
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       mouseX += (targetMouseX - mouseX) * 0.03;
       const parallax = (mouseX - 0.5) * 2;
@@ -585,6 +601,68 @@ bash scripts/setup.sh</pre>
       });
     }
   })();
+</script>
+<script type="module">
+  // Paper Shaders (Apache 2.0, Lost Coast Labs): a grain-gradient sky in
+  // the ember family, layered under the canvas ridges and agent lights.
+  // Progressive enhancement only: any failure (offline, no WebGL, CDN
+  // down) leaves the self-contained canvas scene untouched. Pinned to an
+  // exact version because the project ships breaking changes under 0.0.x.
+  try {
+    const {
+      ShaderMount,
+      grainGradientFragmentShader,
+      GrainGradientShapes,
+      ShaderFitOptions,
+      getShaderColorFromString,
+      getShaderNoiseTexture,
+    } = await import(
+      "https://cdn.jsdelivr.net/npm/@paper-design/shaders@0.0.76/dist/index.js"
+    );
+    const mountPoint = document.getElementById("paper-hero");
+    if (mountPoint) {
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const colors = ["#3d0d04", "#93380f", "#ffc27a", "#5c1a06"];
+      const noiseTexture = getShaderNoiseTexture();
+      if (noiseTexture && !noiseTexture.complete) {
+        await new Promise((resolve) => {
+          noiseTexture.onload = resolve;
+          noiseTexture.onerror = resolve;
+        });
+      }
+      new ShaderMount(
+        mountPoint,
+        grainGradientFragmentShader,
+        {
+          u_colorBack: getShaderColorFromString("#160302"),
+          u_colors: colors.map(getShaderColorFromString),
+          u_colorsCount: colors.length,
+          u_softness: 0.85,
+          u_intensity: 0.5,
+          u_noise: 0.32,
+          u_shape: GrainGradientShapes.wave,
+          u_noiseTexture: noiseTexture,
+          u_fit: ShaderFitOptions.cover,
+          u_scale: 1.15,
+          u_rotation: 0,
+          u_offsetX: 0,
+          u_offsetY: 0,
+          u_originX: 0.5,
+          u_originY: 0.5,
+          u_worldWidth: 0,
+          u_worldHeight: 0,
+        },
+        undefined,
+        reduced ? 0 : 0.35,
+        0,
+        1.5
+      );
+      mountPoint.classList.add("live");
+      window.__bantayPaperSky = true;
+    }
+  } catch {
+    // Canvas scene remains the hero background.
+  }
 </script>
 </body>
 </html>
