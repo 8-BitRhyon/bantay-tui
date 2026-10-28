@@ -10,17 +10,13 @@
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #07080c;
-    --panel: #0e1016;
-    --card: #131722;
-    --line: #232838;
-    --text: #f2f4f8;
-    --muted: #9aa3b5;
-    --faint: #6b7387;
-    --cyan: #57c7e3;
-    --green: #4ade80;
-    --amber: #f5b14c;
-    --red: #f26d6d;
+    --bg: #120302;
+    --panel: #1e0704;
+    --card: #26100a;
+    --line: rgba(255, 193, 122, 0.16);
+    --text: #fff3e8;
+    --muted: rgba(255, 241, 230, 0.66);
+    --faint: rgba(255, 241, 230, 0.42);
     --radius: 18px;
     --ink: #fff1e6;
     --ink-muted: rgba(255, 241, 230, 0.72);
@@ -36,7 +32,7 @@
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
-  a { color: var(--cyan); text-decoration: none; }
+  a { color: var(--gold); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
 
@@ -127,28 +123,42 @@
   .notch-scene { display: flex; flex-direction: column; align-items: center; padding: 56px 0 8px; }
   .notch-card {
     width: 432px; max-width: 100%;
-    background: #000; border: 1px solid #2a2f42; border-radius: 22px;
+    background: #140503; border: 1px solid rgba(255, 193, 122, 0.25); border-radius: 22px;
     padding: 16px 18px 14px; text-align: left;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(87, 199, 227, 0.08),
-      0 0 44px rgba(87, 199, 227, 0.07);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 193, 122, 0.08),
+      0 0 44px rgba(255, 160, 80, 0.08);
     font-size: 13px;
   }
   .nc-head { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; }
-  .nc-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); flex: none; }
+  .nc-dot { width: 9px; height: 9px; border-radius: 50%; background: #ff7a3c; flex: none; }
   .nc-badge {
     margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
-    color: var(--red); background: rgba(242, 109, 109, 0.16);
+    color: #ff9d7a; background: rgba(255, 110, 60, 0.16);
     padding: 2px 7px; border-radius: 999px;
   }
   .nc-q { margin-top: 8px; font-weight: 600; }
-  .nc-opt { margin-top: 8px; background: #10131c; border-radius: 8px; padding: 7px 10px; }
-  .nc-opt b { color: var(--cyan); font-family: ui-monospace, monospace; font-weight: 700; }
+  .nc-opt { margin-top: 8px; background: #22100a; border-radius: 8px; padding: 7px 10px; }
+  .nc-opt b { color: var(--gold); font-family: ui-monospace, monospace; font-weight: 700; }
   .nc-opt p { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
   .note { color: var(--faint); font-size: 13.5px; margin-top: 14px; text-align: center; }
 
   section { padding: 56px 0 8px; }
-  h2 { font-size: 26px; letter-spacing: -0.02em; font-weight: 750; }
-  .sub2 { color: var(--muted); margin-top: 8px; max-width: 640px; }
+  .sec-eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.34em;
+    text-transform: uppercase; color: var(--gold); margin-bottom: 12px;
+  }
+  h2 {
+    font-family: Cinzel, serif; font-size: 30px; font-weight: 500;
+    letter-spacing: 0.04em; line-height: 1.15;
+  }
+  .sub2 { color: var(--muted); margin-top: 10px; max-width: 640px; }
+  .agents-strip {
+    margin-top: 44px; padding: 16px 20px; text-align: center;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    font-size: 12px; letter-spacing: 0.26em; text-transform: uppercase;
+    color: var(--faint); line-height: 2.1;
+  }
+  .agents-strip b { color: var(--gold); font-weight: 600; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 26px; }
   .feat {
     background: var(--panel); border: 1px solid var(--line);
@@ -160,21 +170,21 @@
     display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
     padding: 2px 8px; border-radius: 999px; margin-bottom: 10px;
   }
-  .tag.a { color: var(--amber); background: rgba(245, 177, 76, 0.14); }
-  .tag.q { color: var(--red); background: rgba(242, 109, 109, 0.14); }
-  .tag.d { color: var(--green); background: rgba(74, 222, 128, 0.14); }
-  .tag.s { color: var(--cyan); background: rgba(87, 199, 227, 0.14); }
+  .tag.a { color: var(--gold); background: rgba(255, 193, 122, 0.13); }
+  .tag.q { color: #ffab7a; background: rgba(255, 122, 60, 0.14); }
+  .tag.d { color: #ead9b8; background: rgba(234, 217, 184, 0.10); }
+  .tag.s { color: #ffd9a0; background: rgba(255, 193, 122, 0.10); }
 
   .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 26px; }
   .step { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; background: var(--panel); }
-  .step .n { font-family: ui-monospace, monospace; color: var(--cyan); font-size: 13px; font-weight: 700; }
+  .step .n { font-family: Cinzel, serif; color: var(--gold); font-size: 15px; font-weight: 700; }
   .step h3 { font-size: 15px; margin: 6px 0 4px; }
   .step p { color: var(--muted); font-size: 14px; }
 
   pre {
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     padding: 16px 18px; overflow-x: auto; margin-top: 18px;
-    font: 13px/1.7 ui-monospace, "SF Mono", Menlo, monospace; color: #c9d4e8;
+    font: 13px/1.7 ui-monospace, "SF Mono", Menlo, monospace; color: #f0dcc4;
   }
 
   footer {
@@ -238,48 +248,55 @@
     <p class="note">The notch card mirrors the agent's own form: same question, same options, same order.</p>
   </div>
 
+  <div class="agents-strip">
+    On watch: <b>Claude Code</b> · <b>OpenCode</b> · <b>Codex</b> · <b>Gemini</b> · <b>Pi</b> · <b>Cursor</b><br>
+    In Herdr, tmux, Zellij, standalone terminals, and IDEs
+  </div>
+
   <section id="features">
-    <h2>Built for parallel agents</h2>
+    <p class="sec-eyebrow">What it offers</p>
+    <h2>One sentinel for every agent you run</h2>
     <p class="sub2">
-      You run Claude Code, OpenCode, Codex, and Gemini across Herdr, tmux, Zellij, and IDEs.
-      Bantay gives all of them one surface, and it stays quiet until you are needed.
+      Run as many agents as you like, in as many panes as you like. Bantay watches all
+      of them from one place and only calls you when a decision is actually yours.
     </p>
     <div class="grid">
       <div class="feat">
         <span class="tag a">APPROVALS</span>
-        <h3>Answer from the notch</h3>
-        <p>Permission requests show the exact command, path, or question with a risk badge. Allow once, deny, or answer numbered choices and multi-selects inline. Nothing approves blind.</p>
+        <h3>Decide without switching panes</h3>
+        <p>Every permission request arrives with the exact command, path, or question and a risk badge. Allow once, deny, or pick from numbered choices. The card only leaves after the answer is confirmed delivered, and every decision leaves a receipt.</p>
       </div>
       <div class="feat">
         <span class="tag q">QUESTIONS</span>
-        <h3>Forms, mirrored faithfully</h3>
-        <p>When an agent asks a question, the card copies its form: one tappable row per option, with each option's description underneath. Type a custom answer when none of the options fit.</p>
+        <h3>Answer questions where you sit</h3>
+        <p>When an agent asks, the notch copies its form faithfully: one tappable row per option, each option's consequences underneath, checkboxes for multi-select, and a field for your own answer when none of the options fit.</p>
       </div>
       <div class="feat">
         <span class="tag d">QUIET BY DEFAULT</span>
-        <h3>Done means done</h3>
-        <p>Agents report "done" at every turn boundary. Bantay waits until a finish settles, holds completions silently while you work in another pane, and never pops a finish you watched happen. Failures always interrupt.</p>
+        <h3>Interrupted only when it matters</h3>
+        <p>Agents cry "done" at every turn. Bantay waits for a finish to settle, holds completions silently while you work in another pane, and never pops a finish you watched happen. Failures are the exception: they always get through.</p>
       </div>
       <div class="feat">
         <span class="tag s">TELEMETRY</span>
-        <h3>Spend, quota, sessions</h3>
-        <p>Timeline, spend, quota, and session history live one hover away. Track tokens and cost per agent, watch quota windows before they wall you, and replay what finished while you were away.</p>
+        <h3>Know what the work cost</h3>
+        <p>Timeline, spend, quota, and session history live one hover away. Tokens and cost per agent, quota windows watched before they wall you, and a full record of what finished while you were away.</p>
       </div>
       <div class="feat">
         <span class="tag s">SHELF</span>
-        <h3>A shelf in the notch</h3>
-        <p>Drag files, images, links, or text onto the notch to stash them. Drag a card back into Finder, a browser upload field, or an editor. Old items evict themselves.</p>
+        <h3>Stash anything in the notch</h3>
+        <p>Drag files, images, links, or text onto the notch and they wait on the shelf. Drag a card back into Finder, a browser upload field, or an editor. A size budget evicts the oldest items on its own.</p>
       </div>
       <div class="feat">
-        <span class="tag s">WINDOW STRIP</span>
-        <h3>Infinite strip tiling</h3>
-        <p>A horizontal window manager with spring physics, column presets, an overview mode, and auto-chaining that lines up your IDE, browser, and terminal. Toggle it from the CLI or a hotkey.</p>
+        <span class="tag s">WORKSPACE</span>
+        <h3>Tile the whole workspace</h3>
+        <p>An infinite horizontal window strip with spring physics, width presets, an overview mode, and auto-chaining that lines up your IDE, browser, and terminal. Plus a desktop HUD for the map of it all, on one hotkey.</p>
       </div>
     </div>
   </section>
 
   <section id="how">
-    <h2>How it works</h2>
+    <p class="sec-eyebrow">How it works</p>
+    <h2>From a dozen panes to one watch post</h2>
     <div class="steps">
       <div class="step">
         <div class="n">01</div>
@@ -300,7 +317,8 @@
   </section>
 
   <section id="install">
-    <h2>Install</h2>
+    <p class="sec-eyebrow">Get Bantay</p>
+    <h2>On your notch in two commands</h2>
     <p class="sub2">Bantay-TUI runs on macOS 13 or later, on Apple Silicon and Intel. Build it from source:</p>
     <pre>git clone https://github.com/8-BitRhyon/bantay-tui.git
 cd bantay-tui
@@ -317,7 +335,7 @@ bash scripts/setup.sh</pre>
 
 <footer>
   <div class="wrap foot">
-    <span>Bantay-TUI. MIT licensed. Bantay: to watch over.</span>
+    <span><span style="font-family: Cinzel, serif; letter-spacing: 0.24em; color: var(--ink);">BANTAY</span> · MIT licensed. Bantay: to watch over.</span>
     <nav>
       <a href="https://github.com/8-BitRhyon/bantay-tui">GitHub</a>
       <a href="https://github.com/8-BitRhyon/bantay-tui/releases">Releases</a>
