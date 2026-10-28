@@ -2396,10 +2396,21 @@ struct NotchStatusView: View {
         showDetail = false
         if let event = eventManager.currentEvent {
             if event.kind == .accessRequest || event.kind == .waiting {
-                withAnimation(morphAnimation) {
-                    notificationQueue = IslandMetrics.notificationQueueInsert(
-                        notificationQueue, event: event)
-                    queueIndex = 0
+                // A waiting blip for a pane the roster already shows
+                // working is not a request: never put its card up.
+                let rosterAgent = eventManager.agents.first {
+                    (event.paneId != nil && $0.paneId == event.paneId)
+                        || $0.source == event.sourceKey
+                }
+                let alreadyWorking =
+                    event.kind == .waiting
+                    && (rosterAgent?.kind == .progress || rosterAgent?.kind == .started)
+                if !alreadyWorking {
+                    withAnimation(morphAnimation) {
+                        notificationQueue = IslandMetrics.notificationQueueInsert(
+                            notificationQueue, event: event)
+                        queueIndex = 0
+                    }
                 }
                 // Detail belongs to the visible top card: reload it whenever
                 // the top is an approval, matching the old per-event refresh.
@@ -2603,6 +2614,30 @@ struct NotchStatusView: View {
                 .compactMap { $0.paneId ?? $0.source })
         let stale = queueSelections.keys.filter { !blocked.contains($0) }
         for pane in stale { queueSelections.removeValue(forKey: pane) }
+        // Approval and waiting cards live only while their pane is blocked.
+        // Prune on every roster update, not just when the event stream
+        // goes quiet, so a card from a momentary idle blip cannot sit on
+        // screen while the agent is visibly working again.
+        if !eventManager.agents.isEmpty {
+            let pruned = IslandMetrics.notificationQueuePruneUnblocked(
+                notificationQueue, blockedPaneKeys: blocked)
+            if pruned != notificationQueue {
+                let topBefore = activeNotification?.id
+                withAnimation(morphAnimation) {
+                    notificationQueue = pruned
+                    queueIndex = IslandMetrics.notificationQueueClampIndex(
+                        queueIndex, count: notificationQueue.count)
+                }
+                if activeNotification?.id != topBefore {
+                    cancelNotificationDetail()
+                    if let top = activeNotification,
+                        top.kind == .accessRequest || top.kind == .waiting
+                    {
+                        loadNotificationDetail(for: top)
+                    }
+                }
+            }
+        }
         if IslandMetrics.shouldCollapse(
             isExpanded: isExpanded, hasAgents: !eventManager.agents.isEmpty)
         {

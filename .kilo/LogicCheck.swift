@@ -951,6 +951,25 @@ struct LogicCheckMain {
         check(
             qCapped.count == IslandMetrics.maxNotificationQueueCount,
             "queue caps at five cards")
+        let qWaitNewer = AgentEvent(
+            source: "kilo", kind: .waiting, title: "wait again", message: nil,
+            paneId: "w3:p4", workspaceId: "w3", variance: nil, choices: nil,
+            playSound: false, persistent: false)
+        var qDedup: [AgentEvent] = []
+        qDedup = IslandMetrics.notificationQueueInsert(qDedup, event: qWait)
+        qDedup = IslandMetrics.notificationQueueInsert(qDedup, event: qWaitNewer)
+        check(
+            qDedup.count == 1 && qDedup.first?.id == qWaitNewer.id,
+            "L146 a fresh prompt replaces the same pane's stale card")
+        let prunedQueue = IslandMetrics.notificationQueuePruneUnblocked(
+            [qAsk, qWait, qDone], blockedPaneKeys: ["w3:p3"])
+        check(
+            prunedQueue.map(\.kind) == [.accessRequest, .completed],
+            "L146 prune drops unblocked waiting cards, keeps approvals and notices")
+        check(
+            IslandMetrics.notificationQueuePruneUnblocked(
+                [qWait], blockedPaneKeys: []).isEmpty,
+            "L146 prune drops a waiting card whose pane is gone")
         check(
             !IslandMetrics.transientNoticeShouldShow(agentKind: .progress),
             "L143 resumed agent suppresses the done popup")
