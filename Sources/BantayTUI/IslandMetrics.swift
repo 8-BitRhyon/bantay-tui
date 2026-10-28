@@ -1033,6 +1033,14 @@ public enum IslandMetrics: Sendable {
         _ queue: [AgentEvent], event: AgentEvent, cap: Int = maxNotificationQueueCount
     ) -> [AgentEvent] {
         var next = queue.filter { $0.id != event.id }
+        // One approval card per pane: a fresh prompt from a pane replaces
+        // its stale card instead of stacking a second one behind it.
+        if event.kind == .accessRequest || event.kind == .waiting {
+            next.removeAll {
+                ($0.kind == .accessRequest || $0.kind == .waiting)
+                    && $0.identityKey == event.identityKey
+            }
+        }
         next.append(event)
         next.sort {
             let left = notificationQueueRank($0.kind)
@@ -1051,6 +1059,23 @@ public enum IslandMetrics: Sendable {
         _ queue: [AgentEvent], id: UUID
     ) -> [AgentEvent] {
         queue.filter { $0.id != id }
+    }
+
+    /// Drop approval and waiting cards whose pane is no longer blocked.
+    /// A momentary idle blip must not leave a WAITING card on screen while
+    /// the agent is visibly working again. Transient completion and
+    /// failure cards keep their own auto-dismiss lifecycle.
+    static func notificationQueuePruneUnblocked(
+        _ queue: [AgentEvent], blockedPaneKeys: Set<String>
+    ) -> [AgentEvent] {
+        queue.filter { item in
+            switch item.kind {
+            case .accessRequest, .waiting:
+                return blockedPaneKeys.contains(item.paneId ?? item.sourceKey)
+            default:
+                return true
+            }
+        }
     }
 
     /// Clamp a selected queue index after insert/remove so the stepper never

@@ -333,6 +333,30 @@
             #expect(IslandMetrics.cleanHUDText(progress) == "Compiling")
         }
 
+        @Test("waiting cards prune when the pane unblocks")
+        func waitingCardLifecycle() {
+            let waiting = AgentEvent(
+                source: "opencode", kind: .waiting, title: "spawning process",
+                message: nil, paneId: "w3:p1", workspaceId: "w3", variance: nil,
+                choices: nil, playSound: false, persistent: false)
+            let waitingNewer = AgentEvent(
+                source: "opencode", kind: .waiting, title: "Which fruit?",
+                message: nil, paneId: "w3:p1", workspaceId: "w3", variance: nil,
+                choices: nil, playSound: false, persistent: false)
+            var queue: [AgentEvent] = []
+            queue = IslandMetrics.notificationQueueInsert(queue, event: waiting)
+            queue = IslandMetrics.notificationQueueInsert(queue, event: waitingNewer)
+            #expect(queue.count == 1)
+            #expect(queue.first?.id == waitingNewer.id)
+            #expect(
+                IslandMetrics.notificationQueuePruneUnblocked(
+                    queue, blockedPaneKeys: ["w3:p1"]) == queue)
+            #expect(
+                IslandMetrics.notificationQueuePruneUnblocked(
+                    queue, blockedPaneKeys: []
+                ).isEmpty)
+        }
+
         @Test("transient notices wait for a settled finish")
         func transientNoticeSettle() {
             #expect(!IslandMetrics.transientNoticeShouldShow(agentKind: .progress))
