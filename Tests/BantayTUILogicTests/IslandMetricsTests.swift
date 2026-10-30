@@ -323,8 +323,8 @@
         func suppressesHostnames() {
             #expect(IslandMetrics.isSuppressedGarbage("MacBook-Pro.local"))
             #expect(IslandMetrics.cleanHUDText("MacBook-Pro.local") == "")
-            #expect(IslandMetrics.isSuppressedGarbage("rhyon@mbp:~$"))
-            #expect(IslandMetrics.cleanHUDText("rhyon@mbp:~$") == "")
+            #expect(IslandMetrics.isSuppressedGarbage("testuser@mbp:~$"))
+            #expect(IslandMetrics.cleanHUDText("testuser@mbp:~$") == "")
         }
 
         @Test("strips progress bars and percentages")
