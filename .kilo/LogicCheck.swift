@@ -970,6 +970,46 @@ struct LogicCheckMain {
             IslandMetrics.notificationQueuePruneUnblocked(
                 [qWait], blockedPaneKeys: []).isEmpty,
             "L146 prune drops a waiting card whose pane is gone")
+
+        let multiState = ApprovalPromptResolver.resolve(
+            rawTail: """
+                ┃  Pick B
+                ┃
+                ┃  ❯ 1. [✓] B1
+                ┃    2. [ ] B2
+                ┃    3. [x] B3
+                ┃
+                ┃  ⇆ tab  ↑↓ select  enter toggle  esc dismiss
+                """,
+            kind: .waiting)
+        check(
+            multiState.selectedChoices == [1, 3],
+            "L147 checked rows round-trip from the terminal")
+        check(
+            multiState.focusedChoice == 1,
+            "L147 focused row round-trips from the terminal")
+        check(
+            ApprovalPromptResolver.isReviewState(
+                """
+                ┃  Sequence check
+                ┃  Pick A  Pick B  Submit
+                ┃  Pick A: A2
+                ┃  Pick B: B1, B3
+                ┃  ⇆ tab  enter submit  esc dismiss
+                """),
+            "L147 review step is detected before the final Enter")
+        let toggleControls = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: ["A", "B", "C", "D"], initialSelections: [2])
+        check(
+            toggleControls.effectiveSelection(local: nil) == [2]
+                && toggleControls.effectiveSelection(local: []) == [],
+            "L147 surfaces start from terminal picks until the user edits")
+        check(
+            IslandMetrics.ApprovalControls.checkboxToggleKeys(
+                focusedChoice: 2, initialSelections: [2],
+                desiredSelections: [1, 2, 4], optionCount: 4)
+                == ["up", "space", "down", "down", "down", "space", "enter"],
+            "L147 checkbox plan only toggles rows that must change")
         check(
             !IslandMetrics.transientNoticeShouldShow(agentKind: .progress),
             "L143 resumed agent suppresses the done popup")

@@ -48,6 +48,10 @@ struct AgentSnapshot: Identifiable, Equatable {
     let choices: [String]?
     /// Parallel to `choices`: option descriptions when the prompt has them.
     let choiceDetails: [String]?
+    /// Rows the terminal already shows checked for a multi-select prompt.
+    let selectedChoices: [Int]?
+    /// Row under the terminal cursor, when the prompt prints one.
+    let focusedChoice: Int?
     /// When this agent's current working burst began (elapsed timers).
     let startedAt: Date?
     /// Cached project context (project + git branch) derived from `cwd`.
@@ -75,6 +79,8 @@ struct AgentSnapshot: Identifiable, Equatable {
         variance: ApprovalVariance?,
         choices: [String]?,
         choiceDetails: [String]? = nil,
+        selectedChoices: [Int]? = nil,
+        focusedChoice: Int? = nil,
         startedAt: Date?,
         projectContext: ProjectContext?,
         sessionPath: String? = nil,
@@ -92,6 +98,8 @@ struct AgentSnapshot: Identifiable, Equatable {
         self.variance = variance
         self.choices = choices
         self.choiceDetails = choiceDetails
+        self.selectedChoices = selectedChoices
+        self.focusedChoice = focusedChoice
         self.startedAt = startedAt
         self.projectContext = projectContext
         self.sessionPath = sessionPath
@@ -101,7 +109,8 @@ struct AgentSnapshot: Identifiable, Equatable {
 
     var approval: IslandMetrics.ApprovalControls {
         IslandMetrics.ApprovalControls(
-            variance: variance, choices: choices, details: choiceDetails)
+            variance: variance, choices: choices, details: choiceDetails,
+            initialSelections: Set(selectedChoices ?? []), focusedChoice: focusedChoice)
     }
 
     var isWorking: Bool {
@@ -295,6 +304,14 @@ struct PendingApproval: Equatable, Sendable {
 
     var customChoiceNumber: Int? {
         prompt?.customChoiceNumber
+    }
+
+    var selectedChoices: [Int] {
+        prompt?.selectedChoices ?? []
+    }
+
+    var focusedChoice: Int? {
+        prompt?.focusedChoice
     }
 
     var needsEnrichment: Bool {
@@ -743,9 +760,14 @@ final class AgentEventManager: ObservableObject {
                 (prompt.actionable
                     || (event.kind == .accessRequest && explicitChoices.count >= 2))
                 && supportsTransport
+            // An explicit multi from the event stream is authoritative:
+            // a fallback parse that only saw labels must not downgrade a
+            // pick-several prompt into a single choice.
             let variance: ApprovalVariance? =
-                prompt.variance
-                ?? (explicitChoices.count >= 2 ? .choices : event.variance)
+                event.variance == .multi
+                ? .multi
+                : (prompt.variance
+                    ?? (explicitChoices.count >= 2 ? .choices : event.variance))
             let pending = PendingApproval(
                 eventID: event.id,
                 title: prompt.detail ?? event.title,
@@ -1492,6 +1514,8 @@ extension AgentEventManager {
             var variance = agent.variance
             var choices = agent.choices
             var choiceDetails = agent.choiceDetails
+            var selectedChoices = agent.selectedChoices
+            var focusedChoice = agent.focusedChoice
             var actionable = agent.approvalActionable
             var risk = agent.approvalRisk
             if agent.kind == .accessRequest || agent.kind == .waiting,
@@ -1502,6 +1526,8 @@ extension AgentEventManager {
                 variance = pending.variance ?? variance
                 choices = pending.choices ?? choices
                 choiceDetails = pending.choiceDetails ?? choiceDetails
+                selectedChoices = pending.selectedChoices
+                focusedChoice = pending.focusedChoice
                 // The roster re-checks transport: a pane that lost its route
                 // (input synthesis disabled mid-session) drops to review-only.
                 actionable =
@@ -1522,6 +1548,8 @@ extension AgentEventManager {
                 variance: variance,
                 choices: choices,
                 choiceDetails: choiceDetails,
+                selectedChoices: selectedChoices,
+                focusedChoice: focusedChoice,
                 startedAt: startedAt,
                 projectContext: agent.projectContext,
                 sessionPath: agent.sessionPath,
@@ -1844,8 +1872,9 @@ extension AgentEventManager {
             return OpenCodeActionWriter.writeDecision(
                 paneId: paneId, approve: true, choiceIndex: number)
                 ? .sent : .failed(.transport)
-        case .multi:
-            return OpenCodeActionWriter.writeDecision(paneId: paneId, approve: true)
+        case .multi(let selections):
+            return OpenCodeActionWriter.writeDecision(
+                paneId: paneId, approve: true, selections: selections)
                 ? .sent : .failed(.transport)
         case .reply(let text):
             // Free text still travels through input synthesis (existing
@@ -1906,9 +1935,10 @@ extension AgentEventManager {
         let adapter = activeAdapter
         // OpenCode's question form treats a digit as a hotkey: it picks a
         // single option immediately and toggles a multi-select row without
-        // submitting. Enter toggles the focused row, so multi-select needs
-        // Tab (to the Submit control) before Enter.
-        let isOpenCodeForm = agent(forPaneId: paneId)?.source.lowercased() == "opencode"
+        // submitting. Tab advances between fields; Enter only submits from
+        // the review step, and toggles the focused row everywhere else.
+        let formSource = agent(forPaneId: paneId)?.source.lowercased() ?? ""
+        let isOpenCodeForm = formSource == "opencode" || formSource == "kilo"
         var ok: Bool
         switch decision {
         case .approve:
@@ -1917,21 +1947,16 @@ extension AgentEventManager {
             ok = await adapter.sendKeysConfirmed(paneId: paneId, keys: ["n", "enter"])
         case .choice(let number):
             if isOpenCodeForm {
-                ok = await adapter.sendKeysConfirmed(
-                    paneId: paneId, keys: [String(number)])
-            } else {
-                ok = await adapter.sendLineConfirmed(paneId: paneId, text: String(number))
+                return await openCodeFormDecision(
+                    paneId: paneId, decision: decision)
             }
+            ok = await adapter.sendLineConfirmed(paneId: paneId, text: String(number))
         case .multi(let selections):
             if isOpenCodeForm {
-                var keys = selections.sorted().map(String.init)
-                keys.append("tab")
-                keys.append("enter")
-                ok = await adapter.sendKeysConfirmed(paneId: paneId, keys: keys)
-            } else {
-                ok = await adapter.sendLineConfirmed(
-                    paneId: paneId, text: selections.map(String.init).joined(separator: ","))
+                return await openCodeFormDecision(
+                    paneId: paneId, decision: decision)
             }
+            return await checkboxFormDecision(paneId: paneId, selections: selections)
         case .reply(let text):
             // A numbered "Type your own answer" / "Other" row means the form
             // is still in its option list. Typing alone does nothing there:
@@ -1949,6 +1974,160 @@ extension AgentEventManager {
             }
         }
         return ok ? .sent : .failed(.transport)
+    }
+
+    private func pendingApproval(for paneId: String) -> PendingApproval? {
+        if let direct = pendingApprovals[paneId] { return direct }
+        return pendingApprovals.first {
+            matches(paneId: paneId, identityKey: $0.key)
+        }?.value
+    }
+
+    private func resolveFormPrompt(raw: String) -> ApprovalPrompt {
+        ApprovalPromptResolver.resolve(rawTail: raw, kind: .waiting)
+    }
+
+    /// Replace the pending prompt with the question the pane shows now, so
+    /// the card re-renders on the next field instead of dismissing.
+    private func publishFormPrompt(_ prompt: ApprovalPrompt, paneId: String) {
+        let key =
+            pendingApprovals.keys.first {
+                $0 == paneId || matches(paneId: paneId, identityKey: $0)
+            } ?? paneId
+        let current = pendingApprovals[key]
+        pendingApprovals[key] = PendingApproval(
+            eventID: current?.eventID ?? currentEvent?.id ?? UUID(),
+            title: prompt.detail ?? current?.title,
+            message: prompt.detail == nil ? current?.message : nil,
+            variance: prompt.variance ?? current?.variance,
+            choices: prompt.choices.isEmpty ? current?.choices : prompt.choices,
+            choiceDetails: prompt.choiceDetails.isEmpty
+                ? current?.choiceDetails : prompt.choiceDetails,
+            actionable: current?.actionable ?? true,
+            risk: prompt.risk,
+            prompt: prompt)
+        agents = mergeApprovals(into: agents)
+    }
+
+    /// OpenCode form progression, verified against the live pane. A digit
+    /// answers a single-choice field and advances; digits plus Tab answer
+    /// a multi-select field and advance. Enter is only ever sent on the
+    /// review step, where it submits the whole form. When another field
+    /// appears, the pending prompt is replaced and the outcome is
+    /// `.advanced`, so no surface mistakes motion for completion.
+    private func openCodeFormDecision(
+        paneId: String, decision: DecisionKind
+    ) async -> ApprovalOutcome {
+        let adapter = activeAdapter
+        let beforeRaw = await adapter.captureTail(paneId: paneId, lines: 30)
+        let before =
+            pendingApproval(for: paneId)?.prompt
+            ?? resolveFormPrompt(raw: beforeRaw)
+        let initialKeys: [String]
+        let recoveryKeys: [String]
+        switch decision {
+        case .choice(let number):
+            initialKeys = [String(number)]
+            recoveryKeys = initialKeys
+        case .multi(let selections):
+            initialKeys = selections.sorted().map(String.init) + ["tab"]
+            recoveryKeys = ["tab"]
+        default:
+            return .failed(.unsupported)
+        }
+        guard await adapter.sendKeysConfirmed(paneId: paneId, keys: initialKeys) else {
+            return .failed(.transport)
+        }
+        var recovered = false
+        for attempt in 0..<3 {
+            try? await Task.sleep(for: .milliseconds(450))
+            let afterRaw = await adapter.captureTail(paneId: paneId, lines: 30)
+            if afterRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if attempt == 2 { return .sent }
+                continue
+            }
+            if ApprovalPromptResolver.isReviewState(afterRaw) {
+                guard await adapter.sendKeysConfirmed(paneId: paneId, keys: ["enter"])
+                else { return .failed(.transport) }
+                try? await Task.sleep(for: .milliseconds(500))
+                let verifyRaw = await adapter.captureTail(paneId: paneId, lines: 30)
+                if verifyRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return .sent
+                }
+                if ApprovalPromptResolver.isReviewState(verifyRaw) {
+                    return .failed(.transport)
+                }
+                let verify = resolveFormPrompt(raw: verifyRaw)
+                if verify.choices.isEmpty { return .sent }
+                publishFormPrompt(verify, paneId: paneId)
+                return .advanced
+            }
+            let after = resolveFormPrompt(raw: afterRaw)
+            if after.choices.isEmpty { return .sent }
+            guard !before.choices.isEmpty else { return .sent }
+            if after.fingerprint != before.fingerprint {
+                publishFormPrompt(after, paneId: paneId)
+                return .advanced
+            }
+            if !recovered {
+                recovered = true
+                guard await adapter.sendKeysConfirmed(paneId: paneId, keys: recoveryKeys)
+                else { return .failed(.transport) }
+                continue
+            }
+            return .failed(.transport)
+        }
+        return .failed(.transport)
+    }
+
+    /// Checkbox lists without number hotkeys (Claude-style pickers):
+    /// navigate from the focused row with arrows, Space only the rows whose
+    /// state must change, then Enter. The pane is re-read afterwards so a
+    /// plan that did not land fails visibly instead of claiming success.
+    private func checkboxFormDecision(
+        paneId: String, selections: [Int]
+    ) async -> ApprovalOutcome {
+        let adapter = activeAdapter
+        let beforeRaw = await adapter.captureTail(paneId: paneId, lines: 30)
+        let before =
+            pendingApproval(for: paneId)?.prompt
+            ?? resolveFormPrompt(raw: beforeRaw)
+        guard before.variance == .multi, !before.choices.isEmpty else {
+            return .failed(.unsupported)
+        }
+        let keys = IslandMetrics.ApprovalControls.checkboxToggleKeys(
+            focusedChoice: before.focusedChoice,
+            initialSelections: Set(before.selectedChoices),
+            desiredSelections: Set(selections),
+            optionCount: before.choices.count)
+        guard !keys.isEmpty,
+            await adapter.sendKeysConfirmed(paneId: paneId, keys: keys)
+        else {
+            return .failed(.transport)
+        }
+        try? await Task.sleep(for: .milliseconds(450))
+        let afterRaw = await adapter.captureTail(paneId: paneId, lines: 30)
+        if afterRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .sent
+        }
+        if ApprovalPromptResolver.isReviewState(afterRaw) {
+            guard await adapter.sendKeysConfirmed(paneId: paneId, keys: ["enter"])
+            else { return .failed(.transport) }
+            try? await Task.sleep(for: .milliseconds(500))
+            let verifyRaw = await adapter.captureTail(paneId: paneId, lines: 30)
+            let verify = resolveFormPrompt(raw: verifyRaw)
+            if verify.choices.isEmpty { return .sent }
+            publishFormPrompt(verify, paneId: paneId)
+            return .advanced
+        }
+        let after = resolveFormPrompt(raw: afterRaw)
+        if after.choices.isEmpty { return .sent }
+        if after.fingerprint != before.fingerprint {
+            publishFormPrompt(after, paneId: paneId)
+            return .advanced
+        }
+        publishFormPrompt(after, paneId: paneId)
+        return .failed(.transport)
     }
 
     /// Maps a prompt-dispatch Bool to its failure: with input synthesis on,
@@ -1990,6 +2169,12 @@ extension AgentEventManager {
         } else {
             failure = nil
         }
+        let outcomeLabel: String
+        switch outcome {
+        case .sent: outcomeLabel = "sent"
+        case .advanced: outcomeLabel = "advanced"
+        case .failed: outcomeLabel = "failed"
+        }
         receiptStore.append(
             ApprovalReceipt(
                 paneId: paneId,
@@ -2003,7 +2188,7 @@ extension AgentEventManager {
                     [paneId, fingerprint, decision.actionName, decision.detail]
                         .joined(separator: "|")),
                 route: route.label,
-                outcome: outcome.isSent ? "sent" : "failed",
+                outcome: outcomeLabel,
                 failure: failure))
     }
 

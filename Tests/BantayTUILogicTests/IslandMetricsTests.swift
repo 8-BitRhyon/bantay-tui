@@ -357,6 +357,23 @@
                 ).isEmpty)
         }
 
+        @Test("multi-select starts from terminal state and plans toggles")
+        func multiSelectStateAndTogglePlan() {
+            let controls = IslandMetrics.ApprovalControls.make(
+                variance: .multi,
+                choices: ["A", "B", "C", "D"],
+                initialSelections: [2])
+            #expect(controls.effectiveSelection(local: nil) == [2])
+            #expect(controls.effectiveSelection(local: []) == [])
+            #expect(
+                IslandMetrics.ApprovalControls.checkboxToggleKeys(
+                    focusedChoice: 2,
+                    initialSelections: [2],
+                    desiredSelections: [1, 2, 4],
+                    optionCount: 4)
+                    == ["up", "space", "down", "down", "down", "space", "enter"])
+        }
+
         @Test("transient notices wait for a settled finish")
         func transientNoticeSettle() {
             #expect(!IslandMetrics.transientNoticeShouldShow(agentKind: .progress))

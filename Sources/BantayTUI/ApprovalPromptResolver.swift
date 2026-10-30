@@ -17,13 +17,17 @@ struct ApprovalPrompt: Equatable, Sendable {
     /// Parallel to `choices`: the option's second line when the prompt has
     /// one, otherwise an empty string. The card shows it under the label.
     let choiceDetails: [String]
+    /// 1-based rows the terminal already shows checked.
+    let selectedChoices: [Int]
+    /// 1-based row under the terminal cursor, when the prompt prints one.
+    let focusedChoice: Int?
     let variance: ApprovalVariance?
     let actionable: Bool
     let risk: AgentRisk
 
     static let empty = ApprovalPrompt(
-        kind: .unknown, detail: nil, choices: [], choiceDetails: [], variance: nil,
-        actionable: false, risk: .low)
+        kind: .unknown, detail: nil, choices: [], choiceDetails: [], selectedChoices: [],
+        focusedChoice: nil, variance: nil, actionable: false, risk: .low)
 
     /// 1-based row for a free-text answer when the prompt offers one
     /// ("Type your own answer", "Other", ...). Nil when typing goes straight
@@ -51,6 +55,7 @@ enum ApprovalPromptResolver {
         "esc to interrupt", "ctrl+c", "ctrl-c", "press ", "tokens:",
         "context:", "shift+tab", "tab to", "↑/↓", "↑↓", "⇆", "esc ",
         "⏎", "enter to", "running…", "working…", "thinking…", "waiting…",
+        "up/down", "arrow keys", "space ",
     ]
 
     private static let permissionWords: [String] = [
@@ -107,6 +112,14 @@ enum ApprovalPromptResolver {
         let extracted = ChoiceExtractor.extractChoices(fromLines: block)
         let choices = extracted.map(\.label)
         let choiceDetails = extracted.map { $0.detail ?? "" }
+        let selectedChoices =
+            extracted.enumerated()
+            .filter { $0.element.isSelected }
+            .map { $0.offset + 1 }
+        let focusedChoice =
+            extracted.enumerated()
+            .first { $0.element.isFocused }
+            .map { $0.offset + 1 }
         let hasPermission = permissionWords.contains { lower.contains($0) }
         let hasQuestion =
             text.contains("?") || lower.contains("[y/n]") || lower.contains("(y/n)")
@@ -151,6 +164,8 @@ enum ApprovalPromptResolver {
             detail: detail,
             choices: choices,
             choiceDetails: choiceDetails,
+            selectedChoices: selectedChoices,
+            focusedChoice: focusedChoice,
             variance: variance,
             actionable: actionable,
             risk: risk)
@@ -289,6 +304,27 @@ enum ApprovalPromptResolver {
                 || marker == "*" || marker == "✓" || marker == "✔"
         }
         return content.hasPrefix("☐") || content.hasPrefix("☑")
+    }
+
+    /// Whether a pane tail shows a form's review step: no selectable rows,
+    /// a Submit control in the header, and at least one `Field: answer`
+    /// summary line. Submitting from here takes one final Enter.
+    static func isReviewState(_ rawTail: String) -> Bool {
+        let lines = meaningfulLines(rawTail)
+        guard ChoiceExtractor.extractChoices(fromLines: lines).isEmpty else { return false }
+        let contents = lines.map { ChoiceExtractor.gutterSplit($0).content }
+        guard contents.contains(where: { $0.lowercased().contains("submit") }) else {
+            return false
+        }
+        let summaries = contents.filter { content in
+            guard let colon = content.firstIndex(of: ":") else { return false }
+            let label = content[..<colon].trimmingCharacters(in: .whitespaces)
+            let value = content[content.index(after: colon)...]
+                .trimmingCharacters(in: .whitespaces)
+            return label.count >= 2 && label.count <= 80 && !value.isEmpty
+                && !label.lowercased().contains("http")
+        }
+        return !summaries.isEmpty
     }
 
     private static func fallbackText(title: String?, message: String?) -> String? {

@@ -171,6 +171,55 @@
             #expect(tall > plain + 80)
         }
 
+        @Test("multi-select state and review state survive parsing")
+        func multiSelectStateAndReview() {
+            let prompt = ApprovalPromptResolver.resolve(
+                rawTail: """
+                    ┃  Pick B
+                    ┃
+                    ┃  ❯ 1. [✓] B1
+                    ┃    2. [ ] B2
+                    ┃    3. [x] B3
+                    ┃
+                    ┃  ⇆ tab  ↑↓ select  enter toggle  esc dismiss
+                    """,
+                kind: .waiting)
+            #expect(prompt.choices == ["B1", "B2", "B3"])
+            #expect(prompt.variance == .multi)
+            #expect(prompt.selectedChoices == [1, 3])
+            #expect(prompt.focusedChoice == 1)
+
+            let review = """
+                ┃  Sequence check
+                ┃
+                ┃  Pick A  Pick B  Pick C  Submit
+                ┃
+                ┃  Pick A: A2
+                ┃  Pick B: B1, B3
+                ┃  Pick C: C2
+                ┃
+                ┃  ⇆ tab  enter submit  esc dismiss
+                """
+            #expect(ApprovalPromptResolver.isReviewState(review))
+            #expect(!ApprovalPromptResolver.isReviewState("Which one?\n1. Yes\n2. No"))
+        }
+
+        @Test("generic checkbox prompt keeps every option")
+        func genericCheckboxPrompt() {
+            let prompt = ApprovalPromptResolver.resolve(
+                rawTail: """
+                    Pick items
+                    ❯ 1. [ ] Alpha
+                      2. [ ] Beta
+                      3. [ ] Gamma
+                      4. [ ] Delta
+                    up/down select  space toggle  enter confirm
+                    """,
+                kind: .waiting)
+            #expect(prompt.choices == ["Alpha", "Beta", "Gamma", "Delta"])
+            #expect(prompt.variance == .multi)
+        }
+
         @Test("structured roster height grows and caps")
         func rosterHeight() {
             let metrics = IslandMetrics.RosterLayoutMetrics(

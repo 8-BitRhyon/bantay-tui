@@ -227,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var badgeTimer: Timer?
     private var ingestServer: EventIngestServer?
     private var controlGateway: ControlGatewayServer?
-    /// The "Remove Bantay-TUI…" menu item; disabled while the uninstall
+    /// The "Remove Bantay…" menu item; disabled while the uninstall
     /// script runs so the action can't double-fire.
     @MainActor private var uninstallMenuItem: NSMenuItem?
 
@@ -765,7 +765,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @MainActor
     private static func makeTrayIconImage() -> NSImage {
         if let symbol = NSImage(
-            systemSymbolName: "chevron.down", accessibilityDescription: "Bantay-TUI")
+            systemSymbolName: "chevron.down", accessibilityDescription: "Bantay")
         {
             return symbol
         }
@@ -1002,7 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let titleItem = NSMenuItem(title: "Bantay-TUI", action: nil, keyEquivalent: "")
+        let titleItem = NSMenuItem(title: "Bantay", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
         menu.addItem(titleItem)
         menu.addItem(.separator())
@@ -1130,7 +1130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         // then Submit once. Single taps must never
                         // partial-answer a pick-several question.
                         // Menu-local selections: the popup keeps its own.
-                        let picked = menuMultiSelections[paneId] ?? []
+                        let picked = controls.effectiveSelection(
+                            local: menuMultiSelections[paneId])
                         for (index, text) in controls.choices.enumerated() {
                             let number = IslandMetrics.ApprovalControls.optionNumber(
                                 forIndex: index)
@@ -1306,7 +1307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         #endif
 
         let uninstallItem = NSMenuItem(
-            title: "Remove Bantay-TUI…",
+            title: "Remove Bantay…",
             action: #selector(uninstallPrompt),
             keyEquivalent: "")
         uninstallItem.target = self
@@ -1326,7 +1327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
-            title: "Quit Bantay-TUI",
+            title: "Quit Bantay",
             action: #selector(quitApp),
             keyEquivalent: "q")
         quitItem.target = self
@@ -1432,26 +1433,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
         guard parts.count == 2, let index = Int(parts[1]) else { return }
         let paneId = parts[0]
+        let current =
+            AgentEventManager.shared.agent(forPaneId: paneId)?.approval
+            .effectiveSelection(local: menuMultiSelections[paneId]) ?? []
         menuMultiSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
-            menuMultiSelections[paneId] ?? [], index: index)
+            current, index: index)
     }
 
     /// Submit the menu-picked multi-select options. Disabled when empty.
     @MainActor
     @objc private func submitMultiAgent(_ sender: NSMenuItem) {
         guard let paneId = sender.representedObject as? String else { return }
-        let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-            menuMultiSelections[paneId] ?? [])
+        let effective =
+            AgentEventManager.shared.agent(forPaneId: paneId)?.approval
+            .effectiveSelection(local: menuMultiSelections[paneId]) ?? []
+        let numbers = IslandMetrics.ApprovalControls.selectionNumbers(effective)
         guard
             IslandMetrics.ApprovalControls.canSubmitMulti(
-                selection: menuMultiSelections[paneId] ?? [])
+                selection: effective)
         else {
             return
         }
         Task { @MainActor in
-            await AgentEventManager.shared.approveMulti(paneId: paneId, selections: numbers)
+            let outcome = await AgentEventManager.shared.approveMulti(
+                paneId: paneId, selections: numbers)
+            if outcome == .sent || outcome == .advanced {
+                menuMultiSelections.removeValue(forKey: paneId)
+            }
         }
-        menuMultiSelections.removeValue(forKey: paneId)
     }
 
     @MainActor
@@ -1583,7 +1592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
-        window.title = "Bantay-TUI Settings"
+        window.title = "Bantay Settings"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
@@ -1645,12 +1654,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let script = Self.uninstallScriptPath() else {
             let alert = NSAlert()
             alert.messageText = "Setup script not found"
-            alert.informativeText = "Install Bantay-TUI with scripts/setup.sh first."
+            alert.informativeText = "Install Bantay with scripts/setup.sh first."
             alert.runModal()
             return
         }
         let alert = NSAlert()
-        alert.messageText = "Uninstall Bantay-TUI?"
+        alert.messageText = "Uninstall Bantay?"
         alert.informativeText =
             "Removes the launch agent, app binary, and event history. "
             + "Your herdr sessions are untouched."

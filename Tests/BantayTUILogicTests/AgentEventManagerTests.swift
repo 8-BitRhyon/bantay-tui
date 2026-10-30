@@ -216,6 +216,7 @@
                 #expect(ev?.kind == .accessRequest)
                 #expect(ev?.variance == .multi)
                 #expect(ev?.choices?.count == 3)
+                #expect(manager.pendingApprovals["p2"]?.variance == .multi)
             }
         }
 

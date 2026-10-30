@@ -29,10 +29,11 @@
 //   session.execution.succeeded -> completed (done, throttled)
 //   session.execution.failed  -> failed
 //
-// Form answers: a decision with "choice" replies to a pending single-choice
-// or multi-select form with that one option. Multi-select Submit with
-// several picks still happens in the terminal; the notch sends keystrokes
-// for real panes, and this file route carries one explicit choice.
+// Form answers: a decision with "choice" or "selections" answers the
+// form's current field. Multi-field forms stage here: each accepted
+// decision records one field, emits the next field as a fresh waiting
+// event, and only replies to openCode once every field has an answer.
+// Real panes answer through keystrokes instead of this file.
 //
 // Every event carries a stable per-project pane id ("opencode:<project>") so
 // approvals are actionable on every Bantay surface and concurrent sessions
@@ -71,11 +72,19 @@ function makeEmitter(paneId, workspaceId) {
   };
 }
 
-function firstOptionField(form) {
+function optionFields(form) {
   const fields = Array.isArray(form?.fields) ? form.fields : [];
-  return fields.find((field) => Array.isArray(field?.options) && field.options.length > 0)
-    ?? fields[0]
-    ?? null;
+  return fields
+    .filter((field) => Array.isArray(field?.options) && field.options.length > 0)
+    .map((field) => ({
+      key: field?.key ?? "q0",
+      title: field?.title ?? null,
+      multiple: field?.type === "multiselect",
+      options: field.options.map((option) => ({
+        value: option?.value ?? option?.label ?? "",
+        label: option?.label ?? option?.value ?? "",
+      })),
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +145,18 @@ async function setup(ctx) {
     }
   }
 
+  async function emitCurrentFormField() {
+    const target = pending.form;
+    if (!target) return;
+    const field = target.fields[target.index];
+    if (!field) return;
+    await emit("waiting", target.title ?? field.title ?? "opencode has a question", {
+      message: field.title ?? undefined,
+      variance: field.options.length >= 2 ? (field.multiple ? "multi" : "choices") : undefined,
+      choices: field.options.map((option) => option.label),
+    });
+  }
+
   async function answerForm(decision) {
     const target = pending.form;
     if (!target) return false;
@@ -153,20 +174,30 @@ async function setup(ctx) {
         return false;
       }
     }
-    if (!Number.isInteger(decision.choice)) return false;
-    const option = target.options[decision.choice - 1];
-    if (!option) return false;
-    const answer = {
-      [target.fieldKey]: target.multiple ? [option.value] : option.value,
-    };
+    const field = target.fields[target.index];
+    if (!field) return false;
+    const picked = Array.isArray(decision.selections)
+      ? decision.selections
+      : (Number.isInteger(decision.choice) ? [decision.choice] : []);
+    const values = picked
+      .map((number) => field.options[number - 1]?.value)
+      .filter((value) => value !== undefined);
+    if (values.length === 0) return false;
+    target.answers[field.key] = field.multiple ? values : values[0];
+    const isLast = target.index >= target.fields.length - 1;
+    if (!isLast) {
+      target.index += 1;
+      await emitCurrentFormField();
+      return true;
+    }
     try {
       if (typeof formApi?.reply === "function") {
         await formApi.reply({
           sessionID: target.sessionID,
           formID: target.formID,
-          answer,
+          answer: target.answers,
         });
-      } else if (!(await formHttp("reply", target, answer))) {
+      } else if (!(await formHttp("reply", target, target.answers))) {
         return false;
       }
       pending.form = null;
@@ -231,24 +262,19 @@ async function setup(ctx) {
       }
       case "form.created": {
         const form = data.form ?? {};
-        const field = firstOptionField(form);
-        const options = Array.isArray(field?.options) ? field.options : [];
-        const multiple = field?.type === "multiselect";
         pending.form = {
           sessionID: form.sessionID,
           formID: form.id,
-          fieldKey: field?.key ?? "q0",
-          multiple,
-          options: options.map((option) => ({
-            value: option?.value ?? option?.label ?? "",
-            label: option?.label ?? option?.value ?? "",
-          })),
+          title: form.title ?? null,
+          fields: optionFields(form),
+          answers: {},
+          index: 0,
         };
-        await emit("waiting", form.title ?? field?.title ?? "opencode has a question", {
-          message: field?.title ?? undefined,
-          variance: options.length >= 2 ? (multiple ? "multi" : "choices") : undefined,
-          choices: options.map((option) => option?.label ?? option?.value ?? ""),
-        });
+        if (pending.form.fields.length > 0) {
+          await emitCurrentFormField();
+        } else {
+          await emit("waiting", form.title ?? "opencode has a question", {});
+        }
         break;
       }
       case "form.replied":
