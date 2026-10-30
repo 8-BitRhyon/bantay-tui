@@ -42,7 +42,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             dist/bantay-tui.zip \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Bantay-TUI $GITHUB_REF_NAME" \
+            --title "Bantay $GITHUB_REF_NAME" \
             --notes "Universal2 (Apple Silicon + Intel) app bundle. SHA256: $(shasum -a 256 dist/bantay-tui.zip | awk '{print $1}')"
         env:
           GH_TOKEN: ${{ github.token }}

@@ -178,7 +178,7 @@ enum AgentAlertNotifier {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bantay-TUI", forHTTPHeaderField: "Title")
+        request.setValue("Bantay", forHTTPHeaderField: "Title")
         request.setValue(
             kind == .accessRequest || kind == .waiting ? "high" : "default",
             forHTTPHeaderField: "Priority")

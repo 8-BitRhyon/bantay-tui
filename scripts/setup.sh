@@ -18,10 +18,10 @@ done
 if [[ "$PACKAGE" == "yes" ]]; then
   ROOT="$(cd "$(dirname "$0")/.." && pwd)"
   cd "$ROOT"
-  echo "bantay-tui: building universal release (arm64 + x86_64)..."
+  echo "bantay: building universal release (arm64 + x86_64)..."
   ARCHES=(--arch arm64 --arch x86_64)
   if ! swift build -c release "${ARCHES[@]}" 2>/dev/null; then
-    echo "bantay-tui: universal build unavailable (needs full Xcode; falling back to host arch)"
+    echo "bantay: universal build unavailable (needs full Xcode; falling back to host arch)"
     ARCHES=()
     swift build -c release || exit 1
   fi
@@ -30,7 +30,7 @@ if [[ "$PACKAGE" == "yes" ]]; then
     RELEASE_BIN="$ROOT/.build/release/bantay"
   fi
   if [[ ! -x "$RELEASE_BIN" ]]; then
-    echo "bantay-tui: release binary not found after build" >&2
+    echo "bantay: release binary not found after build" >&2
     exit 1
   fi
   DIST="$ROOT/dist"
@@ -45,9 +45,9 @@ if [[ "$PACKAGE" == "yes" ]]; then
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Bantay-TUI</string>
+    <string>Bantay</string>
     <key>CFBundleDisplayName</key>
-    <string>Bantay-TUI</string>
+    <string>Bantay</string>
     <key>CFBundleIdentifier</key>
     <string>com.bantay-tui</string>
     <key>CFBundleVersion</key>
@@ -65,7 +65,7 @@ if [[ "$PACKAGE" == "yes" ]]; then
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSRemindersUsageDescription</key>
-    <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
+    <string>Bantay syncs your task widget with Apple Reminders.</string>
     <key>CFBundleURLTypes</key>
     <array>
       <dict>
@@ -92,11 +92,11 @@ PLIST
       security import /tmp/bantay-cert.p12 -P "$P12_PASSWORD" -A -k "$KEYCHAIN" >/dev/null
       rm -f /tmp/bantay-cert.p12
     fi
-    echo "bantay-tui: signing with $CODESIGN_IDENTITY"
+    echo "bantay: signing with $CODESIGN_IDENTITY"
     codesign --force --options runtime --sign "$CODESIGN_IDENTITY" "$DIST/Bantay-TUI.app" || exit 1
     cd "$DIST" && rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
     if [[ -n "${NOTARY_PROFILE:-}" || -n "${APPLE_ID:-}" ]]; then
-      echo "bantay-tui: submitting to Apple notary..."
+      echo "bantay: submitting to Apple notary..."
       NOTARY_ARGS=()
       if [[ -n "${NOTARY_PROFILE:-}" ]]; then
         NOTARY_ARGS+=(--keychain-profile "$NOTARY_PROFILE")
@@ -116,26 +116,26 @@ PLIST
     # distribution set CODESIGN_IDENTITY (Developer ID) and notarize:
     #   xcrun notarytool submit bantay-tui.zip --keychain-profile bantay --wait
     codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$DIST/Bantay-TUI.app"
-    echo "bantay-tui: WARNING ad-hoc signed only (not notarized)."
-    echo "bantay-tui:   set CODESIGN_IDENTITY + notarize for Gatekeeper-clean distribution."
+    echo "bantay: WARNING ad-hoc signed only (not notarized)."
+    echo "bantay:   set CODESIGN_IDENTITY + notarize for Gatekeeper-clean distribution."
     cd "$DIST" && rm -f bantay-tui.zip && zip -qry bantay-tui.zip Bantay-TUI.app
   fi
   SHA="$(shasum -a 256 "$DIST/bantay-tui.zip" | awk '{print $1}')"
-  echo "bantay-tui: packaged $DIST/bantay-tui.zip"
-  echo "bantay-tui: sha256 $SHA (update Cask/bantay-tui.rb)"
+  echo "bantay: packaged $DIST/bantay-tui.zip"
+  echo "bantay: sha256 $SHA (update Cask/bantay-tui.rb)"
   if ! lipo -archs "$STAGE/MacOS/bantay" | grep -q "x86_64"; then
-    echo "bantay-tui: WARNING binary is $(lipo -archs "$STAGE/MacOS/bantay" | tr '\n' ' ')-only --"
-    echo "bantay-tui:   universal2 requires full Xcode. Intel Macs need the CI release build."
+    echo "bantay: WARNING binary is $(lipo -archs "$STAGE/MacOS/bantay" | tr '\n' ' ')-only --"
+    echo "bantay:   universal2 requires full Xcode. Intel Macs need the CI release build."
   fi
   exit 0
 fi
 
 if [[ "$UNINSTALL" == "yes" ]]; then
   if [[ ! -e "$AGENTS_PLIST" && ! -d "$DATA_DIR" ]]; then
-    echo "bantay-tui: nothing installed; nothing to do."
+    echo "bantay: nothing installed; nothing to do."
     exit 0
   fi
-  echo "bantay-tui: uninstalling..."
+  echo "bantay: uninstalling..."
   launchctl bootout gui/$(id -u)/com.bantay-tui.agent 2>/dev/null || \
     launchctl unload "$AGENTS_PLIST" 2>/dev/null || true
   # give launchd a beat to release the running binary
@@ -146,7 +146,7 @@ if [[ "$UNINSTALL" == "yes" ]]; then
   rm -f "$EVENTS_FILE"
   rm -f "$DATA_DIR/bantay.log" "$DATA_DIR/bantay.err"
   rmdir "$DATA_DIR" 2>/dev/null || true
-  echo "bantay-tui: removed; launch agent, app binary, and event history deleted."
+  echo "bantay: removed; launch agent, app binary, and event history deleted."
   exit 0
 fi
 
@@ -155,7 +155,7 @@ touch "$EVENTS_FILE"
 # Events carry agent shell commands — keep them user-private.
 chmod 600 "$EVENTS_FILE"
 
-echo "bantay-tui: data directory ready at $DATA_DIR"
+echo "bantay: data directory ready at $DATA_DIR"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BINARY="$ROOT/.build/release/bantay"
@@ -165,8 +165,8 @@ elif [[ ! -x "$BINARY" ]]; then
   BINARY="$ROOT/.build/debug/bantay"
 fi
 if [[ ! -x "$BINARY" ]]; then
-  echo "bantay-tui: binary not found at $BINARY -- build with 'swift build' first"
-  echo "bantay-tui: skipping launch agent install"
+  echo "bantay: binary not found at $BINARY -- build with 'swift build' first"
+  echo "bantay: skipping launch agent install"
   exit 0
 fi
 
@@ -197,9 +197,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Bantay-TUI</string>
+    <string>Bantay</string>
     <key>CFBundleDisplayName</key>
-    <string>Bantay-TUI</string>
+    <string>Bantay</string>
     <key>CFBundleIdentifier</key>
     <string>com.bantay-tui</string>
     <key>CFBundleVersion</key>
@@ -217,7 +217,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSRemindersUsageDescription</key>
-    <string>Bantay-TUI syncs your task widget with Apple Reminders.</string>
+    <string>Bantay syncs your task widget with Apple Reminders.</string>
     <key>CFBundleURLTypes</key>
     <array>
       <dict>
@@ -249,18 +249,18 @@ fi
 if [[ -z "$SIGN_IDENTITY" ]]; then
   if [[ "${BANTAY_ALLOW_ADHOC:-0}" == "1" ]]; then
     SIGN_IDENTITY="-"
-    echo "bantay-tui: no signing identity; using ad-hoc (BANTAY_ALLOW_ADHOC=1)." >&2
-    echo "bantay-tui: permissions will reset on every rebuild." >&2
+    echo "bantay: no signing identity; using ad-hoc (BANTAY_ALLOW_ADHOC=1)." >&2
+    echo "bantay: permissions will reset on every rebuild." >&2
   else
-    echo "bantay-tui: no stable signing identity available." >&2
-    echo "bantay-tui: run scripts/ensure-dev-signing-identity.sh, then retry." >&2
-    echo "bantay-tui: set BANTAY_ALLOW_ADHOC=1 to accept ad-hoc signing." >&2
+    echo "bantay: no stable signing identity available." >&2
+    echo "bantay: run scripts/ensure-dev-signing-identity.sh, then retry." >&2
+    echo "bantay: set BANTAY_ALLOW_ADHOC=1 to accept ad-hoc signing." >&2
     exit 1
   fi
 fi
-echo "bantay-tui: codesigning $APP_BUNDLE with identifier com.bantay-tui"
+echo "bantay: codesigning $APP_BUNDLE with identifier com.bantay-tui"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
-  echo "bantay-tui: signed-with: ad-hoc (permissions reset on rebuild)"
+  echo "bantay: signed-with: ad-hoc (permissions reset on rebuild)"
   codesign --force --deep --sign - -r='designated => identifier "com.bantay-tui"' "$APP_BUNDLE"
 else
   # Unlock the dedicated dev-signing keychain non-interactively so codesign
@@ -282,7 +282,7 @@ else
   else
     codesign --force --sign "$SIGN_IDENTITY" --identifier "com.bantay-tui" "$APP_BUNDLE"
   fi
-  echo "bantay-tui: signed-with: $SIGN_IDENTITY (permissions survive rebuilds)"
+  echo "bantay: signed-with: $SIGN_IDENTITY (permissions survive rebuilds)"
 fi
 
 # TCC grants are keyed to the signed requirement, not the bundle ID. Writing
@@ -342,4 +342,4 @@ if [[ -d "$HOME/.local/bin" ]]; then
   ln -sf "$LAUNCH_BIN" "$HOME/.local/bin/bantay"
 fi
 
-echo "bantay-tui: launch agent installed at $AGENTS_PLIST (binary: $INSTALLED_BIN)"
+echo "bantay: launch agent installed at $AGENTS_PLIST (binary: $INSTALLED_BIN)"

@@ -34,7 +34,7 @@ KEYCHAIN="${BANTAY_DEV_KEYCHAIN:-$CONFIG_DIR/signing.keychain-db}"
 PW_FILE="$CONFIG_DIR/.signing-keychain-pass"
 
 if [[ "${BANTAY_DISABLE_DEV_SIGNING:-0}" == "1" ]]; then
-    echo "bantay-tui: local signing disabled by BANTAY_DISABLE_DEV_SIGNING" >&2
+    echo "bantay: local signing disabled by BANTAY_DISABLE_DEV_SIGNING" >&2
     exit 1
 fi
 
@@ -52,7 +52,7 @@ PW="$(cat "$PW_FILE")"
 # looks healthy until codesign runs and fails — and a failed sign falls back
 # to ad-hoc, which changes the TCC requirement and re-prompts.
 if [[ -f "$KEYCHAIN" ]] && ! security unlock-keychain -p "$PW" "$KEYCHAIN" >/dev/null 2>&1; then
-    echo "bantay-tui: signing keychain password is stale; recreating it." >&2
+    echo "bantay: signing keychain password is stale; recreating it." >&2
     rm -f "$KEYCHAIN" "$KEYCHAIN"-db "$KEYCHAIN"-shm "$CONFIG_DIR/dev-signing.crt"
     openssl rand -hex 32 > "$PW_FILE"
     chmod 600 "$PW_FILE"
@@ -74,7 +74,7 @@ security unlock-keychain -p "$PW" "$KEYCHAIN" >/dev/null
 if ! IDENTITY_HASH="$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null \
     | awk -v name="$IDENTITY_NAME" 'index($0, "\"" name "\"") && $1 ~ /^[0-9]+\)$/ {print $2; exit}')" \
     || [[ -z "$IDENTITY_HASH" ]]; then
-    echo "bantay-tui: creating local code-signing identity \"$IDENTITY_NAME\"..." >&2
+    echo "bantay: creating local code-signing identity \"$IDENTITY_NAME\"..." >&2
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/bantay-signing.XXXXXX")"
     trap 'rm -rf "$WORK"' EXIT
 
@@ -113,9 +113,9 @@ fi
 if ! IDENTITY_HASH="$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null \
     | awk -v name="$IDENTITY_NAME" 'index($0, "\"" name "\"") && $1 ~ /^[0-9]+\)$/ {print $2; exit}')" \
     || [[ -z "$IDENTITY_HASH" ]]; then
-    echo "bantay-tui: identity created but not trusted yet." >&2
-    echo "bantay-tui: open Keychain Access, select \"$IDENTITY_NAME\"," >&2
-    echo "bantay-tui: then Trust > Code Signing > Always Trust." >&2
+    echo "bantay: identity created but not trusted yet." >&2
+    echo "bantay: open Keychain Access, select \"$IDENTITY_NAME\"," >&2
+    echo "bantay: then Trust > Code Signing > Always Trust." >&2
     exit 1
 fi
 

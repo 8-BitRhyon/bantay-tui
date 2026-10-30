@@ -1,6 +1,6 @@
-# Bantay-TUI Development Plan
+# Bantay Development Plan
 
-Roadmap and current state for the Bantay-TUI macOS agentic control plane and workspace manager. Tracks against the architecture defined in [ARCHITECTURE.md](ARCHITECTURE.md).
+Roadmap and current state for the Bantay macOS agentic control plane and workspace manager. Tracks against the architecture defined in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Current State
 

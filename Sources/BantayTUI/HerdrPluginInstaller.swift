@@ -50,7 +50,7 @@ enum HerdrPluginInstaller {
         let adapterPath = dataDir + "/" + adapterFileName
         return [
             "id = \"\(pluginID)\"",
-            "name = \"Bantay-TUI Integration\"",
+            "name = \"Bantay Integration\"",
             "version = \"0.1.0\"",
             "min_herdr_version = \"0.7.0\"",
             "description = \"Native SwiftUI agent-status display in macOS notch, reading Herdr lifecycle events.\"",

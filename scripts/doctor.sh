@@ -15,7 +15,7 @@ DEV_KEYCHAIN="${BANTAY_DEV_KEYCHAIN:-$HOME/.config/bantay/signing.keychain-db}"
 PW_FILE="$HOME/.config/bantay/.signing-keychain-pass"
 IDENTITY_NAME="${BANTAY_DEV_SIGNING_IDENTITY:-Bantay Local Dev}"
 
-echo "bantay-tui doctor"
+echo "bantay doctor"
 echo
 
 echo "app: $APP"
