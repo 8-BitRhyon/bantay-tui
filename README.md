@@ -1,9 +1,9 @@
-# Bantay-TUI: Agentic Control Plane in Your Notch
+# Bantay: Agentic Control Plane in Your Notch
 
 [![CI](https://github.com/8-BitRhyon/bantay-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/8-BitRhyon/bantay-tui/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Bantay-TUI is a native macOS application for managing AI coding agents. It places an interactive control plane directly in the MacBook notch. You can monitor progress, review code diffs, approve actions, and tile windows without leaving your current task.
+Bantay is a native macOS application for managing AI coding agents. It places an interactive control plane directly in the MacBook notch. You can monitor progress, review code diffs, approve actions, and tile windows without leaving your current task.
 
 Bantay supports agents running in Herdr, tmux, Zellij, standard terminals, and desktop IDEs. It shows live status when an agent is working, blocked, or complete. You can approve requests with one click or key press.
 

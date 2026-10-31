@@ -1,5 +1,5 @@
 id = "bantay-tui.integration"
-name = "Bantay-TUI Integration"
+name = "Bantay Integration"
 version = "0.1.0"
 min_herdr_version = "0.7.0"
 description = "Native SwiftUI agent-status display in macOS notch, reading Herdr lifecycle events."
@@ -7,7 +7,7 @@ platforms = ["macos"]
 
 [[actions]]
 id = "setup"
-title = "Bantay-TUI: install agent event adapter"
+title = "Bantay: install agent event adapter"
 contexts = ["workspace"]
 command = ["sh", "scripts/setup.sh"]
 

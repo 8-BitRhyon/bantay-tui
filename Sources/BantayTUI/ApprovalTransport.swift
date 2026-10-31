@@ -42,6 +42,10 @@ enum ApprovalFailure: String, Equatable, Sendable {
 /// that requires a protocol-level acknowledgment Bantay does not have yet.
 enum ApprovalOutcome: Equatable, Sendable {
     case sent
+    /// The answer reached the agent, but its form advanced to the next
+    /// question (or a follow-on step) instead of finishing. The prompt
+    /// stays open on the new question; nothing is acknowledged yet.
+    case advanced
     case failed(ApprovalFailure)
 
     var isSent: Bool { self == .sent }

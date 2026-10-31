@@ -1,6 +1,6 @@
-# Bantay-TUI: Architecture
+# Bantay: Architecture
 
-Bantay-TUI is a native macOS application for managing AI coding agents. It anchors a control plane to the MacBook notch. The application provides agent telemetry, inline approvals, window tiling, and process automation. It supports Herdr, tmux, Zellij, terminal shells, and desktop GUI IDEs.
+Bantay is a native macOS application for managing AI coding agents. It anchors a control plane to the MacBook notch. The application provides agent telemetry, inline approvals, window tiling, and process automation. It supports Herdr, tmux, Zellij, terminal shells, and desktop GUI IDEs.
 
 ## System Overview
 

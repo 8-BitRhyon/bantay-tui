@@ -8,12 +8,21 @@ public struct ChoiceOption: Identifiable, Equatable, Sendable {
     /// option's consequence here, which is the context the user needs to
     /// choose well. Nil when the prompt has no description.
     public let detail: String?
+    /// Whether the terminal already shows this option checked.
+    public let isSelected: Bool
+    /// Whether the terminal cursor is on this option, when it prints one.
+    public let isFocused: Bool
 
-    public init(id: Int, label: String, fullText: String, detail: String? = nil) {
+    public init(
+        id: Int, label: String, fullText: String, detail: String? = nil,
+        isSelected: Bool = false, isFocused: Bool = false
+    ) {
         self.id = id
         self.label = label
         self.fullText = fullText
         self.detail = detail
+        self.isSelected = isSelected
+        self.isFocused = isFocused
     }
 }
 
@@ -96,9 +105,17 @@ public enum ChoiceExtractor {
             let (line, indent) = gutterSplit(rawLine)
             guard !line.isEmpty else { continue }
 
-            // Clean leading prompt symbols (▸, >, *, bullet)
+            // Clean leading prompt symbols. A cursor glyph also tells us
+            // which row the terminal will act on with Space or Enter.
             var cleanLine = line
-            if cleanLine.hasPrefix("▸") || cleanLine.hasPrefix(">") || cleanLine.hasPrefix("*") {
+            var isFocused = false
+            if cleanLine.hasPrefix("❯") || cleanLine.hasPrefix("›")
+                || cleanLine.hasPrefix("▸") || cleanLine.hasPrefix(">")
+                || cleanLine.hasPrefix("*")
+            {
+                isFocused =
+                    cleanLine.hasPrefix("❯") || cleanLine.hasPrefix("›")
+                    || cleanLine.hasPrefix("▸")
                 cleanLine = String(cleanLine.dropFirst()).trimmingCharacters(in: .whitespaces)
             }
 
@@ -110,7 +127,9 @@ public enum ChoiceExtractor {
                     options.removeAll()
                 }
                 options.append(
-                    ChoiceOption(id: match.number, label: match.label, fullText: cleanLine))
+                    ChoiceOption(
+                        id: match.number, label: match.label, fullText: cleanLine,
+                        isSelected: match.selected, isFocused: isFocused))
                 lastNumber = match.number
                 detailTarget = options.count - 1
                 detailIndent = indent
@@ -123,7 +142,9 @@ public enum ChoiceExtractor {
                     options.removeAll()
                 }
                 options.append(
-                    ChoiceOption(id: match.number, label: match.label, fullText: cleanLine))
+                    ChoiceOption(
+                        id: match.number, label: match.label, fullText: cleanLine,
+                        isSelected: match.selected, isFocused: isFocused))
                 lastNumber = match.number
                 detailTarget = options.count - 1
                 detailIndent = indent
@@ -131,9 +152,11 @@ public enum ChoiceExtractor {
             }
 
             // Pattern 3: Radio button or checkbox (e.g. "( ) Option", "(x) Option", "[ ] Option")
-            if let label = matchRadio(cleanLine) {
+            if let radio = matchRadio(cleanLine) {
                 options.append(
-                    ChoiceOption(id: options.count + 1, label: label, fullText: cleanLine))
+                    ChoiceOption(
+                        id: options.count + 1, label: radio.label, fullText: cleanLine,
+                        isSelected: radio.selected, isFocused: isFocused))
                 lastNumber = options.count
                 detailTarget = options.count - 1
                 detailIndent = indent
@@ -169,7 +192,9 @@ public enum ChoiceExtractor {
             id: options[index].id,
             label: options[index].label,
             fullText: options[index].fullText,
-            detail: capped)
+            detail: capped,
+            isSelected: options[index].isSelected,
+            isFocused: options[index].isFocused)
     }
 
     /// Footer and key-hint rows can sit under an option without being part of
@@ -184,7 +209,9 @@ public enum ChoiceExtractor {
         return prefixes.contains { lower.hasPrefix($0) }
     }
 
-    private static func matchNumbered(_ line: String) -> (number: Int, label: String)? {
+    private static func matchNumbered(_ line: String) -> (
+        number: Int, label: String, selected: Bool
+    )? {
         guard
             let match = numberedRegex.firstMatch(
                 in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)),
@@ -192,12 +219,15 @@ public enum ChoiceExtractor {
             let labelRange = Range(match.range(at: 2), in: line),
             let number = Int(line[idRange])
         else { return nil }
-        let label = cleanedLabel(String(line[labelRange]))
+        let rawLabel = String(line[labelRange])
+        let label = cleanedLabel(rawLabel)
         guard !label.isEmpty else { return nil }
-        return (number, label)
+        return (number, label, checkboxSelection(in: rawLabel) ?? false)
     }
 
-    private static func matchBracketed(_ line: String) -> (number: Int, label: String)? {
+    private static func matchBracketed(_ line: String) -> (
+        number: Int, label: String, selected: Bool
+    )? {
         guard
             let match = bracketedRegex.firstMatch(
                 in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)),
@@ -205,12 +235,13 @@ public enum ChoiceExtractor {
             let labelRange = Range(match.range(at: 2), in: line),
             let number = Int(line[idRange])
         else { return nil }
-        let label = cleanedLabel(String(line[labelRange]))
+        let rawLabel = String(line[labelRange])
+        let label = cleanedLabel(rawLabel)
         guard !label.isEmpty else { return nil }
-        return (number, label)
+        return (number, label, checkboxSelection(in: rawLabel) ?? false)
     }
 
-    private static func matchRadio(_ line: String) -> String? {
+    private static func matchRadio(_ line: String) -> (label: String, selected: Bool)? {
         guard
             let match = radioRegex.firstMatch(
                 in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)),
@@ -218,7 +249,31 @@ public enum ChoiceExtractor {
         else { return nil }
         let label = cleanedLabel(String(line[labelRange]))
         guard !label.isEmpty else { return nil }
-        return label
+        return (
+            label,
+            checkboxSelection(in: line) ?? !line.hasPrefix("[ ]")
+                && !line.hasPrefix("( )") && !line.hasPrefix("☐")
+        )
+    }
+
+    /// Checked state from a leading checkbox marker, or nil when the label
+    /// does not start with one. `[1]` is an option number, not a checkbox.
+    private static func checkboxSelection(in raw: String) -> Bool? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first, first == "[" || first == "(" else {
+            if trimmed.hasPrefix("☑") || trimmed.hasPrefix("✓") || trimmed.hasPrefix("✔") {
+                return true
+            }
+            if trimmed.hasPrefix("☐") { return false }
+            return nil
+        }
+        guard let marker = trimmed.dropFirst().first, !marker.isNumber else { return nil }
+        if marker == " " { return false }
+        let lower = marker.lowercased()
+        if lower == "x" || marker == "*" || marker == "✓" || marker == "✔" {
+            return true
+        }
+        return nil
     }
 
     /// `1. [ ] Cheese` describes a multi-select row, not a choice whose label

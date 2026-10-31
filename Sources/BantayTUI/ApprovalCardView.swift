@@ -180,14 +180,16 @@ struct ApprovalCardView: View {
         VStack(spacing: 4) {
             ForEach(Array(choiceOptions.enumerated()), id: \.offset) { index, label in
                 let number = IslandMetrics.ApprovalControls.optionNumber(forIndex: index)
+                let effective = agent.approval.effectiveSelection(
+                    local: queueSelections[paneId])
                 let isSelected =
                     agent.approval.isMulti
-                    && queueSelections[paneId]?.contains(number) == true
+                    && effective.contains(number)
                 Button {
                     if agent.approval.isMulti {
                         queueSelections[paneId] =
                             IslandMetrics.ApprovalControls.toggling(
-                                queueSelections[paneId] ?? [], index: index)
+                                effective, index: index)
                     } else {
                         Task { @MainActor in
                             await manager.approveChoice(paneId: paneId, choice: number)
@@ -292,12 +294,15 @@ struct ApprovalCardView: View {
 
     private var submitButton: some View {
         let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-            queueSelections[paneId] ?? [])
+            agent.approval.effectiveSelection(local: queueSelections[paneId]))
         return Button {
             Task { @MainActor in
-                await manager.approveMulti(paneId: paneId, selections: numbers)
+                let outcome = await manager.approveMulti(
+                    paneId: paneId, selections: numbers)
+                if outcome == .sent || outcome == .advanced {
+                    queueSelections.removeValue(forKey: paneId)
+                }
             }
-            queueSelections.removeValue(forKey: paneId)
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "checkmark")

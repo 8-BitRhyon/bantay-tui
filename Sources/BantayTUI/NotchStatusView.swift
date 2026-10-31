@@ -699,11 +699,15 @@ struct NotchStatusView: View {
             // card open with its reason instead of dismissing.
             if agent.approval.isMulti {
                 let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-                    queueSelections[paneId] ?? [])
+                    agent.approval.effectiveSelection(local: queueSelections[paneId]))
                 Task { @MainActor in
-                    await eventManager.approveMulti(paneId: paneId, selections: numbers)
+                    let outcome = await eventManager.approveMulti(
+                        paneId: paneId, selections: numbers)
+                    if outcome == .sent || outcome == .advanced {
+                        queueSelections.removeValue(forKey: paneId)
+                    }
+                    noteSendOutcome(outcome)
                 }
-                queueSelections.removeValue(forKey: paneId)
             } else {
                 Task { @MainActor in
                     await eventManager.approve(paneId: paneId)
@@ -1674,8 +1678,23 @@ struct NotchStatusView: View {
             .joined(separator: "\n")
         let extracted = ChoiceExtractor.extractChoices(from: text)
         guard extracted.count >= 2 else { return base }
+        // A multi signal from the roster or the event survives this
+        // fallback parse; otherwise checkbox rows collapse into a
+        // single-choice card and a tap toggles without submitting.
+        let isMulti =
+            base.variance == .multi || event.variance == .multi
+            || extracted.contains { $0.isSelected }
+            || text.contains("[ ]") || text.contains("☐")
         return IslandMetrics.ApprovalControls.make(
-            variance: .choices, choices: extracted.map(\.label))
+            variance: isMulti ? .multi : .choices,
+            choices: extracted.map(\.label),
+            initialSelections: Set(
+                extracted.enumerated()
+                    .filter { $0.element.isSelected }
+                    .map { $0.offset + 1 }),
+            focusedChoice: extracted.enumerated()
+                .first { $0.element.isFocused }
+                .map { $0.offset + 1 })
     }
 
     /// A notification may approve only when the event is a real permission
@@ -1703,7 +1722,7 @@ struct NotchStatusView: View {
     ) -> some View {
         if controls.isMulti {
             notificationMultiSubmit(
-                event: event, paneId: paneId, resolving: resolving)
+                event: event, paneId: paneId, controls: controls, resolving: resolving)
         } else if controls.isYesNo {
             notificationActionButton(
                 title: "Approve", systemName: "checkmark", color: .green,
@@ -1741,7 +1760,7 @@ struct NotchStatusView: View {
     ) -> some View {
         let cap = IslandMetrics.ApprovalControls.maxDisplayedOptions
         let options = Array(controls.choices.prefix(cap))
-        let selection = queueSelections[paneId] ?? []
+        let selection = controls.effectiveSelection(local: queueSelections[paneId])
         let custom = controls.customChoiceNumber
         VStack(alignment: .leading, spacing: 3) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, label in
@@ -1795,9 +1814,10 @@ struct NotchStatusView: View {
     /// option is picked; the picked numbers read back in the help text.
     @ViewBuilder
     private func notificationMultiSubmit(
-        event: AgentEvent, paneId: String, resolving: Bool
+        event: AgentEvent, paneId: String,
+        controls: IslandMetrics.ApprovalControls, resolving: Bool
     ) -> some View {
-        let selection = queueSelections[paneId] ?? []
+        let selection = controls.effectiveSelection(local: queueSelections[paneId])
         let numbers = IslandMetrics.ApprovalControls.selectionNumbers(selection)
         let canSubmit = IslandMetrics.ApprovalControls.canSubmitMulti(selection: selection)
         approvalActionButton(
@@ -1877,9 +1897,13 @@ struct NotchStatusView: View {
             Spacer(minLength: 8)
             switch surface {
             case .permission:
-                approvalActions(variance: variance, choices: choices, paneId: paneId)
+                approvalActions(
+                    variance: variance, choices: choices, paneId: paneId,
+                    initialSelections: agent?.approval.initialSelections ?? [])
             case .question where variance != .yesNo:
-                approvalActions(variance: variance, choices: choices, paneId: paneId)
+                approvalActions(
+                    variance: variance, choices: choices, paneId: paneId,
+                    initialSelections: agent?.approval.initialSelections ?? [])
             default:
                 approvalActionButton(
                     systemName: "doc.text.magnifyingglass", color: .white.opacity(0.8),
@@ -1914,7 +1938,8 @@ struct NotchStatusView: View {
 
     @ViewBuilder
     private func approvalActions(
-        variance: ApprovalVariance, choices: [String], paneId: String
+        variance: ApprovalVariance, choices: [String], paneId: String,
+        initialSelections: Set<Int> = []
     ) -> some View {
         let resolving = eventManager.isResolving(paneId: paneId)
         switch variance {
@@ -2006,12 +2031,14 @@ struct NotchStatusView: View {
             ForEach(0..<choices.count, id: \.self) { index in
                 approvalActionButton(
                     label: Text("\(index + 1)"),
-                    color: queueSelections[paneId]?.contains(index + 1) == true
+                    color: (queueSelections[paneId] ?? initialSelections)
+                        .contains(index + 1)
                         ? .green : .white.opacity(0.6),
                     help: choices[index]
                 ) {
                     queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
-                        queueSelections[paneId] ?? [], index: index)
+                        queueSelections[paneId] ?? initialSelections,
+                        index: index)
                 }
             }
             approvalActionButton(
@@ -2019,13 +2046,15 @@ struct NotchStatusView: View {
                 disabled: resolving
             ) {
                 let numbers = IslandMetrics.ApprovalControls.selectionNumbers(
-                    queueSelections[paneId] ?? [])
+                    queueSelections[paneId] ?? initialSelections)
                 Task { @MainActor in
-                    noteSendOutcome(
-                        await eventManager.approveMulti(
-                            paneId: paneId, selections: numbers))
+                    let outcome = await eventManager.approveMulti(
+                        paneId: paneId, selections: numbers)
+                    noteSendOutcome(outcome)
+                    if outcome == .sent || outcome == .advanced {
+                        queueSelections.removeValue(forKey: paneId)
+                    }
                 }
-                queueSelections.removeValue(forKey: paneId)
             }
         }
     }
@@ -2695,7 +2724,7 @@ struct NotchStatusView: View {
     /// same buttons retry.
     private func noteSendOutcome(_ outcome: AgentEventManager.ActionResult) {
         switch outcome {
-        case .sent:
+        case .sent, .advanced:
             cardFailure = nil
         case .failed(let failure):
             cardFailure = failure.message
@@ -2740,6 +2769,14 @@ struct NotchStatusView: View {
                 cardRetry = nil
                 commitTask = nil
                 commitSent(onSent)
+            case .advanced:
+                // The form moved to its next question. Keep the card,
+                // drop the picks for the field just answered, and let
+                // the refreshed pending prompt re-render in place.
+                cardFailure = nil
+                cardRetry = nil
+                commitTask = nil
+                queueSelections.removeValue(forKey: paneId)
             case .failed(let failure):
                 commitTask = nil
                 cardFailure = failure.message
@@ -2808,6 +2845,9 @@ struct NotchStatusView: View {
             switch outcome {
             case .sent:
                 showComposeNotice("Sent to \(label)")
+                cancelComposing()
+            case .advanced:
+                showComposeNotice("Sent. \(label) has a follow-up question.")
                 cancelComposing()
             case .failed(let failure):
                 // Never clear a draft that did not reach the agent.

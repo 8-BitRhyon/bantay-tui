@@ -323,8 +323,8 @@
         func suppressesHostnames() {
             #expect(IslandMetrics.isSuppressedGarbage("MacBook-Pro.local"))
             #expect(IslandMetrics.cleanHUDText("MacBook-Pro.local") == "")
-            #expect(IslandMetrics.isSuppressedGarbage("rhyon@mbp:~$"))
-            #expect(IslandMetrics.cleanHUDText("rhyon@mbp:~$") == "")
+            #expect(IslandMetrics.isSuppressedGarbage("testuser@mbp:~$"))
+            #expect(IslandMetrics.cleanHUDText("testuser@mbp:~$") == "")
         }
 
         @Test("strips progress bars and percentages")
@@ -355,6 +355,23 @@
                 IslandMetrics.notificationQueuePruneUnblocked(
                     queue, blockedPaneKeys: []
                 ).isEmpty)
+        }
+
+        @Test("multi-select starts from terminal state and plans toggles")
+        func multiSelectStateAndTogglePlan() {
+            let controls = IslandMetrics.ApprovalControls.make(
+                variance: .multi,
+                choices: ["A", "B", "C", "D"],
+                initialSelections: [2])
+            #expect(controls.effectiveSelection(local: nil) == [2])
+            #expect(controls.effectiveSelection(local: []) == [])
+            #expect(
+                IslandMetrics.ApprovalControls.checkboxToggleKeys(
+                    focusedChoice: 2,
+                    initialSelections: [2],
+                    desiredSelections: [1, 2, 4],
+                    optionCount: 4)
+                    == ["up", "space", "down", "down", "down", "space", "enter"])
         }
 
         @Test("transient notices wait for a settled finish")

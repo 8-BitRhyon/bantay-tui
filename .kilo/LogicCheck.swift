@@ -970,6 +970,46 @@ struct LogicCheckMain {
             IslandMetrics.notificationQueuePruneUnblocked(
                 [qWait], blockedPaneKeys: []).isEmpty,
             "L146 prune drops a waiting card whose pane is gone")
+
+        let multiState = ApprovalPromptResolver.resolve(
+            rawTail: """
+                ┃  Pick B
+                ┃
+                ┃  ❯ 1. [✓] B1
+                ┃    2. [ ] B2
+                ┃    3. [x] B3
+                ┃
+                ┃  ⇆ tab  ↑↓ select  enter toggle  esc dismiss
+                """,
+            kind: .waiting)
+        check(
+            multiState.selectedChoices == [1, 3],
+            "L147 checked rows round-trip from the terminal")
+        check(
+            multiState.focusedChoice == 1,
+            "L147 focused row round-trips from the terminal")
+        check(
+            ApprovalPromptResolver.isReviewState(
+                """
+                ┃  Sequence check
+                ┃  Pick A  Pick B  Submit
+                ┃  Pick A: A2
+                ┃  Pick B: B1, B3
+                ┃  ⇆ tab  enter submit  esc dismiss
+                """),
+            "L147 review step is detected before the final Enter")
+        let toggleControls = IslandMetrics.ApprovalControls.make(
+            variance: .multi, choices: ["A", "B", "C", "D"], initialSelections: [2])
+        check(
+            toggleControls.effectiveSelection(local: nil) == [2]
+                && toggleControls.effectiveSelection(local: []) == [],
+            "L147 surfaces start from terminal picks until the user edits")
+        check(
+            IslandMetrics.ApprovalControls.checkboxToggleKeys(
+                focusedChoice: 2, initialSelections: [2],
+                desiredSelections: [1, 2, 4], optionCount: 4)
+                == ["up", "space", "down", "down", "down", "space", "enter"],
+            "L147 checkbox plan only toggles rows that must change")
         check(
             !IslandMetrics.transientNoticeShouldShow(agentKind: .progress),
             "L143 resumed agent suppresses the done popup")
@@ -6555,7 +6595,7 @@ struct LogicCheckMain {
 
         // L89 HUD Text Sanitization Test (Markdown links, escaped newlines, file URLs)
         let rawMarkdown =
-            "I updated [implementation_plan.md](file:///Users/rhyon/...)\\nPath: file:///Users/rhyon/test.txt"
+            "I updated [implementation_plan.md](file:///Users/test/...)\\nPath: file:///Users/test/test.txt"
         let cleanResult = IslandMetrics.cleanHUDText(rawMarkdown)
         check(
             !cleanResult.contains("[implementation_plan.md]"),
@@ -6802,13 +6842,13 @@ struct LogicCheckMain {
 
         // L113 HUD text path compaction and log envelope stripping
         let rawLogPath =
-            "timestamp=2026-09-07T10:50:31.705Z level=INFO run=5baa8966 message=Editing /Users/rhyon/Projects/bantay-tui/Sources/BantayTUI/MascotModel.swift"
+            "timestamp=2026-09-07T10:50:31.705Z level=INFO run=5baa8966 message=Editing /Users/test/Projects/bantay-tui/Sources/BantayTUI/MascotModel.swift"
         let compacted = IslandMetrics.cleanHUDText(rawLogPath)
         check(
             !compacted.contains("timestamp="),
             "L113 cleanHUDText strips timestamp log envelope")
         check(
-            !compacted.contains("/Users/rhyon"),
+            !compacted.contains("/Users/test"),
             "L113 cleanHUDText strips full directory paths")
         check(
             compacted.contains("MascotModel.swift"),
@@ -6816,7 +6856,7 @@ struct LogicCheckMain {
 
         // L114 Kilo extension server filter & isWorking gate
         let kiloServerCmd =
-            "/Users/rhyon/.antigravity-ide/extensions/kilocode.kilo-code-7.5.15-darwin-arm64/bin/kilo serve --port 0"
+            "/Users/test/.antigravity-ide/extensions/kilocode.kilo-code-7.5.15-darwin-arm64/bin/kilo serve --port 0"
         check(
             AgentDetector.canonicalNameFromCommand(kiloServerCmd) == nil,
             "L114 kilo serve --port 0 is filtered out from standalone agents")
@@ -6849,7 +6889,7 @@ struct LogicCheckMain {
 
         // L116 Agent HUD text refinement and Kilo idle activity gate
         let toolCallLine = """
-            {"tool_calls":[{"toolSummary":"File edit","toolAction":"Editing file","args":{"TargetFile":"/Users/rhyon/Bantay/RemindersProvider.swift"}}]}
+            {"tool_calls":[{"toolSummary":"File edit","toolAction":"Editing file","args":{"TargetFile":"/Users/test/Bantay/RemindersProvider.swift"}}]}
             """
         let cleanTool = AgentDetector.readableLine(toolCallLine)
         check(
@@ -7032,7 +7072,7 @@ struct LogicCheckMain {
 
         // MARK: - L123 Antigravity Transcript & Standalone Agent Parsing
         let agyStep10230 =
-            "{\"step_index\":10230,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-09-10T08:38:20Z\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"\\\"codesign --verify --deep --strict \\\\\\\"$HOME/Library/Application Support/Bantay-TUI/Bantay-TUI.app\\\\\\\"\\\"\",\"Cwd\":\"\\\"/Users/rhyon/Downloads/Self Curated CS Curriculum/Projects/bantay-tui\\\"\",\"WaitMsBeforeAsync\":\"5000\",\"toolAction\":\"\\\"Verifying bundle codesign\\\"\",\"toolSummary\":\"\\\"Verify strict codesign\\\"\"}}]}"
+            "{\"step_index\":10230,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-09-10T08:38:20Z\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"\\\"codesign --verify --deep --strict \\\\\\\"$HOME/Library/Application Support/Bantay-TUI/Bantay-TUI.app\\\\\\\"\\\"\",\"Cwd\":\"\\\"/Users/test/Downloads/Self Curated CS Curriculum/Projects/bantay-tui\\\"\",\"WaitMsBeforeAsync\":\"5000\",\"toolAction\":\"\\\"Verifying bundle codesign\\\"\",\"toolSummary\":\"\\\"Verify strict codesign\\\"\"}}]}"
         let agyReadable = AgentDetector.readableLine(agyStep10230)
         check(
             agyReadable == "Verify strict codesign",
@@ -7040,7 +7080,7 @@ struct LogicCheckMain {
         )
         let agyCwd = AgentDetector.extractCwd(agyStep10230)
         check(
-            agyCwd == "/Users/rhyon/Downloads/Self Curated CS Curriculum/Projects/bantay-tui",
+            agyCwd == "/Users/test/Downloads/Self Curated CS Curriculum/Projects/bantay-tui",
             "L123 Antigravity extracts cwd correctly")
 
         let agyThinking = "{\"thinking\":\"**Analyzing Command Sequence**\\n\\nDetails...\"}"
@@ -7124,24 +7164,24 @@ struct LogicCheckMain {
         check(AgentDetector.cleanUnquoted(nil) == nil, "L125 nil returns nil")
 
         // MARK: - L126 CWD Extraction with Spaces, Escaped Quotes, and Tool Calls
-        let cwdTop = "{\"cwd\":\"/Users/rhyon/My Projects/bantay-tui\"}"
+        let cwdTop = "{\"cwd\":\"/Users/test/My Projects/bantay-tui\"}"
         check(
-            AgentDetector.extractCwd(cwdTop) == "/Users/rhyon/My Projects/bantay-tui",
+            AgentDetector.extractCwd(cwdTop) == "/Users/test/My Projects/bantay-tui",
             "L126 top-level cwd with spaces extracted")
 
         let cwdCap = "{\"Cwd\":\"/tmp/repo\"}"
         check(AgentDetector.extractCwd(cwdCap) == "/tmp/repo", "L126 top-level Cwd extracted")
 
         let cwdTool =
-            "{\"tool_calls\":[{\"name\":\"bash\",\"args\":{\"Cwd\":\"\\\"/Users/rhyon/repo\\\"\"}}]}"
+            "{\"tool_calls\":[{\"name\":\"bash\",\"args\":{\"Cwd\":\"\\\"/Users/test/repo\\\"\"}}]}"
         check(
-            AgentDetector.extractCwd(cwdTool) == "/Users/rhyon/repo",
+            AgentDetector.extractCwd(cwdTool) == "/Users/test/repo",
             "L126 tool call Cwd with quotes extracted")
 
         let cwdOpenAI =
-            "{\"tool_calls\":[{\"name\":\"bash\",\"arguments\":\"{\\\"Cwd\\\":\\\"/Users/rhyon/openai-repo\\\"}\"}]}"
+            "{\"tool_calls\":[{\"name\":\"bash\",\"arguments\":\"{\\\"Cwd\\\":\\\"/Users/test/openai-repo\\\"}\"}]}"
         check(
-            AgentDetector.extractCwd(cwdOpenAI) == "/Users/rhyon/openai-repo",
+            AgentDetector.extractCwd(cwdOpenAI) == "/Users/test/openai-repo",
             "L126 tool call stringified arguments Cwd extracted")
 
         let noCwd = "{\"type\":\"USER_INPUT\",\"content\":\"Hello\"}"
@@ -7185,7 +7225,7 @@ struct LogicCheckMain {
         try? FileManager.default.createDirectory(at: tempDirL128, withIntermediateDirectories: true)
         let transcriptL128 = tempDirL128.appendingPathComponent("session.jsonl")
         let linesL128 = [
-            "{\"Cwd\":\"/Users/rhyon/bantay-project\"}",
+            "{\"Cwd\":\"/Users/test/bantay-project\"}",
             "{\"tool_calls\":[{\"name\":\"replace_file_content\",\"args\":{\"TargetFile\":\"Sources/App.swift\"}}]}",
             "{\"type\":\"CHECKPOINT\",\"state\":\"done\"}",
             "{\"content\":\"Created At: 2026-09-12\\nFile Path: /tmp/log\"}",
@@ -7198,7 +7238,7 @@ struct LogicCheckMain {
                 "L128 latestActivityInfo reverse scans past checkpoints (got: \(infoL128.activity))"
             )
             check(
-                infoL128.cwd == "/Users/rhyon/bantay-project",
+                infoL128.cwd == "/Users/test/bantay-project",
                 "L128 latestActivityInfo finds cwd from earlier line (got: \(String(describing: infoL128.cwd)))"
             )
             check(infoL128.isRecent == true, "L128 newly written transcript is recent")
@@ -9949,10 +9989,10 @@ struct LogicCheckMain {
             let projectWins = [
                 StripWindowInfo(
                     id: "ide-project", appBundleID: "com.google.antigravity-ide",
-                    title: "Bantay-TUI", agentCwd: "/Users/rhyon/Projects/bantay-tui"),
+                    title: "Bantay-TUI", agentCwd: "/Users/test/Projects/bantay-tui"),
                 StripWindowInfo(
                     id: "ide-other", appBundleID: "com.google.antigravity-ide",
-                    title: "Other Project", agentCwd: "/Users/rhyon/Projects/other"),
+                    title: "Other Project", agentCwd: "/Users/test/Projects/other"),
                 StripWindowInfo(
                     id: "browser-project", appBundleID: "company.thebrowser.dia",
                     title: "localhost:3000/bantay-tui"),
@@ -9961,10 +10001,10 @@ struct LogicCheckMain {
                     title: "Other Project Dashboard"),
                 StripWindowInfo(
                     id: "term-project", appBundleID: "com.mitchellh.ghostty",
-                    title: "bantay-tui", agentCwd: "/Users/rhyon/Projects/bantay-tui"),
+                    title: "bantay-tui", agentCwd: "/Users/test/Projects/bantay-tui"),
                 StripWindowInfo(
                     id: "term-other", appBundleID: "com.mitchellh.ghostty",
-                    title: "other", agentCwd: "/Users/rhyon/Projects/other"),
+                    title: "other", agentCwd: "/Users/test/Projects/other"),
                 StripWindowInfo(
                     id: "notes-project", appBundleID: "com.apple.Notes", title: "Notes"),
             ]

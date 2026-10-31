@@ -3,7 +3,7 @@ cask "bantay-tui" do
   sha256 "REPLACE_WITH_ZIP_SHA256"
 
   url "https://github.com/8-BitRhyon/bantay-tui/releases/download/v#{version}/bantay-tui.zip"
-  name "Bantay-TUI"
+  name "Bantay"
   desc "Agentic control plane in your MacBook notch"
   homepage "https://github.com/8-BitRhyon/bantay-tui"
 

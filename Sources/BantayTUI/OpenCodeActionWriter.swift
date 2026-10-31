@@ -20,7 +20,10 @@ enum OpenCodeActionWriter {
     /// failure. Best-effort: the plugin polls and retries; a failed write is
     /// logged, never fatal.
     @discardableResult
-    static func writeDecision(paneId: String, approve: Bool, choiceIndex: Int? = nil) -> Bool {
+    static func writeDecision(
+        paneId: String, approve: Bool, choiceIndex: Int? = nil,
+        selections: [Int]? = nil
+    ) -> Bool {
         guard isOpenCodePane(paneId) else { return false }
         let dir = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -33,6 +36,9 @@ enum OpenCodeActionWriter {
             ]
             if let choiceIndex {
                 payload["choice"] = choiceIndex
+            }
+            if let selections {
+                payload["selections"] = selections
             }
             let data = try JSONSerialization.data(withJSONObject: payload)
             try data.write(

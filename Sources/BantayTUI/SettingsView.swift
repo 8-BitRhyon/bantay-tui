@@ -311,7 +311,7 @@ struct SettingsView: View {
                     Image(systemName: "square.3.layers.3d.top.filled")
                         .font(.system(size: 14))
                         .foregroundStyle(BantayTheme.statusWorking)
-                    Text("Bantay-TUI")
+                    Text("Bantay")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundColor(BantayTheme.textPrimary)
                 }
@@ -1264,7 +1264,7 @@ struct SettingsView: View {
                                             let alert = NSAlert()
                                             alert.messageText = "Notifications are blocked"
                                             alert.informativeText =
-                                                "Enable notifications for Bantay-TUI "
+                                                "Enable notifications for Bantay "
                                                 + "in System Settings to use this."
                                             alert.runModal()
                                         }
@@ -2025,7 +2025,7 @@ struct WelcomeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Welcome to Bantay-TUI")
+            Text("Welcome to Bantay")
                 .font(.headline)
             Text(
                 "The pill under your notch shows what your AI agents are doing: "

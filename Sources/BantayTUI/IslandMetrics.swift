@@ -817,17 +817,29 @@ public enum IslandMetrics: Sendable {
         /// Parallel to `choices`: option descriptions when the prompt has
         /// them. Empty means every option is label-only.
         public let details: [String]
+        /// Rows the terminal already shows checked, before any local picks.
+        public let initialSelections: Set<Int>
+        /// Row under the terminal cursor, when the prompt prints one.
+        public let focusedChoice: Int?
 
-        init(variance: ApprovalVariance?, choices: [String]?, details: [String]? = nil) {
+        init(
+            variance: ApprovalVariance?, choices: [String]?, details: [String]? = nil,
+            initialSelections: Set<Int> = [], focusedChoice: Int? = nil
+        ) {
             self.variance = variance ?? .yesNo
             self.choices = choices ?? []
             self.details = details ?? []
+            self.initialSelections = initialSelections
+            self.focusedChoice = focusedChoice
         }
 
         static func make(
-            variance: ApprovalVariance?, choices: [String]?, details: [String]? = nil
+            variance: ApprovalVariance?, choices: [String]?, details: [String]? = nil,
+            initialSelections: Set<Int> = [], focusedChoice: Int? = nil
         ) -> ApprovalControls {
-            ApprovalControls(variance: variance, choices: choices, details: details)
+            ApprovalControls(
+                variance: variance, choices: choices, details: details,
+                initialSelections: initialSelections, focusedChoice: focusedChoice)
         }
 
         /// Description for the option at `index`, or nil when the prompt did
@@ -918,6 +930,40 @@ public enum IslandMetrics: Sendable {
         /// agent's terminal, so every Submit button gates on this.
         static func canSubmitMulti(selection: Set<Int>) -> Bool {
             !selection.isEmpty
+        }
+
+        /// The selection a surface should render: the user's local picks
+        /// once they exist (including an explicit empty set), otherwise the
+        /// rows the terminal already shows checked.
+        func effectiveSelection(local: Set<Int>?) -> Set<Int> {
+            local ?? initialSelections
+        }
+
+        /// Arrow-and-Space plan for checkbox lists that do not take number
+        /// hotkeys. Only rows whose checked state must change are toggled,
+        /// moving from the terminal's focused row; Enter confirms at the end.
+        static func checkboxToggleKeys(
+            focusedChoice: Int?, initialSelections: Set<Int>,
+            desiredSelections: Set<Int>, optionCount: Int
+        ) -> [String] {
+            let count = max(optionCount, 0)
+            guard count > 0 else { return [] }
+            var current = min(max(focusedChoice ?? 1, 1), count)
+            var keys: [String] = []
+            let toggles = initialSelections.symmetricDifference(desiredSelections)
+                .filter { (1...count).contains($0) }
+                .sorted()
+            for number in toggles {
+                if number > current {
+                    keys.append(contentsOf: Array(repeating: "down", count: number - current))
+                } else if number < current {
+                    keys.append(contentsOf: Array(repeating: "up", count: current - number))
+                }
+                keys.append("space")
+                current = number
+            }
+            keys.append("enter")
+            return keys
         }
     }
 
@@ -1282,19 +1328,16 @@ public enum IslandMetrics: Sendable {
         if isBareSyslog(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
             return ""
         }
-        // 1. Strip ANSI escape sequences, control characters, and braille spinner patterns
         var s = LogFormatter.stripControlCharacters(text)
             .replacingOccurrences(of: "\\n", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
 
-        // 2. Strip XML/HTML tags (e.g. <thinking>, </thinking>, <command>)
         s = s.replacingOccurrences(
             of: "<[^>]+>",
             with: "",
             options: .regularExpression)
 
-        // 3. Strip log envelope metadata (timestamp=... level=... run=... msg=...)
         s = s.replacingOccurrences(
             of: "(?:timestamp|time)=[0-9T:.Z+-]+\\s*",
             with: "",
@@ -1332,10 +1375,6 @@ public enum IslandMetrics: Sendable {
             with: "",
             options: .regularExpression)
 
-        // 4. Strip bare ISO and syslog timestamps (\d{4}-\d{2}-\d{2}[ T]...) and relative time (+40ms)
-        // Syslog lines often carry a process prefix after the timestamp
-        // ("2026-10-16 09:12:48.169514-0500 bantay: Running task"). Drop the
-        // timestamp and the process name together so the status text remains.
         s = s.replacingOccurrences(
             of:
                 "^\\d{4}-\\d{2}-\\d{2}[\\sT][0-9:.]+(?:[+-]\\d{4}|Z)?\\s+[a-zA-Z0-9_.-]+:\\s*",
@@ -1358,41 +1397,33 @@ public enum IslandMetrics: Sendable {
             with: "",
             options: .regularExpression)
 
-        // 5. Strip terminal progress brackets (e.g. [===> ] 45%)
         s = s.replacingOccurrences(
             of: "\\[[=>\\-\\s]+\\]\\s*\\d*%?\\s*",
             with: "",
             options: .regularExpression)
 
-        // 6. Strip markdown links: [text](url) -> text
         if let regex = HUDRegexes.shared.markdownLink {
             let range = NSRange(location: 0, length: s.utf16.count)
             s = regex.stringByReplacingMatches(
                 in: s, options: [], range: range, withTemplate: "$1")
         }
 
-        // 7. Strip raw file URLs
         s = s.replacingOccurrences(of: "file:///[^\\s)]+", with: "", options: .regularExpression)
 
-        // 8. Replace absolute filesystem paths with their last component (basename)
         if let regex = HUDRegexes.shared.pathWithExtension {
             let range = NSRange(location: 0, length: s.utf16.count)
             s = regex.stringByReplacingMatches(
                 in: s, options: [], range: range, withTemplate: "$1")
         }
 
-        // 9. Strip bold/italic/code markdown delimiters
         s = s.replacingOccurrences(of: "**", with: "")
         s = s.replacingOccurrences(of: "`", with: "")
 
-        // 10. Collapse excess whitespace
         s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
-        // A syslog timestamp plus a lone process name carries no status.
         if isBareSyslog(trimmed) { return "" }
 
-        // 11. Reject unparsed JSON, diff markers, compiler trace noise, hostnames, and shell fallbacks
         if isSuppressedGarbage(trimmed) {
             return ""
         }
@@ -1433,7 +1464,6 @@ public enum IslandMetrics: Sendable {
         if isBareSyslog(trimmed) { return true }
         let lower = trimmed.lowercased()
 
-        // Unparsed JSON blobs or brackets
         if trimmed.hasPrefix("{") || trimmed.hasPrefix("[")
             || trimmed.hasPrefix("}") || trimmed.hasPrefix("]")
             || lower.contains("\"tool_calls\"") || lower.contains("\"tool_use\"")

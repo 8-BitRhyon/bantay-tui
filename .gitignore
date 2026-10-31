@@ -20,3 +20,12 @@ Thumbs.db
 # Local agent tooling config (taste/settings are per-machine, not shared)
 .commandcode/
 dist/
+
+# Author-local working material: kept on disk, never tracked. The app,
+# tests, CI, site, and plans are the public surface.
+.agents/
+.kilo/command/
+docs/research/
+docs/ideas/
+docs/UI_UX_AUDIT.md
+Specs/
