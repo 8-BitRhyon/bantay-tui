@@ -374,6 +374,31 @@
                     == ["up", "space", "down", "down", "down", "space", "enter"])
         }
 
+        @Test("tab bar survives hiding the shelf tab")
+        func tabBarVisibility() {
+            #expect(
+                IslandMetrics.tabBarVisible(
+                    showAgents: true, showTasks: true, showAttention: false,
+                    showHistory: true, showShelf: false, showMedia: true,
+                    shelfSelected: false))
+            #expect(
+                !IslandMetrics.tabBarVisible(
+                    showAgents: false, showTasks: false, showAttention: false,
+                    showHistory: false, showShelf: false, showMedia: false,
+                    shelfSelected: false))
+            #expect(
+                IslandMetrics.tabBarVisible(
+                    showAgents: false, showTasks: false, showAttention: false,
+                    showHistory: false, showShelf: false, showMedia: false,
+                    shelfSelected: true))
+            #expect(
+                IslandMetrics.reconciledTabIndex(
+                    selected: 4, visible: [true, true, false, true, false, true]) == 0)
+            #expect(
+                IslandMetrics.reconciledTabIndex(
+                    selected: 3, visible: [true, true, false, true, false, true]) == 3)
+        }
+
         @Test("transient notices wait for a settled finish")
         func transientNoticeSettle() {
             #expect(!IslandMetrics.transientNoticeShouldShow(agentKind: .progress))

@@ -101,8 +101,14 @@ struct NotchRosterView: View {
                 }
             }
             if !working.isEmpty {
+                // Count only agents actually working, so the section
+                // header can never disagree with the header badge.
                 sectionHeader(
-                    "Working", count: working.reduce(0) { $0 + 1 + $1.subagents.count },
+                    "Working",
+                    count: working.reduce(0) {
+                        $0 + ($1.lead.isWorking ? 1 : 0)
+                            + $1.subagents.filter { $0.isWorking }.count
+                    },
                     color: AgentEventKind.progress.color)
                 ForEach(working) { group in
                     workingGroupRow(group)
@@ -161,6 +167,9 @@ struct NotchRosterView: View {
                     expanded
                         ? "Hide subagents"
                         : "+\(group.subagents.count) subagent\(group.subagents.count == 1 ? "" : "s")"
+                            + (group.subagents.first.flatMap {
+                                AgentPresentation.sessionLabel(for: $0)
+                            }.map { " · \($0)" } ?? "")
                 )
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundColor(.white.opacity(0.45))

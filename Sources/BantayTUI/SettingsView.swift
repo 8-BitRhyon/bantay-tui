@@ -147,8 +147,15 @@ struct SettingsView: View {
     @State private var desktopHUDPinned = DesktopHUDController.shared.isPinned
     @State private var openCodeGoAllowanceUSD = NotchHUDConfig.shared.openCodeGoAllowanceUSD
     @State private var hasAccessibility = StripWindowRegistry.hasAccessibilityPermission()
+    /// Live grant state per capability, refreshed on open and polled
+    /// while Settings is visible so a grant lands without reopening.
+    @State private var permissionGrants: [PermissionCapability: Bool] = [:]
 
     private static let sectionKeywords: [String: [String]] = [
+        "Permissions": [
+            "accessibility", "input monitoring", "notifications", "grant",
+            "permission", "tcc", "privacy", "hotkey access", "banners",
+        ],
         "Startup": [
             "launch at login", "hide island at startup", "show island when idle", "idle position",
             "closed strip", "idle display", "project chip", "project name", "working count",
@@ -408,6 +415,14 @@ struct SettingsView: View {
             AppDelegate.dbg("SettingsView.onAppear")
             refreshFromConfig()
         }
+        .task {
+            // Grants can change in System Settings while this window is
+            // open; poll so the status pills land live.
+            while !Task.isCancelled {
+                refreshPermissions()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWillOpen)) { _ in
             AppDelegate.dbg("SettingsView: settingsWillOpen received")
             DispatchQueue.main.async { refreshFromConfig() }
@@ -437,7 +452,7 @@ struct SettingsView: View {
     private func sectionTitles(for category: Category) -> [String] {
         switch category {
         case .general:
-            ["Startup", "Quick actions", "Displays", "Welcome"]
+            ["Permissions", "Startup", "Quick actions", "Displays", "Welcome"]
         case .notch:
             ["Pill behavior", "Expanded panel", "Mascot & Pet Companion", "Shelf"]
         case .agents:
@@ -1500,6 +1515,47 @@ struct SettingsView: View {
                 }
             }
 
+            if selectedCategory == .general && matchesSearch("Permissions") {
+                Section("Permissions") {
+                    ForEach(PermissionCapability.allCases) { capability in
+                        HStack(alignment: .top, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(capability.title)
+                                Text(capability.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            let granted = permissionGrants[capability] ?? false
+                            Text(granted ? "Granted" : "Not granted")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(granted ? .green : .secondary)
+                                .padding(.top, 2)
+                            if !granted {
+                                Button("Grant") {
+                                    Task {
+                                        await Permissions.request(capability)
+                                        refreshPermissions()
+                                    }
+                                }
+                                .help("Ask macOS for \(capability.title)")
+                                Button("Settings") {
+                                    Permissions.openSettings(for: capability)
+                                }
+                                .help(
+                                    "Open System Settings for \(capability.title)")
+                            }
+                        }
+                    }
+                    Text(
+                        "Each grant unlocks one thing, and every one applies "
+                            + "live. Nothing here restarts Bantay."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
             if selectedCategory == .general && matchesSearch("Startup") {
                 Section("Startup") {
                     Toggle("Launch at login", isOn: $launchAtLogin)
@@ -1702,7 +1758,24 @@ struct SettingsView: View {
     /// Re-read externally mutable state (menu-bar toggles, launch agent
     /// status, hook installs) so a persisted Settings window never shows
     /// stale toggles.
+    /// Re-read every grant. When Input Monitoring lands, re-arm the
+    /// global hotkey monitors so the hotkeys start working without a
+    /// relaunch; every other grant is already read live at use time.
+    private func refreshPermissions() {
+        Task { @MainActor in
+            let wasInputGranted = permissionGrants[.inputMonitoring] ?? false
+            for capability in PermissionCapability.allCases {
+                permissionGrants[capability] = await Permissions.isGranted(capability)
+            }
+            hasAccessibility = permissionGrants[.accessibility] ?? hasAccessibility
+            if !wasInputGranted, permissionGrants[.inputMonitoring] == true {
+                AppDelegate.shared?.updateGlobalHotkeyMonitor()
+            }
+        }
+    }
+
     private func refreshFromConfig() {
+        refreshPermissions()
         isRefreshingConfig = true
         captureEnabled = NotchHUDConfig.shared.captureEnabled
         enableAlerts = NotchHUDConfig.shared.enableAgentAlerts

@@ -270,6 +270,27 @@ public final class QuotaAxiTracker: Sendable {
                         remainingPercent: live.remainingPercent)
                     results.append(quota)
                 }
+            case "antigravity":
+                // Measured exception, same rule as opencode: the local
+                // conversation store gives exact step and conversation
+                // counts, but no provider quota percentage exists locally
+                // yet, so the row reports measured activity only.
+                let snapshot = AntigravityStore.snapshot(home: home)
+                if !snapshot.conversations.isEmpty {
+                    results.append(
+                        ProviderQuota(
+                            provider: "antigravity",
+                            remainingPercent: 100,
+                            resetHint: "Measured · no local quota source",
+                            tier: "Local store",
+                            usedDisplay:
+                                "\(snapshot.totalSteps) steps · "
+                                + "\(snapshot.conversations.count) conversations",
+                            totalDisplay: "Measured",
+                            burnRateTPM: burnRateTPM,
+                            hidesProgress: true
+                        ))
+                }
             case "opencode":
                 if let state = OpenCodeUsageAdapter.quotaState(now: Date(), home: home) {
                     let tier =

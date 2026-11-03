@@ -33,7 +33,7 @@ struct NotchTabBarView: View {
                     glow: shelfDropGlow)
             }
             if NotchHUDConfig.shared.showMediaTab {
-                utilityButton(icon: "play.circle", tab: .media, shortcut: "7")
+                utilityButton(icon: "play.circle", tab: .media, shortcut: "6")
             }
         }
         .padding(.horizontal, 10)

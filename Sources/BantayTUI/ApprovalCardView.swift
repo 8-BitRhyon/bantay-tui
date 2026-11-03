@@ -13,6 +13,9 @@ struct ApprovalCardView: View {
 
     @ObservedObject private var manager = AgentEventManager.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Last decision failure, shown in the card. A refused send must
+    /// never look like a delivered one.
+    @State private var actionFailure: String?
 
     private var paneId: String {
         IslandMetrics.actionablePaneId(paneId: agent.paneId, source: agent.source)
@@ -78,6 +81,17 @@ struct ApprovalCardView: View {
                 choiceList
             }
             actionRow
+            if let actionFailure {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                    Text(actionFailure)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(2)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -192,7 +206,13 @@ struct ApprovalCardView: View {
                                 effective, index: index)
                     } else {
                         Task { @MainActor in
-                            await manager.approveChoice(paneId: paneId, choice: number)
+                            let outcome = await manager.approveChoice(
+                                paneId: paneId, choice: number)
+                            if case .failed(let failure) = outcome {
+                                actionFailure = failure.message
+                            } else {
+                                actionFailure = nil
+                            }
                         }
                     }
                 } label: {
@@ -224,6 +244,7 @@ struct ApprovalCardView: View {
                     )
                 }
                 .buttonStyle(PressableButtonStyle(pressedScale: 0.98, reduceMotion: reduceMotion))
+                .disabled(!manager.supportsDecision(paneId: paneId))
                 .animation(InteractionMotion.selection, value: isSelected)
                 .help(label)
                 .accessibilityLabel("Option \(number): \(label)")
@@ -267,13 +288,23 @@ struct ApprovalCardView: View {
         } else if controls.isYesNo {
             primaryButton(title: "Allow Once", icon: "checkmark") {
                 Task { @MainActor in
-                    await manager.approve(paneId: paneId)
+                    let outcome = await manager.approve(paneId: paneId)
+                    if case .failed(let failure) = outcome {
+                        actionFailure = failure.message
+                    } else {
+                        actionFailure = nil
+                    }
                 }
             }
             reviewButton
             denyButton {
                 Task { @MainActor in
-                    await manager.deny(paneId: paneId)
+                    let outcome = await manager.deny(paneId: paneId)
+                    if case .failed(let failure) = outcome {
+                        actionFailure = failure.message
+                    } else {
+                        actionFailure = nil
+                    }
                 }
             }
         } else {
@@ -301,6 +332,9 @@ struct ApprovalCardView: View {
                     paneId: paneId, selections: numbers)
                 if outcome == .sent || outcome == .advanced {
                     queueSelections.removeValue(forKey: paneId)
+                    actionFailure = nil
+                } else if case .failed(let failure) = outcome {
+                    actionFailure = failure.message
                 }
             }
         } label: {
@@ -319,7 +353,7 @@ struct ApprovalCardView: View {
                 in: Capsule())
         }
         .buttonStyle(PressableButtonStyle(pressedScale: 0.97, reduceMotion: reduceMotion))
-        .disabled(numbers.isEmpty)
+        .disabled(numbers.isEmpty || !manager.supportsDecision(paneId: paneId))
         .help("Submit selected options")
         .accessibilityLabel("Submit selected options")
     }

@@ -116,6 +116,47 @@
             #expect(bundled.spend5h + bundled.spend7d + bundled.spend30d >= 0)
         }
 
+        @Test("antigravity measured row comes from its local store")
+        func antigravityMeasuredRow() throws {
+            let home = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-agy-\(UUID().uuidString)")
+            let dir = home.appendingPathComponent(
+                ".gemini/antigravity-ide/conversations", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: home) }
+            let dbURL = dir.appendingPathComponent("conv-1.db")
+            var handle: OpaquePointer?
+            guard sqlite3_open(dbURL.path, &handle) == SQLITE_OK, let db = handle else {
+                Issue.record("could not create fixture db")
+                return
+            }
+            sqlite3_exec(
+                db,
+                "CREATE TABLE steps(idx INTEGER, step_type INTEGER, status INTEGER, metadata BLOB);"
+                    + "INSERT INTO steps VALUES(0, 21, 3, x'');"
+                    + "INSERT INTO steps VALUES(1, 15, 3, x'');"
+                    + "INSERT INTO steps VALUES(2, 21, 3, x'');",
+                nil, nil, nil)
+            sqlite3_close(db)
+
+            let quotas = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["antigravity"],
+                costUSD: 0,
+                budgetUSD: 10,
+                home: home.path)
+            let row = quotas.first { $0.id == "antigravity" }
+            #expect(row != nil)
+            #expect(row?.totalDisplay == "Measured")
+            #expect(row?.usedDisplay.contains("3 steps") == true)
+
+            let empty = QuotaAxiTracker.probeLiveQuotas(
+                activeProviders: ["antigravity"],
+                costUSD: 0,
+                budgetUSD: 10,
+                home: home.appendingPathComponent("nope").path)
+            #expect(empty.first { $0.id == "antigravity" } == nil)
+        }
+
         @Test("Go bundled allowance matches the console math")
         func opencodeGoBundledAllowance() {
             // Console ground truth: $2.51 bundled spend reads 19/8/4%.

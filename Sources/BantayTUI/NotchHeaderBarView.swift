@@ -28,13 +28,19 @@ struct NotchHeaderBarView: View {
                 countBadge(
                     icon: "bell.fill", count: counts.needsInput,
                     color: BantayTheme.statusAttention,
-                    help: "\(counts.needsInput) agent\(counts.needsInput == 1 ? "" : "s") need you")
+                    help: "\(counts.needsInput) agent\(counts.needsInput == 1 ? "" : "s") need you"
+                ) {
+                    selectedTab = .agents
+                }
             }
             if counts.working > 0 {
                 countBadge(
                     icon: "bolt.fill", count: counts.working,
                     color: BantayTheme.statusWorking,
-                    help: "\(counts.working) agent\(counts.working == 1 ? "" : "s") working")
+                    help: "\(counts.working) agent\(counts.working == 1 ? "" : "s") working"
+                ) {
+                    selectedTab = .agents
+                }
             }
             if counts.needsInput == 0 && counts.working == 0 {
                 Text("Agents")
@@ -62,7 +68,8 @@ struct NotchHeaderBarView: View {
                 !rawTitle.contains("timestamp="),
                 !rawTitle.contains("level=")
             {
-                let cleanedTitle = IslandMetrics.cleanHUDText(rawTitle)
+                let cleanedTitle = AgentPresentation.strippingTerminalPrefix(
+                    IslandMetrics.cleanHUDText(rawTitle))
                 if !cleanedTitle.isEmpty {
                     activeEventBadge(title: cleanedTitle)
                 }
@@ -97,8 +104,8 @@ struct NotchHeaderBarView: View {
             .fixedSize(horizontal: true, vertical: true)
         }
         .buttonStyle(.plain)
-        .help("Open the Desktop strip HUD")
-        .accessibilityLabel("Open Desktop strip HUD, \(desktopHUD.windowCount) windows")
+        .help("Toggle the Desktop strip HUD")
+        .accessibilityLabel("Toggle Desktop strip HUD, \(desktopHUD.windowCount) windows")
     }
 
     private var mascotButton: some View {
@@ -165,20 +172,28 @@ struct NotchHeaderBarView: View {
             ratio >= 1.0
             ? BantayTheme.statusFailed
             : (ratio >= 0.7 ? BantayTheme.statusQuota : BantayTheme.statusWorking)
-        return HStack(spacing: BantayTheme.space4) {
-            Circle().fill(color).frame(width: 4, height: 4)
-            Text("\(formattedCost)/\(formattedBudget)")
-                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                .lineLimit(1)
-                .monospacedDigit()
-                .foregroundColor(color)
+        return Button {
+            onExpandTo(true)
+            selectedTab = .history
+            historyMode = .spend
+        } label: {
+            HStack(spacing: BantayTheme.space4) {
+                Circle().fill(color).frame(width: 4, height: 4)
+                Text("\(formattedCost)/\(formattedBudget)")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .monospacedDigit()
+                    .foregroundColor(color)
+            }
+            .padding(.horizontal, BantayTheme.space6)
+            .padding(.vertical, BantayTheme.space2)
+            .background(color.opacity(0.14), in: Capsule())
+            .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
+            .fixedSize(horizontal: true, vertical: true)
         }
-        .padding(.horizontal, BantayTheme.space6)
-        .padding(.vertical, BantayTheme.space2)
-        .background(color.opacity(0.14), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
-        .fixedSize(horizontal: true, vertical: true)
-        .help("Daily AI Spend: \(formattedCost) of \(formattedBudget) limit")
+        .buttonStyle(.plain)
+        .help("Daily AI Spend: \(formattedCost) of \(formattedBudget) limit. Click for Spend.")
+        .accessibilityLabel("Daily spend \(formattedCost) of \(formattedBudget). View Spend.")
     }
 
     private func tokenRateBadge(tpm: Int) -> some View {
@@ -190,28 +205,38 @@ struct NotchHeaderBarView: View {
             }
         }()
         let color = BantayTheme.statusWorking
-        return HStack(spacing: BantayTheme.space2) {
-            Text(rateText)
-                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                .lineLimit(1)
-                .monospacedDigit()
-                .foregroundColor(color)
+        return Button {
+            onExpandTo(true)
+            selectedTab = .history
+            historyMode = .spend
+        } label: {
+            HStack(spacing: BantayTheme.space2) {
+                Text(rateText)
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .monospacedDigit()
+                    .foregroundColor(color)
+            }
+            .padding(.horizontal, BantayTheme.space6)
+            .padding(.vertical, BantayTheme.space2)
+            .background(color.opacity(0.14), in: Capsule())
+            .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
+            .fixedSize(horizontal: true, vertical: true)
         }
-        .padding(.horizontal, BantayTheme.space6)
-        .padding(.vertical, BantayTheme.space2)
-        .background(color.opacity(0.14), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.5))
-        .fixedSize(horizontal: true, vertical: true)
-        .help("Live token processing rate over the last minute")
-        .accessibilityLabel("Token rate \(tpm) tokens per minute")
+        .buttonStyle(.plain)
+        .help("Live token processing rate over the last minute. Click for Spend.")
+        .accessibilityLabel("Token rate \(tpm) tokens per minute. View Spend.")
     }
 
     /// Compact count: icon plus number. Long labels were clipping to
-    /// "3 wor..." in the notch header.
+    /// "3 wor..." in the notch header. With an action it is a real
+    /// button; without one it stays a plain indicator.
+    @ViewBuilder
     private func countBadge(
-        icon: String, count: Int, color: Color, help: String
+        icon: String, count: Int, color: Color, help: String,
+        action: (() -> Void)? = nil
     ) -> some View {
-        HStack(spacing: 3) {
+        let badge = HStack(spacing: 3) {
             Image(systemName: icon)
                 .font(.system(size: 8, weight: .bold))
             Text("\(count)")
@@ -221,8 +246,16 @@ struct NotchHeaderBarView: View {
         .foregroundColor(color)
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: true)
-        .help(help)
-        .accessibilityLabel(help)
+        if let action {
+            Button(action: action) { badge }
+                .buttonStyle(.plain)
+                .help(help)
+                .accessibilityLabel(help)
+        } else {
+            badge
+                .help(help)
+                .accessibilityLabel(help)
+        }
     }
 
     private var quotaAxiBadge: some View {

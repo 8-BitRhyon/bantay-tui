@@ -74,6 +74,14 @@ enum KeyboardSynthesizer {
         return true
     }
 
+    /// Focus the chat input of a GUI IDE (Cmd+L in the Cascade family:
+    /// Antigravity, Cursor, Windsurf). Used after raising the app so
+    /// "focus agent" lands on the input box, not just the window.
+    @discardableResult
+    static func focusChatInput() -> Bool {
+        press(Key.l, flags: .maskCommand)
+    }
+
     /// Focus a chat box (optional), paste the clipboard, then submit.
     static func pasteAndReturn(focusChatFirst: Bool) {
         if focusChatFirst {
