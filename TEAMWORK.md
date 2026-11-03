@@ -114,9 +114,10 @@ Fill during Phase 4 and Phase 5.
 | --- | --- | --- |
 | baseline diff | `git diff --check` | clean at base commit `d07fac9` |
 | decode agreement | Swift reader vs independent Python decoder | both: 100%, reset epoch 1793701558, 10 models, tier Google AI Pro, stale false |
-| targeted tests | `swift test --filter AntigravityQuotaTests` | 8 tests passed after wrapper fix; 29 in 2 suites before it |
+| targeted tests | `swift test --filter AntigravityQuotaTests` | 16 tests passed after review fixes |
 | format and build | `swift format lint --strict`; `swift build` | both clean |
-| full suite | `swift test` | 208 tests in 18 suites passed |
+| full suite | `swift test` | 216 tests in 18 suites passed |
+| review fixes | challenger and critic findings | percent-encoded path fixed; stale rows filtered from the header minimum; boundary and WAL tests added |
 | harness | `scripts/build-logic-harness.sh` | `ALL PASS` |
 | release install | PID and log probe | pending |
 | screenshot | user-provided | pending |

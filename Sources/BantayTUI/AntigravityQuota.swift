@@ -63,10 +63,10 @@ enum AntigravityQuota {
         let url = databaseURL(home: home)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         var handle: OpaquePointer?
-        let uri = "file://\(url.path)?mode=ro"
+        // A plain path avoids URI percent-decoding: a home directory
+        // containing %, ? or # would otherwise open the wrong file.
         guard
-            sqlite3_open_v2(uri, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)
-                == SQLITE_OK,
+            sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
             let handle
         else {
             if handle != nil { sqlite3_close(handle) }
@@ -97,7 +97,8 @@ enum AntigravityQuota {
 
     /// Parses the SQLite value: an outer base64 string, the wrapper hops,
     /// then the payload protobuf. Unknown wrapper fields are tolerated
-    /// because only the first nested message is followed.
+    /// because the largest nested field is followed, so a short sentinel
+    /// key is never mistaken for the payload.
     static func parseUserStatus(_ data: Data, now: Date = Date()) -> State? {
         guard var current = decodeBase64(data) else { return nil }
         for _ in 0..<6 {

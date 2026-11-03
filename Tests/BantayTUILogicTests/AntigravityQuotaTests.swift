@@ -76,9 +76,12 @@
     }
 
     private enum AgyHome {
-        static func make(userStatus: Data?, conversations: Bool) throws -> URL {
+        static func make(
+            prefix: String = "bantay-agy-quota", userStatus: Data?,
+            conversations: Bool
+        ) throws -> URL {
             let home = FileManager.default.temporaryDirectory
-                .appendingPathComponent("bantay-agy-quota-\(UUID().uuidString)")
+                .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
             let global = home.appendingPathComponent(
                 "Library/Application Support/Antigravity IDE/User/globalStorage",
                 isDirectory: true)
@@ -247,6 +250,162 @@
             let row = ProviderQuota(
                 provider: "Antigravity", remainingPercent: 100, idSuffix: "measured")
             #expect(row.id == "antigravity-measured")
+        }
+
+        @Test("reset exactly now is stale, one second later is fresh")
+        func resetBoundary() {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let atNow = AgyFixture.wrapped(models: [
+                AgyFixture.model(
+                    "Boundary", fraction: 0.5,
+                    reset: UInt64(now.timeIntervalSince1970))
+            ])
+            #expect(AntigravityQuota.parseUserStatus(atNow, now: now)?.isStale == true)
+            let later = AgyFixture.wrapped(models: [
+                AgyFixture.model(
+                    "Boundary", fraction: 0.5,
+                    reset: UInt64(now.timeIntervalSince1970) + 1)
+            ])
+            #expect(AntigravityQuota.parseUserStatus(later, now: now)?.isStale == false)
+        }
+
+        @Test("stale rows do not drive the header badge")
+        func staleRowsDoNotDriveHeaderBadge() {
+            let stale = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 0, isStale: true)
+            let fresh = ProviderQuota(provider: "Claude", remainingPercent: 80)
+            #expect(QuotaMonitor.minRemainingPercent(quotas: [stale, fresh]) == 80)
+            #expect(QuotaMonitor.minRemainingPercent(quotas: [stale]) == 100)
+        }
+
+        @Test("percent-encoded home path still opens the cache")
+        func percentEncodedHomePathReadsCache() throws {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let value = AgyFixture.wrapped(models: [
+                AgyFixture.model(
+                    "Encoded", fraction: 0.42,
+                    reset: UInt64(now.timeIntervalSince1970) + 3_600)
+            ])
+            let home = try AgyHome.make(
+                prefix: "bantay-agy-%41", userStatus: value, conversations: false)
+            defer { try? FileManager.default.removeItem(at: home) }
+            let state = AntigravityQuota.state(home: home.path, now: now)
+            #expect(state != nil)
+            #expect(abs((state?.remainingPercent ?? 0) - 42.0) < 0.001)
+        }
+
+        @Test("invalid fractions are ignored, not clamped into a fake value")
+        func invalidFractionsAreIgnored() {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let reset = UInt64(now.timeIntervalSince1970) + 3_600
+            let mixed = AgyFixture.wrapped(models: [
+                AgyFixture.model("NaN", fraction: .nan, reset: reset),
+                AgyFixture.model("High", fraction: 1.5, reset: reset),
+                AgyFixture.model("Negative", fraction: -0.2, reset: reset),
+                AgyFixture.model("Valid", fraction: 0.5, reset: reset),
+            ])
+            let state = AntigravityQuota.parseUserStatus(mixed, now: now)
+            #expect(state?.modelCount == 1)
+            #expect(abs((state?.remainingPercent ?? 0) - 50.0) < 0.001)
+            let none = AgyFixture.wrapped(models: [
+                AgyFixture.model("NaN", fraction: .nan, reset: reset),
+                AgyFixture.model("High", fraction: 1.5, reset: reset),
+            ])
+            #expect(AntigravityQuota.parseUserStatus(none, now: now) == nil)
+        }
+
+        @Test("unknown wire types and truncated varints are rejected")
+        func wireTypesAreRejected() {
+            #expect(AntigravityQuota.Proto.fields(Data([0x0b])) == nil)
+            #expect(AntigravityQuota.Proto.fields(Data([0x0c])) == nil)
+            #expect(AntigravityQuota.Proto.fields(Data([0x80])) == nil)
+            var huge = Data()
+            for _ in 0..<5_001 {
+                huge += AgyFixture.varintField(1, 1)
+            }
+            #expect(AntigravityQuota.Proto.fields(huge) == nil)
+        }
+
+        @Test("missing reset stays nil and is not invented")
+        func missingResetStaysNil() {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let quota = AgyFixture.floatField(1, 0.5)
+            let model =
+                AgyFixture.field(1, Data("No Reset".utf8))
+                + AgyFixture.field(15, quota)
+            let data = AgyFixture.wrapped(models: [model])
+            let state = AntigravityQuota.parseUserStatus(data, now: now)
+            #expect(state != nil)
+            #expect(state?.resetsAt == nil)
+            #expect(state?.isStale == false)
+        }
+
+        @Test("dispatcher sees the reported row, never the measured row")
+        func dispatcherSeesReportedRow() {
+            let reported = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 0, rowLabel: "Reported")
+            let measured = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 100, hidesProgress: true,
+                idSuffix: "measured", rowLabel: "Measured")
+            let blocked = TaskDispatcher.resolveQuotaAwareAgent(
+                preferredAgent: "antigravity", quotas: [reported, measured])
+            #expect(blocked.agent != "antigravity")
+            #expect(blocked.reroutedFrom == "antigravity")
+
+            let stale = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 0, rowLabel: "Reported",
+                isStale: true)
+            let live = TaskDispatcher.resolveQuotaAwareAgent(
+                preferredAgent: "antigravity", quotas: [stale, measured])
+            #expect(live.agent == "antigravity")
+            #expect(live.reroutedFrom == nil)
+        }
+
+        @Test("read-only reader sees uncheckpointed WAL data")
+        func walCacheIsVisible() throws {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let home = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-agy-wal-\(UUID().uuidString)")
+            let global = home.appendingPathComponent(
+                "Library/Application Support/Antigravity IDE/User/globalStorage",
+                isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: global, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: home) }
+            let dbURL = global.appendingPathComponent("state.vscdb")
+            var writer: OpaquePointer?
+            guard sqlite3_open(dbURL.path, &writer) == SQLITE_OK, let db = writer
+            else { throw AgyFixtureError.sqlite("open WAL writer") }
+            defer { sqlite3_close(db) }
+            sqlite3_exec(
+                db,
+                "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+                    + "CREATE TABLE ItemTable(key TEXT, value BLOB);",
+                nil, nil, nil)
+            let value = AgyFixture.wrapped(models: [
+                AgyFixture.model(
+                    "WAL", fraction: 0.42,
+                    reset: UInt64(now.timeIntervalSince1970) + 3_600)
+            ])
+            var stmt: OpaquePointer?
+            guard
+                sqlite3_prepare_v2(
+                    db, "INSERT INTO ItemTable VALUES(?, ?);", -1, &stmt, nil)
+                    == SQLITE_OK, let stmt
+            else {
+                throw AgyFixtureError.sqlite("prepare WAL insert")
+            }
+            sqlite3_bind_text(
+                stmt, 1, AntigravityQuota.userStatusKey, -1, testTransient)
+            value.withUnsafeBytes { raw in
+                _ = sqlite3_bind_blob(
+                    stmt, 2, raw.baseAddress, Int32(value.count), testTransient)
+            }
+            #expect(sqlite3_step(stmt) == SQLITE_DONE)
+            sqlite3_finalize(stmt)
+            let state = AntigravityQuota.state(home: home.path, now: now)
+            #expect(state != nil)
+            #expect(abs((state?.remainingPercent ?? 0) - 42.0) < 0.001)
         }
     }
 #endif
