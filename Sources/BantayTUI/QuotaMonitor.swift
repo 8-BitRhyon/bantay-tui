@@ -88,7 +88,10 @@ final class QuotaMonitor: ObservableObject {
     }
 
     static func minRemainingPercent(quotas: [ProviderQuota]) -> Int {
-        guard let minQuota = quotas.min(by: { $0.remainingPercent < $1.remainingPercent })
+        // A stale row is context, not a live threshold: keeping it here
+        // would paint the header badge red from an already-ended window.
+        let live = quotas.filter { !$0.isStale }
+        guard let minQuota = live.min(by: { $0.remainingPercent < $1.remainingPercent })
         else { return 100 }
         return Int(minQuota.remainingPercent)
     }

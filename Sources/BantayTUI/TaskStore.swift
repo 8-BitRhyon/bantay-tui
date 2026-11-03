@@ -14,6 +14,12 @@ public final class TaskStore: ObservableObject {
     private let writer = TaskDiskWriter()
     private var writeGeneration: UInt64 = 0
     private var tombstones: Set<String> = []
+    private static let tombstoneCap = 1000
+
+    private var tombstoneURL: URL {
+        fileURL.deletingLastPathComponent()
+            .appendingPathComponent("tasks-tombstones.json")
+    }
 
     public init(fileURL: URL? = nil) {
         if let fileURL {
@@ -26,7 +32,24 @@ public final class TaskStore: ObservableObject {
                 at: appSupport, withIntermediateDirectories: true)
             self.fileURL = appSupport.appendingPathComponent("tasks.json")
         }
+        // Tombstones must survive relaunch: an in-memory set lets every
+        // deleted task resurrect on the next inbound sync after restart.
+        // A sidecar file (not UserDefaults) keeps them next to the tasks
+        // they guard, and loads deterministically in every process.
+        if let data = try? Data(contentsOf: tombstoneURL),
+            let saved = try? JSONDecoder().decode([String].self, from: data)
+        {
+            tombstones = Set(saved)
+        }
         load()
+    }
+
+    private func saveTombstones() {
+        let capped = Array(tombstones.suffix(Self.tombstoneCap))
+        tombstones = Set(capped)
+        if let data = try? JSONEncoder().encode(capped) {
+            try? data.write(to: tombstoneURL, options: .atomic)
+        }
     }
 
     /// Load tasks from JSON storage.
@@ -118,18 +141,46 @@ public final class TaskStore: ObservableObject {
     }
 
     /// Adds a new task, using natural language tag/agent/priority parsing if needed.
+    /// Index of the task linked to an external reminder, preferring the
+    /// externalID match. The title fallback only applies to tasks that
+    /// carry no externalID of their own: otherwise a same-title row can
+    /// steal a decision meant for the linked one (complete/remove/reopen
+    /// hitting the wrong reminder).
+    func indexOfTask(matchingExternalID extID: String?, title: String) -> Int? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let extID, !extID.isEmpty {
+            if let idx = tasks.firstIndex(where: {
+                $0.externalID?.caseInsensitiveCompare(extID) == .orderedSame
+            }) {
+                return idx
+            }
+            guard !trimmed.isEmpty else { return nil }
+            return tasks.firstIndex(where: {
+                ($0.externalID == nil || $0.externalID!.isEmpty)
+                    && $0.title.caseInsensitiveCompare(trimmed) == .orderedSame
+            })
+        }
+        guard !trimmed.isEmpty else { return nil }
+        return tasks.firstIndex(where: {
+            $0.title.caseInsensitiveCompare(trimmed) == .orderedSame
+        })
+    }
+
     @discardableResult
     public func addTask(_ rawTitle: String, dueDate: Date? = nil, syncReminders: Bool = true)
         -> BantayTask
     {
         let parsed = TaskStore.parseNaturalLanguage(rawTitle)
-        let clean = parsed.cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !clean.isEmpty {
-            tombstones.remove(clean)
-        }
-        let raw = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !raw.isEmpty {
-            tombstones.remove(raw)
+        let cleanTitle = parsed.cleanTitle
+        // An identical open task already covers this: return it instead of
+        // stacking a duplicate (double-submit, re-add, reminder echo).
+        if !cleanTitle.isEmpty,
+            let existing = tasks.first(where: {
+                !$0.isCompleted
+                    && $0.title.caseInsensitiveCompare(cleanTitle) == .orderedSame
+            })
+        {
+            return existing
         }
 
         let finalDueDate = dueDate ?? parsed.dueDate
@@ -150,13 +201,36 @@ public final class TaskStore: ObservableObject {
         if syncReminders && NotchHUDConfig.shared.syncAppleReminders
             && RemindersProvider.shared.isAuthorized
         {
+            let taskID = task.id
             let taskTitle = task.title
             let taskDue = task.dueDate
-            Task {
-                await RemindersProvider.shared.add(title: taskTitle, due: taskDue)
+            // Link the created reminder back to the task so completion,
+            // reopen, and remove hit the right reminder. The tombstone
+            // clears only once the write succeeds: clearing first would
+            // leave a failed delete resurrectable with no guard left.
+            Task { @MainActor in
+                if let identifier = await RemindersProvider.shared.add(
+                    title: taskTitle, due: taskDue)
+                {
+                    if let index = self.tasks.firstIndex(where: { $0.id == taskID }) {
+                        self.tasks[index].externalID = identifier
+                        self.save()
+                    }
+                    self.clearTombstones(forTitle: taskTitle)
+                }
             }
+        } else {
+            clearTombstones(forTitle: task.title)
         }
         return task
+    }
+
+    private func clearTombstones(forTitle title: String) {
+        let clean = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !clean.isEmpty {
+            tombstones.remove(clean)
+        }
+        saveTombstones()
     }
 
     /// Ingests a task discovered externally (e.g. from Apple Reminders via iCloud).
@@ -191,16 +265,24 @@ public final class TaskStore: ObservableObject {
             if tombstones.contains(lowerTitle) { continue }
             if let lowerExt, tombstones.contains(lowerExt) { continue }
 
-            // Deduplication: externalID match first, then clean/raw title comparison
+            // Deduplication: externalID match first, then title comparison.
+            // Tags participate so two reminders that parse to the same
+            // title ("Buy milk @work" vs "Buy milk @home") stay separate
+            // instead of collapsing and orphaning one externalID.
             let rawTrimmed = item.rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let itemTags = Set(parsed.tags.map { $0.lowercased() })
             if let existingIndex = tasks.firstIndex(where: { task in
                 if let ext = item.externalID, let taskExt = task.externalID, !ext.isEmpty,
                     !taskExt.isEmpty
                 {
                     if ext.caseInsensitiveCompare(taskExt) == .orderedSame { return true }
                 }
-                return task.title.caseInsensitiveCompare(trimmedTitle) == .orderedSame
+                let titleMatch =
+                    task.title.caseInsensitiveCompare(trimmedTitle) == .orderedSame
                     || task.title.caseInsensitiveCompare(rawTrimmed) == .orderedSame
+                guard titleMatch else { return false }
+                return Set(task.tags.map { $0.lowercased() }) == itemTags
+                    || task.externalID == nil
             }) {
                 // Backfill externalID if missing so future status syncs link properly
                 if tasks[existingIndex].externalID == nil, let ext = item.externalID {
@@ -346,11 +428,9 @@ public final class TaskStore: ObservableObject {
             let isDone = task.isCompleted
             Task {
                 if isDone {
-                    let matching = RemindersProvider.shared.reminders.first(where: {
-                        if let extID, $0.calendarItemIdentifier == extID { return true }
-                        return $0.title == targetTitle
-                    })
-                    if let matching {
+                    if let matching = RemindersProvider.shared.matchingReminder(
+                        externalID: extID, title: targetTitle)
+                    {
                         await RemindersProvider.shared.complete(matching)
                     }
                 } else {
@@ -372,16 +452,15 @@ public final class TaskStore: ObservableObject {
             if !clean.isEmpty {
                 tombstones.insert(clean)
             }
+            saveTombstones()
 
             let targetTitle = target.title
             let extID = target.externalID
             if NotchHUDConfig.shared.syncAppleReminders && RemindersProvider.shared.isAuthorized {
                 Task {
-                    let matching = RemindersProvider.shared.reminders.first(where: {
-                        if let extID, $0.calendarItemIdentifier == extID { return true }
-                        return $0.title == targetTitle
-                    })
-                    if let matching {
+                    if let matching = RemindersProvider.shared.matchingReminder(
+                        externalID: extID, title: targetTitle)
+                    {
                         await RemindersProvider.shared.remove(matching)
                     }
                 }
@@ -389,6 +468,56 @@ public final class TaskStore: ObservableObject {
         }
         tasks.removeAll(where: { $0.id == taskID })
         save()
+    }
+
+    /// Test seam: wait until every queued disk write landed. Production
+    /// never needs this (the app outlives its writes), but relaunch-style
+    /// tests re-init immediately after a mutation and would otherwise read
+    /// the pre-write file. Polls on the generation counter rather than a
+    /// bare drain: `save()` schedules its write on a detached task, so a
+    /// drain issued first could overtake the not-yet-enqueued write.
+    func waitForPendingWrites() async {
+        let target = writeGeneration
+        for _ in 0..<500 {
+            if await writer.completedGeneration >= target { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    /// Restores a just-deleted task (Undo). The tombstone entries written at
+    /// delete time are cleared so the restore is not immediately swallowed,
+    /// and the reminder is re-created and re-linked when sync is on.
+    public func restoreTask(_ task: BantayTask) {
+        guard !tasks.contains(where: { $0.id == task.id }) else { return }
+        tombstones.remove(task.id.uuidString.lowercased())
+        if let ext = task.externalID, !ext.isEmpty {
+            tombstones.remove(ext.lowercased())
+        }
+        let clean = task.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !clean.isEmpty {
+            tombstones.remove(clean)
+        }
+        saveTombstones()
+        tasks.insert(task, at: 0)
+        save()
+        if !task.isCompleted, NotchHUDConfig.shared.syncAppleReminders,
+            RemindersProvider.shared.isAuthorized
+        {
+            let taskID = task.id
+            let taskTitle = task.title
+            let taskDue = task.dueDate
+            Task { @MainActor in
+                if let identifier = await RemindersProvider.shared.add(
+                    title: taskTitle, due: taskDue)
+                {
+                    if let index = self.tasks.firstIndex(where: { $0.id == taskID }) {
+                        self.tasks[index].externalID = identifier
+                        self.save()
+                    }
+                    self.clearTombstones(forTitle: taskTitle)
+                }
+            }
+        }
     }
 
     /// Assigns an agent source name to a task.
@@ -564,4 +693,10 @@ private actor TaskDiskWriter {
             lastWrittenGeneration = generation
         }
     }
+
+    /// No-op whose await guarantees every queued write landed first.
+    func drain() {}
+
+    /// Highest generation fully written so far.
+    var completedGeneration: UInt64 { lastWrittenGeneration }
 }

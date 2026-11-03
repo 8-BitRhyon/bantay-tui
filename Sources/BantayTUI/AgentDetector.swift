@@ -831,6 +831,24 @@ enum AgentDetector {
                 return "Searching: \(query)"
             }
             return "Searching code"
+        case "find_by_name", "code_search":
+            if let query = cleanUnquoted(
+                args?["Query"] as? String ?? args?["query"] as? String
+                    ?? args?["pattern"] as? String ?? args?["Pattern"] as? String)
+            {
+                return "Searching: \(query)"
+            }
+            return "Searching code"
+        case "read_url_content":
+            return "Reading page"
+        case "generate_image":
+            return "Generating image"
+        case "view_code_item":
+            return "Viewing code"
+        case "open_browser_url", "browser_subagent", "control_browser", "browser":
+            return "Using browser"
+        case "manage_task", "todo_list", "update_plan", "planning":
+            return "Planning"
         case "list_dir", "list_directory", "ls":
             return "Listing directory"
         case "ask_question", "askquestion", "question":
@@ -846,6 +864,13 @@ enum AgentDetector {
     /// cleans paths down to basenames, and strips log envelopes.
     static func readableLine(_ line: String) -> String? {
         let lower = line.lowercased()
+        // Version and update notices are chrome, not work: a transcript
+        // tail ending in one must not promote the agent to "working".
+        if lower.contains("update available")
+            || (lower.contains("new version of") && lower.contains("available"))
+        {
+            return nil
+        }
         // Skip log warnings, debug, trace lines, and daemon chatter entirely
         if lower.contains("level=warn") || lower.contains("level=debug")
             || lower.contains("level=trace")
@@ -1247,6 +1272,14 @@ enum StandaloneAgentScanner {
         var raw: [DetectedAgent] = []
         // Several processes can share one agent transcript root; scan it once.
         var sessionsByRoot: [String: [AgentDetector.ActiveSession]] = [:]
+        // Antigravity's structured store beats transcript tails: it gives
+        // the current step summary and a reliable working heartbeat.
+        let antigravitySnapshot: AntigravityStore.Snapshot? =
+            samples.contains {
+                AgentDetector.classifyProcess(name: $0.name, command: $0.command)
+                    == "antigravity"
+            }
+            ? AntigravityStore.snapshot(home: home) : nil
         for sample in samples {
             guard
                 let name = AgentDetector.classifyProcess(
@@ -1254,6 +1287,9 @@ enum StandaloneAgentScanner {
             else {
                 continue
             }
+            // The multiplexer itself is infrastructure, not an agent: its
+            // pane agents already arrive through the adapter.
+            guard name != "herdr" else { continue }
             guard !AgentDetector.isHerdrManaged(environmentLines: sample.environmentLines) else {
                 continue
             }
@@ -1273,7 +1309,21 @@ enum StandaloneAgentScanner {
                 }
             }
             sessions.sort(by: { $0.date > $1.date })
-            if !sessions.isEmpty {
+            if name == "antigravity", let antigravitySnapshot,
+                !antigravitySnapshot.conversations.isEmpty
+            {
+                raw.append(
+                    DetectedAgent(
+                        pid: sample.pid,
+                        name: name,
+                        activity: antigravitySnapshot.latest?.headline,
+                        isWorking: antigravitySnapshot.isWorking,
+                        cwd: sessions.first?.cwd,
+                        sessionPath: AntigravityStore.conversationsDirectory(home: home)
+                            .path
+                    )
+                )
+            } else if !sessions.isEmpty {
                 for session in sessions {
                     raw.append(
                         DetectedAgent(
@@ -1315,7 +1365,10 @@ enum StandaloneAgentScanner {
     static func runningProcesses() -> [ProcessSample] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,command="]
+        // `e` puts each process's environment on the same line, which is
+        // the only way the herdr-managed filter can see HERDR_PANE_ID.
+        // Without it every pane process also looked standalone.
+        process.arguments = ["axeww", "-o", "pid=,command="]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -1328,20 +1381,58 @@ enum StandaloneAgentScanner {
         process.waitUntilExit()
         guard let text = String(data: data, encoding: .utf8) else { return [] }
         return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let firstSpace = trimmed.firstIndex(where: { $0.isWhitespace }),
-                let pid = Int(trimmed[..<firstSpace])
-            else { return nil }
-            let fullCommand = String(trimmed[firstSpace...]).trimmingCharacters(in: .whitespaces)
-            let binaryPath =
-                fullCommand.split(whereSeparator: \.isWhitespace).first.map(String.init)
-                ?? fullCommand
-            let procName = URL(fileURLWithPath: binaryPath).lastPathComponent
-            return ProcessSample(
-                pid: pid,
-                name: procName,
-                command: fullCommand,
-                environmentLines: [])
+            processSample(fromPSLine: String(line))
+        }
+    }
+
+    /// Parse one `ps axeww` line into a sample, lifting the herdr
+    /// environment assignments (appended after the command) into
+    /// `environmentLines` so pane processes stop double-detecting as
+    /// standalone agents.
+    static func processSample(fromPSLine line: String) -> ProcessSample? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let firstSpace = trimmed.firstIndex(where: { $0.isWhitespace }),
+            let pid = Int(trimmed[..<firstSpace])
+        else { return nil }
+        let fullCommand = String(trimmed[firstSpace...]).trimmingCharacters(in: .whitespaces)
+        let command = commandWithoutEnvironment(fullCommand)
+        let binaryPath =
+            command.split(whereSeparator: \.isWhitespace).first.map(String.init)
+            ?? command
+        let procName = URL(fileURLWithPath: binaryPath).lastPathComponent
+        return ProcessSample(
+            pid: pid,
+            name: procName,
+            command: command,
+            environmentLines: herdrEnvironment(in: fullCommand))
+    }
+
+    /// The command part of a ps line, without the appended environment.
+    /// Environment keys are uppercase assignments; agent CLIs do not take
+    /// bare uppercase assignments as arguments, so the first one after
+    /// the program name starts the environment. Classifying the whole
+    /// line once promoted a tmux attach (codex in its PATH) and a Dia
+    /// agent-server into phantom agents.
+    static func commandWithoutEnvironment(_ fullCommand: String) -> String {
+        let tokens = fullCommand.split(separator: " ")
+        var end = tokens.count
+        for (index, token) in tokens.enumerated() where index > 0 {
+            if token.range(
+                of: "^[A-Z_][A-Z0-9_]*=", options: .regularExpression) != nil
+            {
+                end = index
+                break
+            }
+        }
+        return tokens[..<end].joined(separator: " ")
+    }
+
+    /// The HERDR_ENV and HERDR_PANE_ID assignments in a ps line, if any.
+    static func herdrEnvironment(in command: String) -> [String] {
+        ["HERDR_ENV=", "HERDR_PANE_ID="].compactMap { prefix in
+            guard let range = command.range(of: prefix) else { return nil }
+            let rest = command[range.lowerBound...]
+            return String(rest.split(separator: " ").first ?? "")
         }
     }
 

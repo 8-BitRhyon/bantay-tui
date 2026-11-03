@@ -220,6 +220,99 @@
             #expect(prompt.variance == .multi)
         }
 
+        @Test("antigravity metadata yields a readable headline")
+        func antigravityHeadline() {
+            func field(_ number: Int, _ text: String) -> Data {
+                var data = Data()
+                var key = (number << 3) | 2
+                while key >= 0x80 {
+                    data.append(UInt8((key & 0x7f) | 0x80))
+                    key >>= 7
+                }
+                data.append(UInt8(key))
+                data.append(UInt8(text.utf8.count))
+                data.append(text.data(using: .utf8)!)
+                return data
+            }
+            var blob = Data()
+            blob.append(field(30, "List files in /tmp"))
+            blob.append(field(31, "Listing files"))
+            #expect(AntigravityStore.headline(fromMetadata: blob) == "Listing files")
+            #expect(AntigravityStore.stepTypeHeadline(15) == "Thinking")
+            #expect(AntigravityStore.stepTypeHeadline(21) == "Running tool")
+        }
+
+        @Test("herdr-managed processes carry their environment")
+        func herdrManagedProcesses() {
+            let managed = StandaloneAgentScanner.processSample(
+                fromPSLine:
+                    "  6124 opencode --session ses_1 FOO=1 HERDR_PANE_ID=w3:pT HERDR_ENV=1")
+            #expect(managed?.pid == 6124)
+            #expect(
+                AgentDetector.isHerdrManaged(
+                    environmentLines: managed?.environmentLines ?? []))
+            let free = StandaloneAgentScanner.processSample(
+                fromPSLine: "  777 opencode --session ses_2")
+            #expect(
+                !AgentDetector.isHerdrManaged(
+                    environmentLines: free?.environmentLines ?? []))
+            #expect(AgentDetector.readableLine("OpenCode update available") == nil)
+            #expect(
+                AgentDetector.readableLine("A new version of Kilo is available") == nil)
+        }
+
+        @Test("duplicate project rows get a session label")
+        func sessionLabel() {
+            let agent = snapshot(
+                id: "1", source: "opencode", kind: .idle,
+                title: "OC | Drag media into notch", paneId: "w3:pT")
+            #expect(AgentPresentation.sessionLabel(for: agent) == "Drag media into notch")
+            let bare = snapshot(
+                id: "2", source: "opencode", kind: .idle, title: nil, paneId: "w3:pH")
+            #expect(AgentPresentation.sessionLabel(for: bare) == nil)
+        }
+
+        @Test("working headline drops the terminal prefix")
+        func workingHeadlinePrefix() {
+            let agent = snapshot(
+                id: "1", source: "opencode", kind: .progress,
+                title: "OC | Improve interactive pop-up approvals",
+                paneId: "w3:pT", workspaceId: "w3", cwd: "/tmp/proj")
+            #expect(
+                AgentPresentation.status(for: agent).headline
+                    == "Improve interactive pop-up approvals")
+        }
+
+        @Test("environment text never classifies a process")
+        func environmentNeverClassifies() {
+            let sample = StandaloneAgentScanner.processSample(
+                fromPSLine:
+                    "  790 /opt/homebrew/bin/tmux attach -t main TERM=xterm PATH=/opt/codex/bin:/usr/bin HERDR_PANE_ID=w3:pT"
+            )
+            #expect(sample?.command == "/opt/homebrew/bin/tmux attach -t main")
+            #expect(
+                AgentDetector.classifyProcess(
+                    name: sample?.name ?? "", command: sample?.command ?? "") == nil)
+        }
+
+        @Test("permission capabilities name what they unlock")
+        func permissionCapabilities() {
+            #expect(PermissionCapability.allCases.count == 3)
+            #expect(
+                PermissionCapability.accessibility.settingsURLString
+                    .contains("Privacy_Accessibility"))
+            #expect(
+                PermissionCapability.inputMonitoring.settingsURLString
+                    .contains("Privacy_ListenEvent"))
+            #expect(
+                PermissionCapability.notifications.settingsURLString
+                    .contains("notifications"))
+            for capability in PermissionCapability.allCases {
+                #expect(!capability.title.isEmpty)
+                #expect(!capability.detail.isEmpty)
+            }
+        }
+
         @Test("structured roster height grows and caps")
         func rosterHeight() {
             let metrics = IslandMetrics.RosterLayoutMetrics(

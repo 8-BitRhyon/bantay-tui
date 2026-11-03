@@ -79,14 +79,15 @@ A per-window `AXFullScreen` check also guards `applyComputedFrames`. This check 
 ### 3. Agent Telemetry & Event Ingestion
 - `AgentEventManager.swift`: Core coordination actor. Merges push events and periodic scans into a unified agent roster, calculates active run-rates, and tracks pending approvals.
 - `HerdrEventStream.swift`: Persistent UNIX domain socket connection subscribing to `events.subscribe`. Receives real-time notifications for pane updates and agent detections.
-- `AgentDetector.swift`: Discovers standalone agents outside multiplexers by inspecting process names, command arguments, and session transcript files.
+- `AgentDetector.swift`: Discovers standalone agents outside multiplexers by inspecting process names, command arguments, and session transcript files. The scan reads `ps axeww` and strips the appended environment before classifying, so a process is never promoted to an agent by text in its environment (a tmux attach once became "codex"); herdr-managed pane processes are filtered by their HERDR environment instead of double-detecting as standalone agents.
 - `UniversalQuotaAdapters.swift`: Quota adapters for Codex, Cursor, Claude Code rate limits, and OpenRouter BYOK allocations.
 - `UsageTracker.swift`: Calculates token consumption, daily expenditures, prompt cache savings (applying 90% discount on cache reads), and projected run-rates.
 - `EventIngestServer.swift`: Localhost HTTP socket listener accepting event payloads from remote environments over SSH tunnels.
 
 ### 4. Input & Keystroke Automation
 - `StandaloneAgentDispatcher.swift`: Synthesizes keystrokes into target applications. For desktop GUI IDEs, it focuses the chat input with `⌘L`, pastes text with `⌘V`, and presses Return. For terminal agents, it writes directly into the shell.
-- `TerminalFocusser.swift`: Resolves the target process and activates its hosting application with `NSWorkspace`. Prioritizes running terminals and IDEs via an ordered registry.
+- `Permissions.swift`: Per-capability grant model (Accessibility, Input Monitoring, Notifications), each named by what it unlocks. The Settings Permissions section polls grant state live while open, and an Input Monitoring grant re-arms the global hotkey monitors without a relaunch. Notification checks are bundle-guarded: `UNUserNotificationCenter` crashes in bare binaries.
+- `TerminalFocusser.swift`: Resolves the target process and activates its hosting application with `NSWorkspace`. Prioritizes running terminals and IDEs via an ordered registry. Focusing an agent always prefers the exact multiplexer pane; for chat-first IDEs (Antigravity, Cursor, Windsurf) it then focuses the composer input with `⌘L`, so Focus lands where the user types, not just on the window.
 - `PlexerAdapter.swift`: Common interface for multiplexers. Automatically resolves active adapters to `TmuxAdapter`, `ZellijAdapter`, or `HerdrSocketAdapter`.
 
 ### 5. Control Gateway & External Tools

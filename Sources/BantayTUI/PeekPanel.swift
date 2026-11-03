@@ -5,6 +5,9 @@ import SwiftUI
 /// observes this so a late-arriving tail/diff fetch can populate the overlay
 /// after it has been shown.
 final class PeekPanelModel: ObservableObject {
+    /// Stable roster identity of the agent being shown. Source plus
+    /// paneId collide for two standalone agents of the same source.
+    @Published var agentId: String = ""
     @Published var source: String = ""
     @Published var paneId: String? = nil
     @Published var cwd: String? = nil
@@ -42,7 +45,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     /// time: when already visible for the same agent, toggles closed.
     func show(agent: AgentSnapshot, adapter: any PlexerAdapter) {
         if let panel, panel.isVisible {
-            if model.source == agent.source && model.paneId == agent.paneId {
+            if model.agentId == agent.id {
                 dismiss()
                 return
             }
@@ -116,6 +119,7 @@ final class PeekPanelController: NSObject, NSWindowDelegate {
     /// never touches the main thread; the result lands back on the main actor.
     private func reload(agent: AgentSnapshot, adapter: any PlexerAdapter) {
         fetchTask?.cancel()
+        model.agentId = agent.id
         model.source = agent.source
         model.paneId = agent.paneId
         model.cwd = agent.cwd

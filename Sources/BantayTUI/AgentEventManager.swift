@@ -370,6 +370,8 @@ final class AgentEventManager: ObservableObject {
     private var lastSoundAt: [String: Date] = [:]
     /// PERF-2: last time the standalone ps scan ran (throttle state).
     private var lastStandaloneScan: Date?
+    /// Last Antigravity finished-session recording scan (throttle state).
+    private var lastAntigravitySessionScanAt: Date?
     /// Cached standalone detected agents between scans (prevent wiping roster between ticks).
     private var lastDetectedAgents: [DetectedAgent] = []
     private var activeScanTask: Task<[DetectedAgent], Never>?
@@ -443,6 +445,10 @@ final class AgentEventManager: ObservableObject {
     /// just granted. A non-approval status clears the entry, so a genuinely
     /// new prompt still shows immediately.
     private var acknowledgedApprovalFingerprints: [String: Set<String>] = [:]
+    /// Prompts the user dismissed or answered, by identity key. A bare
+    /// status heartbeat for the same pane (no title, no choices) must not
+    /// resurrect the card; a genuinely new question still shows.
+    private var dismissedApprovalFingerprints: [String: String] = [:]
     private var approvalEnrichmentTasks: [String: Task<Void, Never>] = [:]
     /// Last pane capture per approval. Repeated `blocked` heartbeats must not
     /// spawn a fresh terminal read on every roster refresh.
@@ -1221,9 +1227,55 @@ extension AgentEventManager {
         captureTask = nil
     }
 
+    /// Antigravity conversations end without a completion event Bantay can
+    /// hear, so finished ones are recorded from the local store directly:
+    /// quiet for ten minutes with at least three steps counts as a session.
+    /// Tokens stay zero: the store has no decoded usage fields, and a
+    /// session row must never invent them.
+    private func recordFinishedAntigravitySessions() {
+        let now = Date()
+        if let last = lastAntigravitySessionScanAt,
+            now.timeIntervalSince(last) < 60
+        {
+            return
+        }
+        lastAntigravitySessionScanAt = now
+        let defaults = UserDefaults.standard
+        let key = "bantay_antigravity_recorded_conversations"
+        var recorded = Set(defaults.stringArray(forKey: key) ?? [])
+        let snapshot = AntigravityStore.snapshot()
+        var changed = false
+        for conversation in snapshot.conversations {
+            guard !recorded.contains(conversation.id),
+                conversation.stepCount >= 3,
+                now.timeIntervalSince(conversation.updatedAt) > 600
+            else { continue }
+            sessionStore.addSession(
+                AgentSessionRecord(
+                    id: "antigravity:\(conversation.id)",
+                    agentName: "antigravity",
+                    title: conversation.headline ?? "Antigravity session",
+                    startTime: conversation.updatedAt,
+                    durationSeconds: 0,
+                    totalTokens: 0,
+                    costUSD: 0,
+                    status: "Completed",
+                    sessionPath: AntigravityStore.conversationsDirectory().path,
+                    isDelta: false,
+                    isWindowEstimate: false,
+                    buildTag: SessionHistoryStore.currentBuildTag))
+            recorded.insert(conversation.id)
+            changed = true
+        }
+        if changed {
+            defaults.set(Array(recorded).sorted(), forKey: key)
+        }
+    }
+
     private func refreshRosterAndArmWaits() async {
         if isRefreshingRoster { return }
         isRefreshingRoster = true
+        recordFinishedAntigravitySessions()
         // Do not chain a queued refresh here. If a scan outlasts the poll
         // interval, chaining keeps the scan loop back-to-back forever. The
         // capture loop's next tick picks the work up instead.
@@ -2270,6 +2322,7 @@ extension AgentEventManager {
             if let pending = pendingApprovals[key] {
                 acknowledgedApprovalFingerprints[key, default: []].insert(
                     pending.fingerprint)
+                dismissedApprovalFingerprints[key] = pending.fingerprint
             }
             pendingApprovals.removeValue(forKey: key)
             approvalEnrichmentTasks[key]?.cancel()
@@ -2320,12 +2373,26 @@ extension AgentEventManager {
                 return true
             }
         }
+        // Dismissed or answered prompts stay down for bare heartbeats:
+        // a status-only re-emission carries no question of its own, so
+        // there is nothing new to show. Events with real choices (a
+        // following question, a staged form field) are never suppressed.
+        if event.kind == .accessRequest || event.kind == .waiting,
+            (event.choices ?? []).isEmpty,
+            IslandMetrics.isGenericApprovalText(event.title)
+        {
+            for key in acknowledgmentKeys(for: event)
+            where dismissedApprovalFingerprints[key] != nil {
+                return true
+            }
+        }
         return false
     }
 
     private func clearAcknowledgments(for event: AgentEvent) {
         for key in acknowledgmentKeys(for: event) {
             acknowledgedApprovalFingerprints.removeValue(forKey: key)
+            dismissedApprovalFingerprints.removeValue(forKey: key)
         }
     }
 

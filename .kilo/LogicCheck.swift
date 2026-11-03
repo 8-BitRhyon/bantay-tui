@@ -968,7 +968,8 @@ struct LogicCheckMain {
             "L146 prune drops unblocked waiting cards, keeps approvals and notices")
         check(
             IslandMetrics.notificationQueuePruneUnblocked(
-                [qWait], blockedPaneKeys: []).isEmpty,
+                [qWait], blockedPaneKeys: []
+            ).isEmpty,
             "L146 prune drops a waiting card whose pane is gone")
 
         let multiState = ApprovalPromptResolver.resolve(
@@ -1004,6 +1005,97 @@ struct LogicCheckMain {
             toggleControls.effectiveSelection(local: nil) == [2]
                 && toggleControls.effectiveSelection(local: []) == [],
             "L147 surfaces start from terminal picks until the user edits")
+
+        func agyField(_ number: Int, _ text: String) -> Data {
+            var data = Data()
+            var key = (number << 3) | 2
+            while key >= 0x80 {
+                data.append(UInt8((key & 0x7f) | 0x80))
+                key >>= 7
+            }
+            data.append(UInt8(key))
+            data.append(UInt8(text.utf8.count))
+            data.append(text.data(using: .utf8)!)
+            return data
+        }
+        var agyBlob = Data()
+        agyBlob.append(agyField(30, "List files in /tmp"))
+        agyBlob.append(agyField(31, "Listing files"))
+        check(
+            AntigravityStore.headline(fromMetadata: agyBlob) == "Listing files",
+            "L148 antigravity metadata yields a readable headline")
+        check(
+            AntigravityStore.stepTypeHeadline(15) == "Thinking"
+                && AntigravityStore.stepTypeHeadline(21) == "Running tool",
+            "L148 antigravity step types map to fallback headlines")
+
+        let managedSample = StandaloneAgentScanner.processSample(
+            fromPSLine: "  6124 opencode --session ses_1 FOO=1 HERDR_PANE_ID=w3:pT HERDR_ENV=1")
+        check(
+            managedSample != nil
+                && AgentDetector.isHerdrManaged(
+                    environmentLines: managedSample?.environmentLines ?? []),
+            "L149 ps lines carry the herdr environment")
+        let freeSample = StandaloneAgentScanner.processSample(
+            fromPSLine: "  777 opencode --session ses_2")
+        check(
+            freeSample != nil
+                && !AgentDetector.isHerdrManaged(
+                    environmentLines: freeSample?.environmentLines ?? []),
+            "L149 pane-less processes stay standalone")
+        check(
+            AgentDetector.readableLine("OpenCode update available") == nil,
+            "L149 update notices never become agent activity")
+        let dupAgent = AgentSnapshot(
+            id: "dup", source: "opencode", kind: .idle,
+            title: "OC | Drag media into notch", message: nil, paneId: "w3:pT",
+            workspaceId: "w3", cwd: "/tmp", variance: nil, choices: nil,
+            startedAt: nil, projectContext: nil)
+        check(
+            AgentPresentation.sessionLabel(for: dupAgent) == "Drag media into notch",
+            "L149 same-project rows get a distinguishing session label")
+        check(
+            IslandMetrics.tabBarVisible(
+                showAgents: true, showTasks: true, showAttention: false,
+                showHistory: true, showShelf: false, showMedia: true,
+                shelfSelected: false),
+            "L150 hiding the shelf tab keeps the tab bar")
+        check(
+            IslandMetrics.reconciledTabIndex(
+                selected: 4, visible: [true, true, false, true, false, true]) == 0,
+            "L150 a hidden selected tab reconciles to the first visible tab")
+        let uxWorkingAgent = AgentSnapshot(
+            id: "w1", source: "opencode", kind: .progress,
+            title: "OC | Improve interactive pop-up approvals", message: nil,
+            paneId: "w3:pT", workspaceId: "w3", cwd: "/tmp", variance: nil,
+            choices: nil, startedAt: nil, projectContext: nil)
+        check(
+            AgentPresentation.status(for: uxWorkingAgent).headline
+                == "Improve interactive pop-up approvals",
+            "L150 working headlines drop the terminal prefix")
+        let envSample = StandaloneAgentScanner.processSample(
+            fromPSLine:
+                "  790 /opt/homebrew/bin/tmux attach -t main TERM=xterm PATH=/opt/codex/bin:/usr/bin HERDR_PANE_ID=w3:pT"
+        )
+        check(
+            envSample?.command == "/opt/homebrew/bin/tmux attach -t main",
+            "L151 ps environment is stripped before classification")
+        check(
+            envSample == nil
+                || AgentDetector.classifyProcess(
+                    name: envSample?.name ?? "", command: envSample?.command ?? "")
+                    == nil,
+            "L151 environment text never promotes a process to an agent")
+        check(
+            StandaloneAgentScanner.detect(
+                samples: [
+                    ProcessSample(
+                        pid: 42, name: "grok", command: "grok -p task",
+                        environmentLines: [])
+                ],
+                home: "/tmp/bantay-no-such-home-l151"
+            ).first?.name == "grok",
+            "L151 real agent binaries still surface without transcripts")
         check(
             IslandMetrics.ApprovalControls.checkboxToggleKeys(
                 focusedChoice: 2, initialSelections: [2],
@@ -2454,14 +2546,14 @@ struct LogicCheckMain {
         check(
             emptyShelfSize.height
                 == 38 + IslandMetrics.headerHeight + shelfChrome
-                    + IslandMetrics.shelfEmptyHeight + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfEmptyHeight + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13b empty shelf height fits the empty state and footer")
         check(
             fileShelfSize.height
                 == 38 + IslandMetrics.headerHeight + shelfChrome
-                    + IslandMetrics.shelfStripHeight + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfStripHeight + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13b file shelf height fits the thumbnail strip and footer")
         check(
             mixedShelfSize.height == fileShelfSize.height + 2 * IslandMetrics.rowHeight,
@@ -2557,11 +2649,14 @@ struct LogicCheckMain {
         let freshShelfFile = ShelfFile(
             url: URL(fileURLWithPath: "/tmp/fresh"), createdAt: retentionNow)
         let exactAge = ShelfFile(
-            url: URL(fileURLWithPath: "/tmp/exact"), createdAt: retentionNow.addingTimeInterval(-3600))
+            url: URL(fileURLWithPath: "/tmp/exact"),
+            createdAt: retentionNow.addingTimeInterval(-3600))
         let staleShelfFile = ShelfFile(
-            url: URL(fileURLWithPath: "/tmp/old"), createdAt: retentionNow.addingTimeInterval(-3601))
+            url: URL(fileURLWithPath: "/tmp/old"), createdAt: retentionNow.addingTimeInterval(-3601)
+        )
         let future = ShelfFile(
-            url: URL(fileURLWithPath: "/tmp/future"), createdAt: retentionNow.addingTimeInterval(30))
+            url: URL(fileURLWithPath: "/tmp/future"), createdAt: retentionNow.addingTimeInterval(30)
+        )
         let retention = ShelfRetention.keep(
             [freshShelfFile, exactAge, staleShelfFile, future], now: retentionNow,
             interval: 3600, limit: 10, maxBytes: 10_000, sizes: [:])
@@ -2816,7 +2911,8 @@ struct LogicCheckMain {
         check(
             ShelfOrphanSweeper.sweep(
                 root: sweepBase.appendingPathComponent("missing"),
-                referenced: []).isEmpty,
+                referenced: []
+            ).isEmpty,
             "L13c sweep tolerates a missing root")
 
         let directRoot = shelfHardeningRoot()
@@ -2886,9 +2982,9 @@ struct LogicCheckMain {
         check(
             hardenedEmpty.height
                 == 38 + IslandMetrics.headerHeight + shelfChrome
-                    + IslandMetrics.shelfEmptyHeight
-                    + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfEmptyHeight
+                + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13c shelf footer is included in the empty panel height")
         let overflowShelf = IslandMetrics.shelfPanelSize(
             topInset: 38, fileCount: 1, clipboardCount: 50)
@@ -2919,9 +3015,9 @@ struct LogicCheckMain {
         check(
             noTabShelf.height
                 == 38 + IslandMetrics.headerHeight
-                    + IslandMetrics.shelfEmptyHeight
-                    + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfEmptyHeight
+                + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13c hidden tab bar removes only the tab chrome")
 
         // floating-pill geometry, plus config persistence.
@@ -3090,6 +3186,178 @@ struct LogicCheckMain {
             check(
                 manager.currentEventForTesting?.kind == .accessRequest,
                 "L14 a new prompt after progress is not suppressed")
+
+            // A dismissed prompt must stay down for bare heartbeats, while
+            // a genuinely new question on the same pane still surfaces.
+            let fruitPrompt = AgentEvent(
+                source: "opencode", kind: .accessRequest, title: "Pick a fruit",
+                message: nil, paneId: "ack-9", workspaceId: nil,
+                variance: .choices, choices: ["Apple", "Banana"],
+                playSound: false, persistent: false)
+            manager.publishEventForTesting(fruitPrompt)
+            manager.acknowledgeApproval(paneId: "ack-9")
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "opencode", kind: .accessRequest, title: nil,
+                    message: nil, paneId: "ack-9", workspaceId: nil,
+                    variance: nil, choices: nil, playSound: false,
+                    persistent: false))
+            check(
+                manager.currentEventForTesting == nil,
+                "L152 bare heartbeat does not resurrect a dismissed prompt")
+            manager.publishEventForTesting(
+                AgentEvent(
+                    source: "opencode", kind: .waiting, title: "Pick B",
+                    message: nil, paneId: "ack-9", workspaceId: nil,
+                    variance: .choices, choices: ["B1", "B2"],
+                    playSound: false, persistent: false))
+            check(
+                manager.currentEventForTesting?.kind == .waiting,
+                "L152 a new question on the same pane still surfaces")
+        }
+
+        // L153 Task dedupe: identical adds collapse, tombstones persist,
+        // externalID wins title matches.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-l153-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(
+                at: dir, withIntermediateDirectories: true)
+            let file = dir.appendingPathComponent("tasks.json")
+            try? Data().write(to: file, options: [.atomic])
+            let store = TaskStore(fileURL: file)
+            let first = store.addTask("Buy milk", syncReminders: false)
+            let second = store.addTask("buy MILK", syncReminders: false)
+            check(
+                store.tasks.count == 1 && first.id == second.id,
+                "L153 identical adds collapse to one task")
+            _ = store.batchIngestExternalReminders([
+                (rawTitle: "Buy milk @work", dueDate: nil, externalID: "r1"),
+                (rawTitle: "Buy milk @home", dueDate: nil, externalID: "r2"),
+            ])
+            check(
+                store.tasks.count == 2,
+                "L153 @work merges into the untagged original, @home stays separate (got \(store.tasks.count))"
+            )
+            store.removeTask(store.tasks.first(where: { $0.externalID == "r1" })!.id)
+            _ = awaitProof { await store.waitForPendingWrites() }
+            let relaunched = TaskStore(fileURL: file)
+            _ = relaunched.batchIngestExternalReminders([
+                (rawTitle: "Buy milk @work", dueDate: nil, externalID: "r1")
+            ])
+            check(
+                !relaunched.tasks.contains(where: { $0.externalID == "r1" }),
+                "L153 deleted tasks stay deleted after relaunch")
+            let restored = TaskStore(fileURL: file)
+            let created = restored.addTask("Temporary", syncReminders: false)
+            restored.removeTask(created.id)
+            restored.restoreTask(created)
+            check(
+                restored.tasks.contains(where: { $0.id == created.id }),
+                "L153 undo restores the exact deleted task")
+        }
+        check(
+            PermissionCapability.allCases.count == 3
+                && PermissionCapability.accessibility.settingsURLString
+                    .contains("Privacy_Accessibility")
+                && PermissionCapability.inputMonitoring.settingsURLString
+                    .contains("Privacy_ListenEvent")
+                && PermissionCapability.notifications.settingsURLString
+                    .contains("notifications")
+                && PermissionCapability.allCases.allSatisfy {
+                    !$0.title.isEmpty && !$0.detail.isEmpty
+                },
+            "L153 permission capabilities name what they unlock")
+
+        // L154 Antigravity provider quota decode: minimum model fraction,
+        // its own reset, stale windows, and distinct reported/measured ids.
+        do {
+            func qVarint(_ value: UInt64) -> Data {
+                var value = value
+                var data = Data()
+                while value >= 0x80 {
+                    data.append(UInt8((value & 0x7f) | 0x80))
+                    value >>= 7
+                }
+                data.append(UInt8(value))
+                return data
+            }
+            func qField(_ number: Int, _ payload: Data) -> Data {
+                var data = qVarint(UInt64(number) << 3 | 2)
+                data += qVarint(UInt64(payload.count))
+                data += payload
+                return data
+            }
+            func qVarintField(_ number: Int, _ value: UInt64) -> Data {
+                var data = qVarint(UInt64(number) << 3)
+                data += qVarint(value)
+                return data
+            }
+            func qFloatField(_ number: Int, _ value: Float) -> Data {
+                var data = qVarint(UInt64(number) << 3 | 5)
+                data += withUnsafeBytes(of: value.bitPattern.littleEndian) {
+                    Data($0)
+                }
+                return data
+            }
+            func qModel(_ name: String, _ fraction: Float, _ reset: UInt64) -> Data {
+                let quota =
+                    qFloatField(1, fraction)
+                    + qField(2, qVarintField(1, reset))
+                return qField(1, Data(name.utf8)) + qField(15, quota)
+            }
+            func qBlob(_ models: [Data]) -> Data {
+                var container = Data()
+                for model in models {
+                    container += qField(1, model)
+                }
+                let tier =
+                    qField(1, Data("g1-pro-tier".utf8))
+                    + qField(2, Data("Google AI Pro".utf8))
+                let payload = qField(33, container) + qField(36, tier)
+                let encoded = qField(1, Data(payload.base64EncodedString().utf8))
+                let row =
+                    qField(1, Data("userStatusSentinelKey".utf8))
+                    + qField(2, encoded)
+                let wrapper = qField(1, row)
+                return Data(wrapper.base64EncodedString().utf8)
+            }
+
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let later = UInt64(now.timeIntervalSince1970) + 7_200
+            let earlier = UInt64(now.timeIntervalSince1970) + 600
+            let blob = qBlob([
+                qModel("Low Model", 0.42, later),
+                qModel("High Model", 0.80, earlier),
+            ])
+            let state = AntigravityQuota.parseUserStatus(blob, now: now)
+            check(
+                state?.modelName == "Low Model"
+                    && abs((state?.remainingPercent ?? 0) - 42.0) < 0.001
+                    && state?.resetsAt
+                        == Date(timeIntervalSince1970: TimeInterval(later))
+                    && state?.tier == "Google AI Pro"
+                    && state?.isStale == false,
+                "L154 lowest model fraction keeps its own reset")
+
+            let staleBlob = qBlob([
+                qModel("Expired", 0.0, UInt64(now.timeIntervalSince1970) - 60)
+            ])
+            let stale = AntigravityQuota.parseUserStatus(staleBlob, now: now)
+            let staleRow = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 0, isStale: true)
+            check(
+                stale?.isStale == true && !staleRow.isCritical
+                    && staleRow.dynamicResetDescription(now: now).contains("Stale"),
+                "L154 expired window is stale and does not drive routing")
+
+            let reported = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 42, rowLabel: "Reported")
+            let measured = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 100, idSuffix: "measured")
+            check(
+                reported.id == "antigravity" && measured.id == "antigravity-measured",
+                "L154 reported and measured rows keep distinct ids")
         }
 
         // L15. Full-screen & space policy: pure visibility policy and

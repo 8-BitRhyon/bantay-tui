@@ -500,6 +500,28 @@ public enum IslandMetrics: Sendable {
         showShelfTab || shelfSelected
     }
 
+    /// The tab bar renders when any tab is reachable or the shelf is
+    /// forced open. Hiding the Shelf tab alone must not strand every
+    /// other tab's button with it.
+    public static func tabBarVisible(
+        showAgents: Bool, showTasks: Bool, showAttention: Bool,
+        showHistory: Bool, showShelf: Bool, showMedia: Bool,
+        shelfSelected: Bool
+    ) -> Bool {
+        showAgents || showTasks || showAttention || showHistory || showShelf
+            || showMedia || shelfSelected
+    }
+
+    /// Index of the tab to actually show: the selected one when visible,
+    /// otherwise the first visible tab. Keeps a tab hidden in Settings
+    /// from stranding its content with no way back.
+    public static func reconciledTabIndex(selected: Int, visible: [Bool]) -> Int {
+        guard !visible.isEmpty else { return selected }
+        let clamped = min(max(selected, 0), visible.count - 1)
+        if visible[clamped] { return clamped }
+        return visible.firstIndex(of: true) ?? clamped
+    }
+
     /// The spend perimeter is a peripheral-vision cue for the collapsed notch.
     /// When the panel is open, the cost badge already carries the signal, and a
     /// full-panel red ring reads as an error state.

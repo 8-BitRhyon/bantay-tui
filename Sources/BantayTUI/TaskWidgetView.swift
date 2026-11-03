@@ -1,3 +1,4 @@
+import EventKit
 import SwiftUI
 
 /// SwiftUI view for task management.
@@ -5,11 +6,13 @@ import SwiftUI
 public struct TaskWidgetView: View {
     @ObservedObject var taskStore = TaskStore.shared
     @StateObject private var reminders = RemindersProvider.shared
-    @State private var searchText = ""
     @State private var newTaskTitle = ""
     @State private var hoveredTaskID: UUID?
     @State private var remindersEnabled = NotchHUDConfig.shared.syncAppleReminders
-    @State private var reminderAddText = ""
+    @FocusState private var fieldFocused: Bool
+    /// Last deleted task for Undo. The banner dismisses itself after 5s.
+    @State private var deletedBackup: BantayTask?
+    @State private var undoTask: Task<Void, Never>?
 
     public init() {}
 
@@ -21,13 +24,15 @@ public struct TaskWidgetView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.5))
                 TextField(
-                    "Search or add a task (@work, @claude, !!)...", text: $newTaskTitle,
+                    "Search or add tasks...", text: $newTaskTitle,
                     onCommit: createNewTask
                 )
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
                 .foregroundColor(.white)
                 .disableAutocorrection(true)
+                .focused($fieldFocused)
+                .onExitCommand { newTaskTitle = "" }
 
                 if !newTaskTitle.isEmpty {
                     Button(action: createNewTask) {
@@ -79,8 +84,25 @@ public struct TaskWidgetView: View {
                         }
                         if !categorized.completed.isEmpty {
                             taskSection(
-                                title: "COMPLETED (\(categorized.doneTodayCount) DONE TODAY 🎉)",
+                                title: "COMPLETED · \(categorized.doneTodayCount) TODAY",
                                 tasks: categorized.completed, color: BantayTheme.statusCompleted)
+                        }
+                        if deletedBackup != nil {
+                            HStack(spacing: 8) {
+                                Text("Task deleted")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.7))
+                                Spacer(minLength: 4)
+                                Button("Undo") { undoDelete() }
+                                    .font(.system(size: 10, weight: .bold))
+                                    .buttonStyle(.plain)
+                                    .foregroundColor(BantayTheme.statusAttention)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                Color.white.opacity(0.07),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                     }
                 }
@@ -101,20 +123,61 @@ public struct TaskWidgetView: View {
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 8) {
+        let query = newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return VStack(spacing: 8) {
             Image(systemName: "checkmark.circle.dashed")
                 .font(.system(size: 24))
                 .foregroundColor(.white.opacity(0.3))
-            Text("No tasks yet")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.6))
-            Text("Add a task above or tag @claude, @herdr to assign to an agent.")
-                .font(.system(size: 9.5))
-                .foregroundColor(.white.opacity(0.35))
-                .multilineTextAlignment(.center)
+            if !query.isEmpty {
+                Text("No matches for “\(query)”")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Button("Clear search") { newTaskTitle = "" }
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .buttonStyle(.plain)
+                    .foregroundColor(BantayTheme.statusAttention)
+            } else if unlinkedReminders.isEmpty {
+                Text("No tasks yet")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
+                Text("Add a task above or tag @claude, @herdr to assign to an agent.")
+                    .font(.system(size: 9.5))
+                    .foregroundColor(.white.opacity(0.35))
+                    .multilineTextAlignment(.center)
+                if !remindersEnabled {
+                    Button("Connect Reminders") {
+                        remindersEnabled = true
+                        NotchHUDConfig.shared.syncAppleReminders = true
+                        Task {
+                            if await reminders.requestAccess() {
+                                await reminders.refresh()
+                            }
+                        }
+                    }
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .buttonStyle(.plain)
+                    .foregroundColor(BantayTheme.statusAttention)
+                }
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
+    }
+
+    /// Reminders already mirrored as tasks. Showing both lists at once
+    /// renders every synced item twice, so the Reminders box only shows
+    /// what is not yet in the task list.
+    private var unlinkedReminders: [EKReminder] {
+        reminders.reminders.filter { reminder in
+            !taskStore.tasks.contains { task in
+                if let ext = task.externalID, !ext.isEmpty {
+                    return reminder.calendarItemIdentifier == ext
+                }
+                return task.title.caseInsensitiveCompare(reminder.title ?? "") == .orderedSame
+            }
+        }
     }
 
     /// Apple Reminders section with sync and quick add.
@@ -163,10 +226,13 @@ public struct TaskWidgetView: View {
             if remindersEnabled {
                 if !reminders.authorized && !reminders.isAuthorized {
                     HStack(spacing: 8) {
+                        Image(systemName: reminders.permissionDenied ? "lock.slash" : "bell.badge")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange.opacity(0.9))
                         Text(
                             reminders.permissionDenied
-                                ? "Reminders access is off. Open System Settings to turn it on."
-                                : "Allow Reminders access in System Settings to sync."
+                                ? "Access denied. Turn Reminders on in System Settings."
+                                : "Allow access to sync your Reminders list."
                         )
                         .font(.system(size: 9.5))
                         .foregroundColor(.white.opacity(0.6))
@@ -184,47 +250,16 @@ public struct TaskWidgetView: View {
                         .buttonStyle(.borderless)
                     }
                 } else {
-                    // Quick add into Reminders.
-                    HStack(spacing: 6) {
-                        TextField("Add reminder…", text: $reminderAddText)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 10))
-                            .onSubmit {
-                                let title = reminderAddText.trimmingCharacters(
-                                    in: .whitespacesAndNewlines)
-                                guard !title.isEmpty else { return }
-                                Task {
-                                    await reminders.add(title: title)
-                                    reminderAddText = ""
-                                }
-                            }
-                        Button {
-                            let title = reminderAddText.trimmingCharacters(
-                                in: .whitespacesAndNewlines)
-                            guard !title.isEmpty else { return }
-                            Task {
-                                await reminders.add(title: title)
-                                reminderAddText = ""
-                            }
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 13))
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(6)
-                    .background(
-                        Color.white.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                    if reminders.reminders.isEmpty {
-                        Text("No upcoming reminders.")
+                    // One entry point: the top field creates the task and,
+                    // when sync is on, its reminder. A second input here
+                    // only ever misfiled items.
+                    if unlinkedReminders.isEmpty {
+                        Text("Everything is in your tasks.")
                             .font(.system(size: 9.5))
                             .foregroundColor(.white.opacity(0.4))
                             .padding(.vertical, 2)
                     } else {
-                        ForEach(reminders.reminders.prefix(8), id: \.calendarItemIdentifier) { r in
+                        ForEach(unlinkedReminders.prefix(8), id: \.calendarItemIdentifier) { r in
                             HStack(spacing: 7) {
                                 Button {
                                     Task { await reminders.complete(r) }
@@ -232,6 +267,8 @@ public struct TaskWidgetView: View {
                                     Image(systemName: "circle")
                                         .font(.system(size: 13))
                                         .foregroundColor(.white.opacity(0.5))
+                                        .frame(minWidth: 28, minHeight: 28)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .help("Complete in Reminders")
@@ -259,6 +296,8 @@ public struct TaskWidgetView: View {
                                     Image(systemName: "xmark")
                                         .font(.system(size: 9))
                                         .foregroundColor(.white.opacity(0.4))
+                                        .frame(minWidth: 28, minHeight: 28)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .help("Remove reminder")
@@ -299,7 +338,7 @@ public struct TaskWidgetView: View {
                 withAnimation(BantayTheme.springSnappy) {
                     taskStore.toggleCompleted(task.id)
                 }
-                if !task.isCompleted {
+                if !task.isCompleted, NotchHUDConfig.shared.enableAgentAlerts {
                     NSSound(named: "Tink")?.play()
                 }
             } label: {
@@ -327,6 +366,16 @@ public struct TaskWidgetView: View {
                         Text("!!")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .foregroundColor(BantayTheme.statusFailed)
+                    }
+
+                    if task.externalID != nil {
+                        Text("REMINDERS")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundColor(.blue.opacity(0.85))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.blue.opacity(0.12), in: Capsule())
+                            .help("Synced with Apple Reminders")
                     }
                 }
 
@@ -373,7 +422,11 @@ public struct TaskWidgetView: View {
                         } label: {
                             HStack(spacing: 2) {
                                 Image(systemName: "bolt.fill")
-                                Text(task.executionState == .pending ? "Run" : "Re-run")
+                                Text(
+                                    task.executionState == .blocked
+                                        || task.executionState == .failed
+                                        ? "Retry"
+                                        : (task.executionState == .pending ? "Run" : "Re-run"))
                             }
                             .font(.system(size: 8.5, weight: .semibold))
                             .foregroundColor(.black)
@@ -387,16 +440,14 @@ public struct TaskWidgetView: View {
 
                     if hoveredTaskID == task.id {
                         Button {
-                            withAnimation {
-                                taskStore.removeTask(task.id)
-                            }
+                            deleteWithUndo(task)
                         } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 10))
                                 .foregroundColor(BantayTheme.statusFailed.opacity(0.8))
                         }
                         .buttonStyle(.plain)
-                        .help("Delete task")
+                        .help("Delete task (Undo available)")
                     }
                 }
             }
@@ -419,8 +470,26 @@ public struct TaskWidgetView: View {
     }
 
     @ViewBuilder
+    private func stateBadge(icon: String, label: String, color: Color) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: icon)
+                .font(.system(size: 7))
+            Text(label)
+                .font(.system(size: 8, weight: .medium))
+        }
+        .foregroundColor(color)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(color.opacity(0.2), in: Capsule())
+    }
+
+    @ViewBuilder
     private func executionStateBadge(_ task: BantayTask) -> some View {
         switch task.executionState {
+        case .pending, .dispatched:
+            stateBadge(
+                icon: "clock", label: "Queued",
+                color: BantayTheme.textTertiary)
         case .working:
             HStack(spacing: 2) {
                 Image(systemName: "bolt.horizontal.fill")
@@ -464,6 +533,29 @@ public struct TaskWidgetView: View {
         guard !title.isEmpty else { return }
         taskStore.addTask(title)  // addTask parses NL internally (date/priority/tags)
         newTaskTitle = ""
+    }
+
+    /// Delete with a 5s Undo window. The store restores the exact task
+    /// (same id, tombstones cleared, reminder re-linked) on Undo.
+    private func deleteWithUndo(_ task: BantayTask) {
+        deletedBackup = task
+        undoTask?.cancel()
+        withAnimation {
+            taskStore.removeTask(task.id)
+        }
+        undoTask = Task {
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { deletedBackup = nil }
+        }
+    }
+
+    private func undoDelete() {
+        undoTask?.cancel()
+        if let backup = deletedBackup {
+            taskStore.restoreTask(backup)
+        }
+        deletedBackup = nil
     }
 
     /// Barrie-style live preview: as the user types, show what the natural

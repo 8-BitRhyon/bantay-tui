@@ -68,13 +68,22 @@ struct AgentRowView: View {
                 } else {
                     rowContentView
                     hoverActionsView
+                        // Invisible hover controls must not swallow row
+                        // clicks: they take hits only while visible.
+                        .allowsHitTesting(isRowHovered)
                 }
             }
             .padding(.horizontal, 16)
             .frame(height: rowHeight)
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { onBeginComposing(agent) }
-            .onTapGesture { onFocus(agent) }
+            // One exclusive gesture: a double-click composes, a single
+            // click focuses, and the two can never both fire.
+            .gesture(
+                TapGesture(count: 2)
+                    .onEnded { onBeginComposing(agent) }
+                    .exclusively(
+                        before: TapGesture().onEnded { onFocus(agent) })
+            )
             .help("Click to focus. Double-click to reply.")
         }
         .background(isRowHovered ? Color.white.opacity(0.07) : Color.clear)
@@ -95,9 +104,9 @@ struct AgentRowView: View {
             if let title = agent.title {
                 Button("Copy Title") { copyToClipboard(title) }
             }
-            if let workspaceId = agent.workspaceId {
+            if let cwd = agent.cwd, cwd.hasPrefix("/") {
                 Button("Open Workspace in Finder") {
-                    openWorkspaceInFinder(workspaceId)
+                    openWorkspaceInFinder(cwd)
                 }
             }
             Divider()
@@ -161,6 +170,7 @@ struct AgentRowView: View {
                         .foregroundColor(.white)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .layoutPriority(1)
                     Text(agent.source)
                         .font(.system(size: 8, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white.opacity(0.55))
@@ -188,6 +198,13 @@ struct AgentRowView: View {
                                     .fill(Color.green.opacity(0.12))
                             )
                             .lineLimit(1)
+                    }
+                    if isCompact, let session = AgentPresentation.sessionLabel(for: agent) {
+                        Text(session)
+                            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.4))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 } else {
                     Text(agent.source)
@@ -294,14 +311,15 @@ struct AgentRowView: View {
         }
     }
 
-    private func openWorkspaceInFinder(_ workspaceId: String) {
-        var url: URL?
-        if workspaceId.hasPrefix("/") {
-            url = URL(fileURLWithPath: workspaceId)
-        } else if let cwd = ProcessInfo.processInfo.environment["PWD"] {
-            url = URL(fileURLWithPath: cwd)
-        }
-        let target = url ?? URL(fileURLWithPath: NSHomeDirectory())
-        NSWorkspace.shared.activateFileViewerSelecting([target])
+    /// Opens exactly the agent's working directory. A workspace id is
+    /// not a path ("w3"), and guessing from the app's own directory or
+    /// the home folder opens the wrong place silently, so non-paths and
+    /// missing directories do nothing.
+    private func openWorkspaceInFinder(_ path: String) {
+        guard path.hasPrefix("/"),
+            FileManager.default.fileExists(atPath: path)
+        else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(
+            [URL(fileURLWithPath: path)])
     }
 }

@@ -23,6 +23,14 @@ public final class RemindersProvider: ObservableObject {
 
     private var eventStoreObserver: NSObjectProtocol?
     private var debounceSyncTask: Task<Void, Never>?
+    /// An inbound sync already running. Overlapping passes each read the
+    /// same pre-mutation snapshot and re-insert the same rows, so a second
+    /// pass queues behind the first instead of racing it.
+    private var inboundSyncing = false
+    private var inboundSyncQueued = false
+    /// A suppressed echo re-arms one delayed sync: dropping it loses real
+    /// external edits that landed inside the suppression window.
+    private var echoResyncScheduled = false
 
     /// Timestamp of our most recent EventKit write. Change notifications
     /// arriving inside the suppression window are our own echo, not external
@@ -77,10 +85,46 @@ public final class RemindersProvider: ObservableObject {
             guard !Task.isCancelled else { return }
             guard let self else { return }
             guard !Self.shouldSuppressInboundSync(lastOwnWrite: lastOwnWriteAt) else {
+                self.scheduleEchoResync()
                 return
             }
             await self.syncInboundReminders()
         }
+    }
+
+    /// Re-run one inbound sync after the echo window closes. Without this,
+    /// a genuine external edit that lands inside our own write window is
+    /// silently dropped instead of merely delayed.
+    private func scheduleEchoResync() {
+        guard !echoResyncScheduled else { return }
+        echoResyncScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(
+                nanoseconds: UInt64((Self.echoSuppressionSeconds + 0.5) * 1_000_000_000))
+            guard let self else { return }
+            self.echoResyncScheduled = false
+            guard !Task.isCancelled else { return }
+            await self.syncInboundReminders()
+        }
+    }
+
+    /// The reminder linked to a task: exact externalID first across the
+    /// whole list, title fallback second. The old per-element fallback let
+    /// an earlier same-title reminder steal a complete, reopen, or remove
+    /// meant for the linked one.
+    func matchingReminder(externalID: String?, title: String) -> EKReminder? {
+        if let externalID, !externalID.isEmpty,
+            let hit = reminders.first(where: {
+                $0.calendarItemIdentifier == externalID
+            })
+        {
+            return hit
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return reminders.first(where: {
+            ($0.title ?? "").caseInsensitiveCompare(trimmed) == .orderedSame
+        })
     }
 
     /// True when Reminders access was denied or restricted. Re-prompting in
@@ -114,6 +158,20 @@ public final class RemindersProvider: ObservableObject {
     /// Background inbound sync from Apple Reminders into an explicit TaskStore.
     public func syncInboundReminders(into taskStore: TaskStore) async {
         guard NotchHUDConfig.shared.syncAppleReminders, isAuthorized else { return }
+        guard !inboundSyncing else {
+            inboundSyncQueued = true
+            return
+        }
+        inboundSyncing = true
+        defer {
+            inboundSyncing = false
+            if inboundSyncQueued {
+                inboundSyncQueued = false
+                Task { @MainActor in
+                    await self.syncInboundReminders(into: taskStore)
+                }
+            }
+        }
         await refresh()
         let batch: [(rawTitle: String, dueDate: Date?, externalID: String?)] = reminders.compactMap
         { item in
@@ -218,13 +276,16 @@ public final class RemindersProvider: ObservableObject {
             }
     }
 
-    /// Add a reminder to the default list.
+    /// Add a reminder to the default list. Returns its identifier so the
+    /// caller can link the task to the exact reminder it created; without
+    /// the link, later completion and removal fall back to title matching
+    /// and can hit the wrong same-title reminder.
     @discardableResult
-    public func add(title: String, due: Date? = nil) async -> Bool {
-        guard await ensureAccess() else { return false }
-        guard let store else { return false }
+    public func add(title: String, due: Date? = nil) async -> String? {
+        guard await ensureAccess() else { return nil }
+        guard let store else { return nil }
         let list = defaultList ?? store.defaultCalendarForNewReminders()
-        guard let list else { return false }
+        guard let list else { return nil }
         let reminder = EKReminder(eventStore: store)
         reminder.title = title
         reminder.calendar = list
@@ -236,9 +297,9 @@ public final class RemindersProvider: ObservableObject {
             try store.save(reminder, commit: true)
             lastOwnWriteAt = Date()
             await refresh()
-            return true
+            return reminder.calendarItemIdentifier
         } catch {
-            return false
+            return nil
         }
     }
 
@@ -272,10 +333,16 @@ public final class RemindersProvider: ObservableObject {
                 gate.resume(with: [], continuation: cont)
             }
         }
-        let match = gate.items.first { item in
-            if let externalID, item.calendarItemIdentifier == externalID { return true }
-            return item.title == title
-        }
+        let match: EKReminder? = {
+            if let externalID, !externalID.isEmpty,
+                let hit = gate.items.first(where: {
+                    $0.calendarItemIdentifier == externalID
+                })
+            {
+                return hit
+            }
+            return gate.items.first(where: { $0.title == title })
+        }()
         guard let match, match.isCompleted else { return }
         match.isCompleted = false
         do {

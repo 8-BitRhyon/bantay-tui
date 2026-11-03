@@ -150,6 +150,9 @@ struct TactileRowButton: View {
             .foregroundColor(foregroundColor)
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, 3.5)
+            // Small icon buttons on cards and rows need a real target:
+            // sub-20pt hits are why X and focus felt like coin flips.
+            .frame(minWidth: 28, minHeight: 26)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(backgroundFill)

@@ -29,9 +29,35 @@ struct AgentRosterGroup: Equatable, Identifiable, Sendable {
 /// Pure presentation logic for the Agents inbox. No SwiftUI, no AppKit, no
 /// disk access, so the logic harness compiles and tests all of it.
 enum AgentPresentation {
+    /// Short label that tells same-project agents apart: the session part
+    /// of a terminal title ("OC | Drag media into notch" becomes "Drag
+    /// media into notch"). Nil when the title carries nothing distinct.
+    static func sessionLabel(for agent: AgentSnapshot) -> String? {
+        guard let title = agent.title else { return nil }
+        var text = title
+        if let pipe = text.range(of: "| ") {
+            text = String(text[pipe.upperBound...])
+        }
+        let cleaned = IslandMetrics.cleanHUDText(text, maxCharacters: 40)
+        guard !cleaned.isEmpty else { return nil }
+        if cleaned.lowercased() == agent.source.lowercased() { return nil }
+        if let project = agent.projectContext?.project, cleaned == project { return nil }
+        return cleaned
+    }
+
+    /// Terminal titles arrive as "<app> | <session title>" ("OC | Drag
+    /// media into notch"). The app prefix is chrome, not content: drop a
+    /// short spaceless prefix before the first pipe.
+    static func strippingTerminalPrefix(_ text: String) -> String {
+        guard let pipe = text.range(of: " | ") else { return text }
+        let prefix = text[..<pipe.lowerBound]
+        guard prefix.count <= 16, !prefix.contains(" ") else { return text }
+        return String(text[pipe.upperBound...])
+    }
+
     static func status(for agent: AgentSnapshot) -> HumanizedAgentStatus {
         let raw = agent.title ?? agent.message ?? ""
-        let cleaned = clean(raw)
+        let cleaned = strippingTerminalPrefix(clean(raw))
         let command = extractCommand(from: cleaned)
         let risk = classifyRisk(text: cleaned, command: command)
 

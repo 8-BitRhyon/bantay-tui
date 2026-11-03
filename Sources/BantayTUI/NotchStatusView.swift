@@ -299,13 +299,44 @@ struct NotchStatusView: View {
             shelfTabVisible: shelfVisible, footerVisible: false)
     }
 
-    /// The tab bar normally follows the Shelf setting. A drop can force the
-    /// shelf open while that tab is hidden, so keep the bar (and its escape
-    /// routes) visible in that state.
+    /// The tab bar renders while any tab is reachable. A drop can force
+    /// the shelf open while that tab is hidden, so keep the bar (and its
+    /// escape routes) visible in that state too.
     private var shelfTabBarVisible: Bool {
-        IslandMetrics.shelfTabBarVisible(
-            showShelfTab: NotchHUDConfig.shared.showShelfTab,
+        let config = NotchHUDConfig.shared
+        return IslandMetrics.tabBarVisible(
+            showAgents: config.showAgentsTab,
+            showTasks: config.showTasksTab,
+            showAttention: config.attentionFilterEnabled,
+            showHistory: config.showHistoryTab,
+            showShelf: config.showShelfTab,
+            showMedia: config.showMediaTab,
             shelfSelected: showShelf)
+    }
+
+    /// Visibility per tab in ShelfTab order, for reconciliation. A
+    /// drop-forced shelf counts as visible: it is a designed state with
+    /// its own escape routes, not a stranded tab.
+    private var tabVisibility: [Bool] {
+        let config = NotchHUDConfig.shared
+        return [
+            config.showAgentsTab, config.showTasksTab,
+            config.attentionFilterEnabled, config.showHistoryTab,
+            config.showShelfTab || showShelf, config.showMediaTab,
+        ]
+    }
+
+    /// If Settings hid the selected tab, fall back to the first visible
+    /// one on expand. Programmatic jumps (quota badge, shelf drop) set
+    /// their tab after expanding, so their escape hatches still work.
+    private func reconcileSelectedTab() {
+        let tabs = ShelfTab.allCases
+        guard let current = tabs.firstIndex(of: selectedTab) else { return }
+        let reconciled = IslandMetrics.reconciledTabIndex(
+            selected: current, visible: tabVisibility)
+        if reconciled != current {
+            selectedTab = tabs[reconciled]
+        }
     }
 
     /// The shelf mixes a fixed thumbnail strip with variable clipboard rows,
@@ -725,7 +756,8 @@ struct NotchStatusView: View {
         case .option(let number):
             if agent.approval.isMulti {
                 queueSelections[paneId] = IslandMetrics.ApprovalControls.toggling(
-                    queueSelections[paneId] ?? [], index: number - 1)
+                    agent.approval.effectiveSelection(local: queueSelections[paneId]),
+                    index: number - 1)
             } else {
                 Task { @MainActor in
                     await eventManager.approveChoice(paneId: paneId, choice: number)
@@ -764,23 +796,26 @@ struct NotchStatusView: View {
         }
     }
 
-    /// Primary keyboard action for a focused roster row: queue rows approve,
-    /// roster rows expand/peek. Mirrors the hover/click primary action.
+    /// Primary keyboard action for a focused roster row: actionable
+    /// queue rows approve, everything else opens the live peek panel.
+    /// A review-only row must never fire a blind approve from the
+    /// keyboard, and a peek nobody renders is not an action.
     private func activateRow(_ agent: AgentSnapshot) {
-        if approvalQueueAgents.contains(where: {
+        let isQueueRow = approvalQueueAgents.contains(where: {
             $0.paneId == agent.paneId
                 && ($0.kind == .accessRequest || $0.kind == .waiting)
-        }) {
-            guard
-                let paneId = IslandMetrics.actionablePaneId(
-                    paneId: agent.paneId, source: agent.source)
-            else { return }
+        })
+        if isQueueRow, agent.approvalActionable,
+            let paneId = IslandMetrics.actionablePaneId(
+                paneId: agent.paneId, source: agent.source),
+            eventManager.supportsDecision(paneId: paneId)
+        {
             Task { @MainActor in
-                await eventManager.approve(paneId: paneId)
+                let outcome = await eventManager.approve(paneId: paneId)
+                noteSendOutcome(outcome)
             }
         } else {
-            showDetail = true
-            fetchPeek(paneId: agent.paneId ?? agent.source)
+            PeekPanelController.shared.show(agent: agent, adapter: adapter)
         }
     }
 
@@ -2105,7 +2140,7 @@ struct NotchStatusView: View {
                     }
                 },
                 onOpenSettings: {
-                    AppDelegate.showSettings(route: .agents)
+                    AppDelegate.showSettings(route: .general)
                 },
                 onExpandTo: { expandTo($0) }
             )
@@ -2251,33 +2286,33 @@ struct NotchStatusView: View {
 
     /// Best-effort: reveal the workspace directory in Finder. Falls back to
     /// the home directory when the workspace id is not a path.
-    private func openWorkspaceInFinder(_ workspaceId: String) {
-        var url: URL?
-        if workspaceId.hasPrefix("/") {
-            url = URL(fileURLWithPath: workspaceId)
-        } else if let cwd = ProcessInfo.processInfo.environment["PWD"] {
-            url = URL(fileURLWithPath: cwd)
-        }
-        let target = url ?? URL(fileURLWithPath: NSHomeDirectory())
-        NSWorkspace.shared.activateFileViewerSelecting([target])
-    }
-
-    /// Focus an agent: routes to multiplexer pane when managed, or raises the standalone app/terminal.
+    /// Focus an agent: a real pane id always goes through the pane
+    /// router (exact pane in herdr, tmux, or zellij), never through an
+    /// app-name guess. Only pane-less standalone agents raise their app.
     private func focusAgent(_ agent: AgentSnapshot) {
         if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
-            let kind = PlexerDetection.detect(env: ProcessInfo.processInfo.environment)
-            if kind == adapter.kind, kind == .tmux || kind == .zellij {
-                focusAgentPane(paneId)
-                return
-            }
+            focusAgentPane(paneId)
+            return
         }
         let clean = StandaloneAgentDispatcher.cleanAgentName(from: agent.paneId ?? agent.source)
         focusStandaloneAgent(clean.isEmpty ? agent.source : clean, cwd: agent.cwd)
     }
 
-    /// Raise the standalone application window (e.g. Antigravity IDE, Cursor) or terminal.
+    /// Raise the standalone application window (e.g. Antigravity IDE,
+    /// Cursor) and, for chat-first IDEs, land on the input box. Raising
+    /// a window without focusing its composer makes the user hunt for
+    /// the cursor, which is the opposite of what Focus promises.
     private func focusStandaloneAgent(_ source: String, cwd: String? = nil) {
-        _ = TerminalFocusser.focusStandalone(source: source, cwd: cwd)
+        let focused = TerminalFocusser.focusStandalone(source: source, cwd: cwd)
+        guard focused else { return }
+        let name = source.lowercased()
+        let chatForks: Set<String> = [
+            "antigravity", "antigravity-ide", "agy", "cursor", "windsurf", "cascade",
+        ]
+        guard chatForks.contains(name) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            KeyboardSynthesizer.focusChatInput()
+        }
     }
 
     /// Focuses an agent pane via multiplexer routing or terminal app activation.
@@ -2295,6 +2330,10 @@ struct NotchStatusView: View {
         let kind = PlexerDetection.detect(env: ProcessInfo.processInfo.environment)
         guard kind == adapter.kind, kind == .tmux || kind == .zellij else {
             adapter.focusPane(paneId: paneId)
+            // Focusing the pane inside the multiplexer is invisible if
+            // the terminal itself stays behind another app. Raise it.
+            _ = TerminalFocusser.focus(
+                preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
             return
         }
         let target = PaneFocusRouter.resolveForFocus(
@@ -2302,6 +2341,11 @@ struct NotchStatusView: View {
         let action = PaneFocusRouter.route(target: target)
         switch action {
         case .none:
+            // No router opinion is not a dead click: the adapter can
+            // still focus the pane directly, and the terminal comes up.
+            adapter.focusPane(paneId: paneId)
+            _ = TerminalFocusser.focus(
+                preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
             return
         case .terminalOnly:
             _ = TerminalFocusser.focus(
@@ -2355,6 +2399,7 @@ struct NotchStatusView: View {
     private func expandTo(_ expanded: Bool) {
         if expanded {
             DesktopHUDController.shared.hide()
+            reconcileSelectedTab()
         }
         withAnimation(morphAnimation) {
             isExpanded = expanded

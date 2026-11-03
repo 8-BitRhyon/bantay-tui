@@ -839,8 +839,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 hotkeyMonitors.append(monitor)
             } else if !didLogHotkeyPermissionWarning {
                 didLogHotkeyPermissionWarning = true
+                // Two different grants gate two different things (the Hex
+                // split): Input Monitoring lets the app hear global keys,
+                // Accessibility lets it send them. Name the missing one.
+                let listenTrusted = CGPreflightListenEventAccess()
                 Self.dbg(
-                    "hotkeys: Input Monitoring untrusted — global monitor unavailable, menu-bar controls still work"
+                    "hotkeys: global monitor unavailable "
+                        + "(listenEvent=\(listenTrusted), accessibility=\(AXIsProcessTrusted())); "
+                        + "grant Input Monitoring for hotkeys, Accessibility for answering; "
+                        + "menu-bar controls still work"
                 )
             }
         }

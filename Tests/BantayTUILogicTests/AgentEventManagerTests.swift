@@ -145,6 +145,41 @@
             }
         }
 
+        @Test("dismissed approval stays dismissed for bare heartbeats")
+        func dismissedApprovalStaysDismissed() throws {
+            try withTempFile { _, manager in
+                let approval = AgentEvent(
+                    source: "opencode", kind: .accessRequest, title: "Pick a fruit",
+                    message: nil, paneId: "ack-9", workspaceId: nil,
+                    variance: .choices, choices: ["Apple", "Banana"],
+                    playSound: false, persistent: false)
+                manager.publishEventForTesting(approval)
+                #expect(manager.currentEvent?.paneId == "ack-9")
+
+                manager.acknowledgeApproval(paneId: "ack-9")
+                #expect(manager.currentEvent == nil)
+
+                // A bare status heartbeat for the same pane (no title,
+                // no choices) must not resurrect the dismissed card.
+                manager.publishEventForTesting(
+                    AgentEvent(
+                        source: "opencode", kind: .accessRequest, title: nil,
+                        message: nil, paneId: "ack-9", workspaceId: nil,
+                        variance: nil, choices: nil, playSound: false,
+                        persistent: false))
+                #expect(manager.currentEvent == nil)
+
+                // A genuinely new question (different choices) still shows.
+                manager.publishEventForTesting(
+                    AgentEvent(
+                        source: "opencode", kind: .waiting, title: "Pick B",
+                        message: nil, paneId: "ack-9", workspaceId: nil,
+                        variance: .choices, choices: ["B1", "B2"],
+                        playSound: false, persistent: false))
+                #expect(manager.currentEvent?.kind == .waiting)
+            }
+        }
+
         @Test("standalone approval is acknowledged by synthetic pane id")
         func standaloneApprovalIsSuppressed() throws {
             try withTempFile { _, manager in
