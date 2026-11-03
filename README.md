@@ -18,7 +18,7 @@ Bantay supports agents running in Herdr, tmux, Zellij, standard terminals, and d
   - **Peek Drawer**: Click Review to view live output and git diff summaries. Reply from the row menu or press `R`.
   - **Session Viewer**: Open a structured session report in your web browser from the row menu.
   - **Media Shelf**: Drag files, images, links, or text over the notch to save them to a persistent shelf. Drag a card back into Finder, an upload field, or an editor. A 1 GB budget evicts the oldest items first, and expired or unreferenced files are cleaned up automatically.
-  - **Task Manager**: Add tasks with natural language input. Tasks synchronize with Apple Reminders.
+  - **Task Manager**: Add tasks with natural language input from one field. Tasks synchronize with Apple Reminders with per-reminder linking (no duplicates), persisted delete guards, and Undo on delete.
 
 ### 2. Infinite Strip Window Manager
 Bantay includes a horizontal window tiling engine for macOS:
@@ -47,7 +47,7 @@ Bantay includes a horizontal window tiling engine for macOS:
 | Select numbered choice | Press `1` through `9` |
 | Review live output | Click Review on the approval card or row menu |
 | Open session in browser | Use the row More menu |
-| Focus agent application | Click the agent row |
+| Focus agent | Click the agent row (exact pane; IDEs land on the chat input) |
 | Stop or abort agent (`^C`) | Use the row More menu |
 | Toggle Desktop HUD | Press `⌃⌥Space` |
 | Add media to shelf | Drag a file, image, link, or text over the notch |
@@ -84,6 +84,18 @@ bantay settings                               # Open the Settings window
 bantay settings [route]                       # Open Settings at a section (desktop, approvals, notch)
 bantay ping                                   # Check daemon status
 ```
+
+## Permissions
+
+Bantay asks for three grants, each named by what it unlocks, all in
+Settings > General > Permissions with live status:
+
+- **Accessibility**: answer agents, focus IDE inputs, and tile windows.
+- **Input Monitoring**: hear the global hotkeys (approve, deny, snooze).
+- **Notifications**: post banners when the island is hidden or locked.
+
+Every grant applies live; nothing restarts the app. Without Accessibility,
+decisions fail visibly with the reason instead of pretending to send.
 
 ## Installation
 

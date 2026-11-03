@@ -41,6 +41,50 @@ measured, and its notch text is often raw transcript noise.
 
 ---
 
+## Spike findings (2026-10-31, this machine)
+
+- **S1 done.** Conversations decode cleanly. `steps` carries `step_type`,
+  `status`, and a protobuf `metadata` blob whose top-level fields 30 and 31
+  hold the tool action and its human summary (for example "Listing apps in
+  /Applications"). Observed step types: 15 is the planner or model turn
+  (91 of 188 steps in one conversation), 21 is tool execution (46), the
+  rest are rarer kinds (101, 132, 31, 33, 8, 7, 14, 9, 23, 98, 99).
+  `gen_metadata` holds the system prompt and checkpoint content. No token
+  usage fields were found in steps or gen_metadata, so per-session tokens
+  stay unrecorded rather than estimated.
+- **S2 partial.** A provider quota source exists locally: the IDE caches a
+  `userStatus` protobuf under `antigravityUnifiedStateSync.userStatus` in
+  its `state.vscdb`, plus credit sentinel flags in `modelCredits`. The
+  blob contains per-model data, but it is not yet decoded into remaining
+  percent and reset time. Until that parse lands, the Quotas view shows a
+  measured row (steps and conversations), never a fabricated percentage.
+  Follow-up: decode the userStatus quota fields on a copy of the blob,
+  taking care to never log personal fields (it also contains the account
+  email).
+- **S3 done.** The CLI is installed and running: `~/.gemini/bin/agy`
+  (version 1.4.12, hub mode on local ports). `agy models` lists the
+  account models (Gemini 4 Argon tiers, Gemini 3.8 Flash tiers, Claude
+  Opus and Sonnet 5.5 tiers, GPT-OSS). There is also a separate CLI data
+  root at `~/.gemini/antigravity` (`conversations/`, `brain/`,
+  `conversation_summaries.db`), distinct from the IDE store; which of the
+  two a given session lands in depends on how it was started.
+
+## Landed so far (2026-10-31)
+
+- `AntigravityStore.swift`: read-only SQLite reader over the IDE
+  conversation store, with a minimal protobuf string reader for the
+  summary fields. Working state comes from file mtime (the IDE writes
+  steps as the agent acts).
+- Roster: standalone detection now takes its Antigravity activity and
+  working flag from the store headline instead of transcript tails.
+- Sessions: finished conversations (quiet ten minutes, at least three
+  steps) are recorded once, with honest zero tokens.
+- Quota: a measured Antigravity row (steps and conversations) appears in
+  the Quotas view, home-scoped like every other probe.
+- Messages: the scanner headline is the step summary; the tool vocabulary
+  in `summarizeToolCall` covers find, code search, URL reading, image
+  generation, browser, and planning steps.
+
 ## Gaps to close
 
 1. No usage numbers: tokens, cost, and model per Antigravity session.
