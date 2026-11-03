@@ -9,6 +9,10 @@ struct NotchStatusView: View {
     @State private var isExpanded = false
     @State private var isHovered = false
     @State private var hoverTask: Task<Void, Never>?
+    /// A manual dismiss keeps the notch visible for a short beat even when
+    /// idle-show is off, so X closes the notice, not the plane.
+    @State private var keepVisibleUntil: Date?
+    @State private var keepVisibleTask: Task<Void, Never>?
     /// True while a shelf card is being dragged to another app. The island
     /// must stay expanded: the pointer leaves it during the drag.
     @State private var isDraggingShelfItem = false
@@ -191,6 +195,11 @@ struct NotchStatusView: View {
 
     private var hasActiveNotification: Bool {
         !isExpanded && activeNotification != nil
+    }
+
+    private var isKeptVisible: Bool {
+        guard let keepVisibleUntil else { return false }
+        return keepVisibleUntil > Date()
     }
 
     /// The card on screen: the selected queue entry, clamped. Older entries
@@ -1372,6 +1381,14 @@ struct NotchStatusView: View {
                     }
                     notificationDismissButton(event.id, paneId: paneId)
                 } else {
+                    TactileRowButton(
+                        systemName: "chevron.up",
+                        title: "Open",
+                        color: Color.white.opacity(0.8),
+                        helpText: "Open the control plane"
+                    ) {
+                        withAnimation(morphAnimation) { expandTo(true) }
+                    }
                     notificationDismissButton(event.id, paneId: nil)
                 }
             }
@@ -1496,6 +1513,14 @@ struct NotchStatusView: View {
                                 focusAgentPane(paneId)
                             }
                         }
+                        TactileRowButton(
+                            systemName: "chevron.up",
+                            title: "Open",
+                            color: Color.white.opacity(0.8),
+                            helpText: "Open the control plane"
+                        ) {
+                            withAnimation(morphAnimation) { expandTo(true) }
+                        }
                         notificationDismissButton(event.id, paneId: paneId)
                     }
                 }
@@ -1549,6 +1574,23 @@ struct NotchStatusView: View {
                 eventManager.acknowledgeApproval(paneId: paneId)
             }
             dismissNotification(id)
+            keepNotchVisibleBriefly()
+        }
+    }
+
+    /// X removes the card, but the notch should not disappear from under
+    /// the pointer with it. Hold the idle plane for a short beat so the
+    /// user can press Open if they wanted the control plane.
+    private func keepNotchVisibleBriefly() {
+        guard !isExpanded else { return }
+        keepVisibleTask?.cancel()
+        keepVisibleUntil = Date().addingTimeInterval(5)
+        updateIslandVisibility()
+        keepVisibleTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            keepVisibleUntil = nil
+            updateIslandVisibility()
         }
     }
 
@@ -2398,6 +2440,9 @@ struct NotchStatusView: View {
 
     private func expandTo(_ expanded: Bool) {
         if expanded {
+            keepVisibleTask?.cancel()
+            keepVisibleTask = nil
+            keepVisibleUntil = nil
             DesktopHUDController.shared.hide()
             reconcileSelectedTab()
         }
@@ -2646,7 +2691,7 @@ struct NotchStatusView: View {
             didShowOnce: AppDelegate.didShowOnce,
             hasWork: hasWork,
             showWhenIdle: config.showIslandWhenIdle,
-            forced: AppDelegate.isForcedVisible)
+            forced: AppDelegate.isForcedVisible || isKeptVisible)
         let visible = AppDelegate.window?.isVisible ?? false
         if shouldShow != visible {
             AppDelegate.dbg(
