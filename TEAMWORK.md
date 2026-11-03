@@ -60,6 +60,22 @@ Job statement: "When I am deciding where to send work, I want to see Antigravity
 - Land by PR and merge after green.
 - Live proof requires an installed release plus a probe plus a user screenshot.
 
+## Decode findings (T1)
+
+- Store: `~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb`, table `ItemTable`, key `antigravityUnifiedStateSync.userStatus`.
+- Encoding: the value is base64 of a protobuf wrapper, field 1 -> field 2 -> field 1 -> base64 payload -> protobuf.
+- Payload: field 33 is the model container. Repeated field 1 entries carry a model name (field 1) and quota info (field 15). Quota field 1 is a 32-bit float `remainingFraction` (0...1). Quota field 2 is a timestamp message whose field 1 is int64 epoch seconds. Field 36.2 is the plan tier.
+- Observed on this machine: 10 models, all `remainingFraction = 1.0`, all reset at 1793622419 = 2026-11-02T12:26:59Z. The check ran at 2026-11-03T05:22Z, so the cached window was already stale.
+- Credit counts exist in `modelCredits` and tier field 14, but the amount and minimum mapping is not proven. This increment does not guess them.
+- The blob contains the account email. It is never logged, tested with, or committed. Fixtures are synthetic.
+
+## Phase 2 and 3 decisions
+
+- Scouts covered user, market, technical, design, distribution, risk, and alpha. The technical scout had no shell, so the captain decoded the blob directly with a redacting parser.
+- Theses: A minimal honest provider row, B grouped Antigravity card, C credit-aware API-first.
+- Blind judge picked A as the base. One graft from B: group the two rows under one Antigravity header with Reported and Measured labels. No graft from C: the credit mapping is unproven and would violate the no-fabrication rule.
+- The judge's first failing test: lower-fraction model with a later reset must return that model's own reset, and a past reset must be flagged stale.
+
 ## Phase plan
 
 1. Scope: this file. Done.
@@ -96,11 +112,12 @@ Fill during Phase 4 and Phase 5.
 
 | Check | Command or artifact | Result |
 | --- | --- | --- |
-| baseline diff | `git diff --check` | pending |
-| decode agreement | second decoder output | pending |
-| targeted tests | `swift test --filter QuotaTrackerTests` | pending |
-| full suite | `swift test` | pending |
-| harness | `scripts/build-logic-harness.sh` | pending |
+| baseline diff | `git diff --check` | clean at base commit `d07fac9` |
+| decode agreement | Swift reader vs independent Python decoder | both: 100%, reset epoch 1793701558, 10 models, tier Google AI Pro, stale false |
+| targeted tests | `swift test --filter AntigravityQuotaTests` | 8 tests passed after wrapper fix; 29 in 2 suites before it |
+| format and build | `swift format lint --strict`; `swift build` | both clean |
+| full suite | `swift test` | 208 tests in 18 suites passed |
+| harness | `scripts/build-logic-harness.sh` | `ALL PASS` |
 | release install | PID and log probe | pending |
 | screenshot | user-provided | pending |
 | PR | `gh pr checks` | pending |

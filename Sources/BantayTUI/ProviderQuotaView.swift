@@ -30,8 +30,14 @@ struct ProviderQuotaView: View {
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 6) {
-                            ForEach(quotas) { quota in
-                                providerQuotaRow(quota)
+                            ForEach(quotaItems) { item in
+                                switch item {
+                                case .group(_, let title, let subtitle):
+                                    antigravityGroupHeader(
+                                        title: title, subtitle: subtitle)
+                                case .row(let quota):
+                                    providerQuotaRow(quota)
+                                }
                             }
                         }
                         .padding(.horizontal, 4)
@@ -43,6 +49,55 @@ struct ProviderQuotaView: View {
         .onAppear {
             Task { await refreshQuotas() }
         }
+    }
+
+    private enum QuotaListItem: Identifiable {
+        case group(id: String, title: String, subtitle: String)
+        case row(ProviderQuota)
+
+        var id: String {
+            switch self {
+            case .group(let id, _, _): return "group-\(id)"
+            case .row(let quota): return quota.id
+            }
+        }
+    }
+
+    /// Groups the reported and measured Antigravity rows under one
+    /// header. Two cards with the same provider read as a duplicate.
+    private var quotaItems: [QuotaListItem] {
+        var items: [QuotaListItem] = []
+        var seenGroups = Set<String>()
+        for quota in quotas {
+            if quota.id == "antigravity" || quota.id == "antigravity-measured" {
+                let groupID = "antigravity"
+                if !seenGroups.contains(groupID) {
+                    seenGroups.insert(groupID)
+                    let subtitle = quota.tier.isEmpty ? "Local sessions" : quota.tier
+                    items.append(
+                        .group(
+                            id: groupID, title: "Antigravity", subtitle: subtitle))
+                }
+            }
+            items.append(.row(quota))
+        }
+        return items
+    }
+
+    private func antigravityGroupHeader(title: String, subtitle: String) -> some View {
+        HStack(spacing: 5) {
+            providerIcon(for: title)
+                .foregroundColor(BantayTheme.textSecondary)
+            Text(title.uppercased())
+                .font(.system(size: 8.5, weight: .bold))
+                .foregroundColor(BantayTheme.textSecondary)
+            Text(subtitle)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(BantayTheme.textTertiary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 2)
     }
 
     private var headerBar: some View {
@@ -91,12 +146,16 @@ struct ProviderQuotaView: View {
 
     private func providerQuotaRow(_ quota: ProviderQuota) -> some View {
         let percentInt = Int(quota.remainingPercent)
+        let title = quota.rowLabel ?? quota.provider
+        let isMeasured = quota.rowLabel == "Measured"
         let statusColor =
-            quota.isEstimated
+            quota.isStale
             ? BantayTheme.textTertiary
-            : (quota.isCritical
-                ? BantayTheme.statusFailed
-                : (quota.isWarning ? BantayTheme.statusQuota : BantayTheme.statusCompleted))
+            : (quota.isEstimated
+                ? BantayTheme.textTertiary
+                : (quota.isCritical
+                    ? BantayTheme.statusFailed
+                    : (quota.isWarning ? BantayTheme.statusQuota : BantayTheme.statusCompleted)))
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -104,18 +163,22 @@ struct ProviderQuotaView: View {
                     providerIcon(for: quota.provider)
                         .foregroundColor(statusColor)
 
-                    Text(quota.provider)
+                    Text(title)
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(BantayTheme.textPrimary)
                         .lineLimit(1)
 
-                    Text(quota.tier)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundColor(BantayTheme.textTertiary)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.white.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                    if !quota.tier.isEmpty,
+                        !quota.id.hasPrefix("antigravity")
+                    {
+                        Text(quota.tier)
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(BantayTheme.textTertiary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
 
                     if quota.limitReached {
                         Text("LIMIT")
@@ -147,6 +210,19 @@ struct ProviderQuotaView: View {
                             .padding(.vertical, 1)
                             .background(BantayTheme.statusFailed.opacity(0.15))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+
+                    if quota.isStale {
+                        Text("STALE")
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundColor(BantayTheme.textTertiary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(BantayTheme.textTertiary.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .help(
+                                "The cached window already ended. The value may have reset since it was written."
+                            )
                     }
                 }
 
@@ -191,7 +267,7 @@ struct ProviderQuotaView: View {
             // Reset and burn rate details
             HStack {
                 HStack(spacing: 3) {
-                    Image(systemName: "clock.arrow.circlepath")
+                    Image(systemName: isMeasured ? "tray.full" : "clock.arrow.circlepath")
                         .font(.system(size: 7.5))
                     Text(quota.dynamicResetDescription())
                         .font(.system(size: 8, weight: .medium))

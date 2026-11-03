@@ -968,7 +968,8 @@ struct LogicCheckMain {
             "L146 prune drops unblocked waiting cards, keeps approvals and notices")
         check(
             IslandMetrics.notificationQueuePruneUnblocked(
-                [qWait], blockedPaneKeys: []).isEmpty,
+                [qWait], blockedPaneKeys: []
+            ).isEmpty,
             "L146 prune drops a waiting card whose pane is gone")
 
         let multiState = ApprovalPromptResolver.resolve(
@@ -1074,7 +1075,8 @@ struct LogicCheckMain {
             "L150 working headlines drop the terminal prefix")
         let envSample = StandaloneAgentScanner.processSample(
             fromPSLine:
-                "  790 /opt/homebrew/bin/tmux attach -t main TERM=xterm PATH=/opt/codex/bin:/usr/bin HERDR_PANE_ID=w3:pT")
+                "  790 /opt/homebrew/bin/tmux attach -t main TERM=xterm PATH=/opt/codex/bin:/usr/bin HERDR_PANE_ID=w3:pT"
+        )
         check(
             envSample?.command == "/opt/homebrew/bin/tmux attach -t main",
             "L151 ps environment is stripped before classification")
@@ -2544,14 +2546,14 @@ struct LogicCheckMain {
         check(
             emptyShelfSize.height
                 == 38 + IslandMetrics.headerHeight + shelfChrome
-                    + IslandMetrics.shelfEmptyHeight + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfEmptyHeight + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13b empty shelf height fits the empty state and footer")
         check(
             fileShelfSize.height
                 == 38 + IslandMetrics.headerHeight + shelfChrome
-                    + IslandMetrics.shelfStripHeight + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfStripHeight + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13b file shelf height fits the thumbnail strip and footer")
         check(
             mixedShelfSize.height == fileShelfSize.height + 2 * IslandMetrics.rowHeight,
@@ -2647,11 +2649,14 @@ struct LogicCheckMain {
         let freshShelfFile = ShelfFile(
             url: URL(fileURLWithPath: "/tmp/fresh"), createdAt: retentionNow)
         let exactAge = ShelfFile(
-            url: URL(fileURLWithPath: "/tmp/exact"), createdAt: retentionNow.addingTimeInterval(-3600))
+            url: URL(fileURLWithPath: "/tmp/exact"),
+            createdAt: retentionNow.addingTimeInterval(-3600))
         let staleShelfFile = ShelfFile(
-            url: URL(fileURLWithPath: "/tmp/old"), createdAt: retentionNow.addingTimeInterval(-3601))
+            url: URL(fileURLWithPath: "/tmp/old"), createdAt: retentionNow.addingTimeInterval(-3601)
+        )
         let future = ShelfFile(
-            url: URL(fileURLWithPath: "/tmp/future"), createdAt: retentionNow.addingTimeInterval(30))
+            url: URL(fileURLWithPath: "/tmp/future"), createdAt: retentionNow.addingTimeInterval(30)
+        )
         let retention = ShelfRetention.keep(
             [freshShelfFile, exactAge, staleShelfFile, future], now: retentionNow,
             interval: 3600, limit: 10, maxBytes: 10_000, sizes: [:])
@@ -2906,7 +2911,8 @@ struct LogicCheckMain {
         check(
             ShelfOrphanSweeper.sweep(
                 root: sweepBase.appendingPathComponent("missing"),
-                referenced: []).isEmpty,
+                referenced: []
+            ).isEmpty,
             "L13c sweep tolerates a missing root")
 
         let directRoot = shelfHardeningRoot()
@@ -2976,9 +2982,9 @@ struct LogicCheckMain {
         check(
             hardenedEmpty.height
                 == 38 + IslandMetrics.headerHeight + shelfChrome
-                    + IslandMetrics.shelfEmptyHeight
-                    + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfEmptyHeight
+                + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13c shelf footer is included in the empty panel height")
         let overflowShelf = IslandMetrics.shelfPanelSize(
             topInset: 38, fileCount: 1, clipboardCount: 50)
@@ -3009,9 +3015,9 @@ struct LogicCheckMain {
         check(
             noTabShelf.height
                 == 38 + IslandMetrics.headerHeight
-                    + IslandMetrics.shelfEmptyHeight
-                    + IslandMetrics.shelfFooterHeight
-                    + IslandMetrics.contentSpacing,
+                + IslandMetrics.shelfEmptyHeight
+                + IslandMetrics.shelfFooterHeight
+                + IslandMetrics.contentSpacing,
             "L13c hidden tab bar removes only the tab chrome")
 
         // floating-pill geometry, plus config persistence.
@@ -3231,7 +3237,8 @@ struct LogicCheckMain {
             ])
             check(
                 store.tasks.count == 2,
-                "L153 @work merges into the untagged original, @home stays separate (got \(store.tasks.count))")
+                "L153 @work merges into the untagged original, @home stays separate (got \(store.tasks.count))"
+            )
             store.removeTask(store.tasks.first(where: { $0.externalID == "r1" })!.id)
             _ = awaitProof { await store.waitForPendingWrites() }
             let relaunched = TaskStore(fileURL: file)
@@ -3261,6 +3268,97 @@ struct LogicCheckMain {
                     !$0.title.isEmpty && !$0.detail.isEmpty
                 },
             "L153 permission capabilities name what they unlock")
+
+        // L154 Antigravity provider quota decode: minimum model fraction,
+        // its own reset, stale windows, and distinct reported/measured ids.
+        do {
+            func qVarint(_ value: UInt64) -> Data {
+                var value = value
+                var data = Data()
+                while value >= 0x80 {
+                    data.append(UInt8((value & 0x7f) | 0x80))
+                    value >>= 7
+                }
+                data.append(UInt8(value))
+                return data
+            }
+            func qField(_ number: Int, _ payload: Data) -> Data {
+                var data = qVarint(UInt64(number) << 3 | 2)
+                data += qVarint(UInt64(payload.count))
+                data += payload
+                return data
+            }
+            func qVarintField(_ number: Int, _ value: UInt64) -> Data {
+                var data = qVarint(UInt64(number) << 3)
+                data += qVarint(value)
+                return data
+            }
+            func qFloatField(_ number: Int, _ value: Float) -> Data {
+                var data = qVarint(UInt64(number) << 3 | 5)
+                data += withUnsafeBytes(of: value.bitPattern.littleEndian) {
+                    Data($0)
+                }
+                return data
+            }
+            func qModel(_ name: String, _ fraction: Float, _ reset: UInt64) -> Data {
+                let quota =
+                    qFloatField(1, fraction)
+                    + qField(2, qVarintField(1, reset))
+                return qField(1, Data(name.utf8)) + qField(15, quota)
+            }
+            func qBlob(_ models: [Data]) -> Data {
+                var container = Data()
+                for model in models {
+                    container += qField(1, model)
+                }
+                let tier =
+                    qField(1, Data("g1-pro-tier".utf8))
+                    + qField(2, Data("Google AI Pro".utf8))
+                let payload = qField(33, container) + qField(36, tier)
+                let encoded = qField(1, Data(payload.base64EncodedString().utf8))
+                let row =
+                    qField(1, Data("userStatusSentinelKey".utf8))
+                    + qField(2, encoded)
+                let wrapper = qField(1, row)
+                return Data(wrapper.base64EncodedString().utf8)
+            }
+
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let later = UInt64(now.timeIntervalSince1970) + 7_200
+            let earlier = UInt64(now.timeIntervalSince1970) + 600
+            let blob = qBlob([
+                qModel("Low Model", 0.42, later),
+                qModel("High Model", 0.80, earlier),
+            ])
+            let state = AntigravityQuota.parseUserStatus(blob, now: now)
+            check(
+                state?.modelName == "Low Model"
+                    && abs((state?.remainingPercent ?? 0) - 42.0) < 0.001
+                    && state?.resetsAt
+                        == Date(timeIntervalSince1970: TimeInterval(later))
+                    && state?.tier == "Google AI Pro"
+                    && state?.isStale == false,
+                "L154 lowest model fraction keeps its own reset")
+
+            let staleBlob = qBlob([
+                qModel("Expired", 0.0, UInt64(now.timeIntervalSince1970) - 60)
+            ])
+            let stale = AntigravityQuota.parseUserStatus(staleBlob, now: now)
+            let staleRow = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 0, isStale: true)
+            check(
+                stale?.isStale == true && !staleRow.isCritical
+                    && staleRow.dynamicResetDescription(now: now).contains("Stale"),
+                "L154 expired window is stale and does not drive routing")
+
+            let reported = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 42, rowLabel: "Reported")
+            let measured = ProviderQuota(
+                provider: "Antigravity", remainingPercent: 100, idSuffix: "measured")
+            check(
+                reported.id == "antigravity" && measured.id == "antigravity-measured",
+                "L154 reported and measured rows keep distinct ids")
+        }
 
         // L15. Full-screen & space policy: pure visibility policy and
         // transition settle delay, plus config persistence.

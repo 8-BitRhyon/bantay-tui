@@ -4,18 +4,36 @@ import Foundation
 public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
     public var id: String {
         let lower = provider.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower.contains("claude") || lower.contains("anthropic") { return "claude" }
-        if lower.contains("codex") || lower.contains("openai") { return "codex" }
-        if lower.contains("cursor") { return "cursor" }
-        if lower.contains("cloud") { return "cloudcode" }
-        if lower.contains("antigravity") || lower.contains("agy") || lower.contains("gemini") {
-            return "antigravity"
+        let base: String
+        if lower.contains("claude") || lower.contains("anthropic") {
+            base = "claude"
+        } else if lower.contains("codex") || lower.contains("openai") {
+            base = "codex"
+        } else if lower.contains("cursor") {
+            base = "cursor"
+        } else if lower.contains("cloud") {
+            base = "cloudcode"
+        } else if lower.contains("antigravity") || lower.contains("agy")
+            || lower.contains("gemini")
+        {
+            base = "antigravity"
+        } else if lower.contains("windsurf") || lower.contains("cascade") {
+            base = "windsurf"
+        } else if lower.contains("kilo") {
+            base = "kilo"
+        } else if lower.contains("openrouter") {
+            base = "openrouter"
+        } else if lower.contains("ollama") {
+            base = "ollama"
+        } else {
+            base = lower
         }
-        if lower.contains("windsurf") || lower.contains("cascade") { return "windsurf" }
-        if lower.contains("kilo") { return "kilo" }
-        if lower.contains("openrouter") { return "openrouter" }
-        if lower.contains("ollama") { return "ollama" }
-        return lower
+        if let suffix = idSuffix?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !suffix.isEmpty
+        {
+            return "\(base)-\(suffix.lowercased())"
+        }
+        return base
     }
     public var provider: String
     public var remainingPercent: Double
@@ -37,8 +55,18 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
     /// True when the row reports spend without a quota cap, so the progress
     /// bar would be meaningless. The row renders text only.
     public var hidesProgress: Bool
-    public var isWarning: Bool { remainingPercent <= 20.0 }
-    public var isCritical: Bool { remainingPercent <= 5.0 || isCooldown || limitReached }
+    /// Optional suffix so one provider can render more than one row
+    /// (reported quota plus measured usage) without colliding in ForEach.
+    public var idSuffix: String?
+    /// Short label for grouped rows: "Reported", "Measured".
+    public var rowLabel: String?
+    /// True when the reported window already ended. Stale rows are shown
+    /// for context but never drive thresholds or automatic rerouting.
+    public var isStale: Bool
+    public var isWarning: Bool { !isStale && remainingPercent <= 20.0 }
+    public var isCritical: Bool {
+        !isStale && (remainingPercent <= 5.0 || isCooldown || limitReached)
+    }
 
     public init(
         provider: String,
@@ -53,7 +81,10 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         isCooldown: Bool = false,
         limitReached: Bool = false,
         isEstimated: Bool = false,
-        hidesProgress: Bool = false
+        hidesProgress: Bool = false,
+        idSuffix: String? = nil,
+        rowLabel: String? = nil,
+        isStale: Bool = false
     ) {
         self.provider = provider
         self.remainingPercent = min(max(remainingPercent, 0.0), 100.0)
@@ -68,6 +99,9 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         self.limitReached = limitReached
         self.isEstimated = isEstimated
         self.hidesProgress = hidesProgress
+        self.idSuffix = idSuffix
+        self.rowLabel = rowLabel
+        self.isStale = isStale
     }
 
     /// Convenience initializer for generated/estimated quota rows.
@@ -84,7 +118,10 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
         resetsAt: Date? = nil,
         isCooldown: Bool = false,
         limitReached: Bool = false,
-        hidesProgress: Bool = false
+        hidesProgress: Bool = false,
+        idSuffix: String? = nil,
+        rowLabel: String? = nil,
+        isStale: Bool = false
     ) {
         self.init(
             provider: provider,
@@ -99,11 +136,18 @@ public struct ProviderQuota: Identifiable, Codable, Equatable, Sendable {
             isCooldown: isCooldown,
             limitReached: limitReached,
             isEstimated: isEstimated,
-            hidesProgress: hidesProgress)
+            hidesProgress: hidesProgress,
+            idSuffix: idSuffix,
+            rowLabel: rowLabel,
+            isStale: isStale)
     }
 
     /// Formats dynamic live countdown if resetsAt is present, otherwise falls back to static resetHint.
     public func dynamicResetDescription(now: Date = Date()) -> String {
+        if isStale {
+            return resetHint.lowercased().contains("stale")
+                ? resetHint : "Stale · window ended"
+        }
         guard let resetsAt else { return resetHint }
         let diff = resetsAt.timeIntervalSince(now)
         if diff <= 0 {
@@ -271,24 +315,40 @@ public final class QuotaAxiTracker: Sendable {
                     results.append(quota)
                 }
             case "antigravity":
+                // Reported provider quota first. The IDE cache carries a
+                // per-model remaining fraction and reset time; the minimum
+                // across models is the actionable number. A cache whose
+                // window already ended is labeled stale and never drives
+                // routing.
+                if var reported = AntigravityQuota.quota(home: home) {
+                    reported.burnRateTPM = burnRateTPM
+                    if !reported.isStale {
+                        reported.hoursRemaining = forecastHoursRemaining(
+                            tokensPerMin: burnRateTPM,
+                            remainingPercent: reported.remainingPercent)
+                    }
+                    results.append(reported)
+                }
                 // Measured exception, same rule as opencode: the local
                 // conversation store gives exact step and conversation
-                // counts, but no provider quota percentage exists locally
-                // yet, so the row reports measured activity only.
+                // counts. It is a second row, never a substitute for the
+                // provider percentage.
                 let snapshot = AntigravityStore.snapshot(home: home)
                 if !snapshot.conversations.isEmpty {
                     results.append(
                         ProviderQuota(
-                            provider: "antigravity",
+                            provider: "Antigravity",
                             remainingPercent: 100,
-                            resetHint: "Measured · no local quota source",
-                            tier: "Local store",
+                            resetHint: "From local sessions",
+                            tier: "",
                             usedDisplay:
                                 "\(snapshot.totalSteps) steps · "
                                 + "\(snapshot.conversations.count) conversations",
                             totalDisplay: "Measured",
                             burnRateTPM: burnRateTPM,
-                            hidesProgress: true
+                            hidesProgress: true,
+                            idSuffix: "measured",
+                            rowLabel: "Measured"
                         ))
                 }
             case "opencode":

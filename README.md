@@ -34,7 +34,8 @@ Bantay includes a horizontal window tiling engine for macOS:
 
 ### 3. Agent and Quota Telemetry
 - **Desktop IDE Support**: Sends commands to Google Antigravity IDE, Cursor, Windsurf, Zed, and VS Code. It also supports terminal agents such as Claude Code, OpenCode, Codex, and Gemini.
-- **Live Quota Tracking**: Reads local SQLite databases for Codex and Cursor. Ingests Claude Code rate limits, OpenRouter keys, and Ollama models.
+- **Live Quota Tracking**: Reads local SQLite databases for Codex, Cursor, and Antigravity. Ingests Claude Code rate limits, OpenRouter keys, and Ollama models.
+- **Antigravity Quota**: Decodes the IDE's cached model quota into remaining percent plus reset time, and shows it beside the measured session row. A stale cached window is labeled and never drives rerouting.
 - **Quota Safeguards**: Displays countdowns until reset times. Routes work to backup models when limits are reached.
 
 ## Quick Actions and Shortcuts

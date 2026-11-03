@@ -144,7 +144,7 @@
                 costUSD: 0,
                 budgetUSD: 10,
                 home: home.path)
-            let row = quotas.first { $0.id == "antigravity" }
+            let row = quotas.first { $0.id == "antigravity-measured" }
             #expect(row != nil)
             #expect(row?.totalDisplay == "Measured")
             #expect(row?.usedDisplay.contains("3 steps") == true)
@@ -154,7 +154,7 @@
                 costUSD: 0,
                 budgetUSD: 10,
                 home: home.appendingPathComponent("nope").path)
-            #expect(empty.first { $0.id == "antigravity" } == nil)
+            #expect(empty.contains { $0.id.hasPrefix("antigravity") } == false)
         }
 
         @Test("Go bundled allowance matches the console math")

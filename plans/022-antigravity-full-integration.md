@@ -52,15 +52,17 @@ measured, and its notch text is often raw transcript noise.
   `gen_metadata` holds the system prompt and checkpoint content. No token
   usage fields were found in steps or gen_metadata, so per-session tokens
   stay unrecorded rather than estimated.
-- **S2 partial.** A provider quota source exists locally: the IDE caches a
+- **S2 done.** A provider quota source exists locally: the IDE caches a
   `userStatus` protobuf under `antigravityUnifiedStateSync.userStatus` in
-  its `state.vscdb`, plus credit sentinel flags in `modelCredits`. The
-  blob contains per-model data, but it is not yet decoded into remaining
-  percent and reset time. Until that parse lands, the Quotas view shows a
-  measured row (steps and conversations), never a fabricated percentage.
-  Follow-up: decode the userStatus quota fields on a copy of the blob,
-  taking care to never log personal fields (it also contains the account
-  email).
+  its `state.vscdb`, plus credit sentinel flags in `modelCredits`.
+  `AntigravityQuota.swift` decodes the payload field 33.1.15 per-model
+  `remainingFraction` (float 0...1) and `resetTime` (epoch seconds), and
+  field 36.2 for the plan tier. The Quotas view shows the lowest fraction
+  across models with that same model's reset, beside the measured row.
+  A cached window whose reset is already past renders as STALE and never
+  drives routing. Credit counts and the weekly window remain undecoded
+  because their field mapping is not proven. The blob contains the account
+  email and is never logged, returned, or committed.
 - **S3 done.** The CLI is installed and running: `~/.gemini/bin/agy`
   (version 1.4.12, hub mode on local ports). `agy models` lists the
   account models (Gemini 4 Argon tiers, Gemini 3.8 Flash tiers, Claude
@@ -81,6 +83,10 @@ measured, and its notch text is often raw transcript noise.
   steps) are recorded once, with honest zero tokens.
 - Quota: a measured Antigravity row (steps and conversations) appears in
   the Quotas view, home-scoped like every other probe.
+- Quota decode: `AntigravityQuota.swift` reads the cached provider
+  percentage and reset time, opens SQLite read-only without `immutable=1`
+  so the WAL is visible, and labels an expired window STALE. The reported
+  and measured rows share one Antigravity group with distinct ids.
 - Messages: the scanner headline is the step summary; the tool vocabulary
   in `summarizeToolCall` covers find, code search, URL reading, image
   generation, browser, and planning steps.
@@ -88,7 +94,9 @@ measured, and its notch text is often raw transcript noise.
 ## Gaps to close
 
 1. No usage numbers: tokens, cost, and model per Antigravity session.
-2. No quota source: weekly or model quota state is invisible.
+2. Credit count and weekly window: the per-model quota fraction is
+   decoded, but AI credit amounts and the weekly window are not mapped
+   with confidence.
 3. No structured activity: protobuf steps are unread, so headlines degrade
    to filenames, plan text, or binary noise.
 4. No decision channel: approvals inside the IDE are observe-only, and the
