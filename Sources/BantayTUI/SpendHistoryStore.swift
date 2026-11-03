@@ -10,6 +10,9 @@ struct DailySpendRecord: Identifiable, Codable, Equatable, Sendable {
     var outputTokens: Int
     var cacheTokens: Int
     var costByAgent: [String: Double]
+    /// Per-agent token counts. Optional so records written before this
+    /// field existed still decode.
+    var tokensByAgent: [String: Int]?
     var peakBurnRateTPM: Double
 
     init(
@@ -20,6 +23,7 @@ struct DailySpendRecord: Identifiable, Codable, Equatable, Sendable {
         outputTokens: Int = 0,
         cacheTokens: Int = 0,
         costByAgent: [String: Double] = [:],
+        tokensByAgent: [String: Int]? = nil,
         peakBurnRateTPM: Double = 0.0
     ) {
         self.dateKey = dateKey
@@ -29,6 +33,7 @@ struct DailySpendRecord: Identifiable, Codable, Equatable, Sendable {
         self.outputTokens = outputTokens
         self.cacheTokens = cacheTokens
         self.costByAgent = costByAgent
+        self.tokensByAgent = tokensByAgent
         self.peakBurnRateTPM = peakBurnRateTPM
     }
 }
@@ -88,6 +93,11 @@ final class SpendHistoryStore: ObservableObject {
         for (source, cost) in snapshot.costBySource {
             record.costByAgent[source] = max(record.costByAgent[source] ?? 0.0, cost)
         }
+        var tokensByAgent = record.tokensByAgent ?? [:]
+        for (source, tokens) in snapshot.tokensBySource {
+            tokensByAgent[source] = max(tokensByAgent[source] ?? 0, tokens)
+        }
+        record.tokensByAgent = tokensByAgent.isEmpty ? nil : tokensByAgent
 
         // Every usage poll reaches this point. Saving an identical record
         // forces an atomic JSON rewrite for no data change; keep the main

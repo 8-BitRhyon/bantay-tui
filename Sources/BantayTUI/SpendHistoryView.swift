@@ -158,10 +158,12 @@ struct SpendHistoryView: View {
     private var headerSummary: some View {
         let (projected, _) = store.projectedRunRate(budget: budget)
         let weekTotal = store.totalPastWeekUSD()
-        let todayTotal = store.dailyRecords[SpendHistoryStore.dateKey()]?.totalCostUSD ?? 0
+        let todayRecord = store.dailyRecords[SpendHistoryStore.dateKey()]
+        let todayTotal = todayRecord?.totalCostUSD ?? 0
+        let todayTokens = todayRecord?.totalTokens ?? 0
 
         return VStack(alignment: .leading, spacing: 6) {
-            Text("THIS MAC · LOCAL RECORDS")
+            Text("METERED SPEND · LOCAL RECORDS")
                 .font(.system(size: 8, weight: .bold))
                 .foregroundColor(BantayTheme.textTertiary)
             HStack(alignment: .firstTextBaseline) {
@@ -172,6 +174,11 @@ struct SpendHistoryView: View {
                     Text(String(format: "$%.2f", todayTotal))
                         .font(.system(size: 14, weight: .bold, design: .monospaced))
                         .foregroundColor(BantayTheme.textPrimary)
+                    if todayTokens > 0 {
+                        Text("\(IslandMetrics.compactTokenCount(todayTokens)) tok")
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundColor(BantayTheme.textTertiary)
+                    }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
@@ -197,9 +204,13 @@ struct SpendHistoryView: View {
                 }
             }
             if todayTotal <= 0 {
-                Text("No spend recorded today. Usage appears after an agent transcript changes.")
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundColor(BantayTheme.textTertiary)
+                Text(
+                    todayTokens > 0
+                        ? "\(IslandMetrics.compactTokenCount(todayTokens)) tokens today · no metered spend. Subscription usage lives in Quotas."
+                        : "No usage recorded today. Usage appears after an agent transcript changes."
+                )
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundColor(BantayTheme.textTertiary)
             }
         }
     }
@@ -240,6 +251,7 @@ struct SpendHistoryView: View {
         let todayKey = SpendHistoryStore.dateKey()
         let record = store.dailyRecords[todayKey]
         let byAgent = record?.costByAgent ?? [:]
+        let tokensByAgent = record?.tokensByAgent ?? [:]
 
         if !byAgent.isEmpty {
             VStack(alignment: .leading, spacing: 3) {
@@ -253,6 +265,11 @@ struct SpendHistoryView: View {
                             .font(.system(size: 8.5, weight: .medium, design: .monospaced))
                             .foregroundColor(BantayTheme.textSecondary)
                         Spacer()
+                        if let tokens = tokensByAgent[agent], tokens > 0 {
+                            Text("\(IslandMetrics.compactTokenCount(tokens)) tok")
+                                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                                .foregroundColor(BantayTheme.textTertiary)
+                        }
                         Text(String(format: "$%.2f", cost))
                             .font(.system(size: 8.5, weight: .bold, design: .monospaced))
                             .foregroundColor(BantayTheme.statusCompleted)

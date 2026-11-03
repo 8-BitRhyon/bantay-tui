@@ -8937,7 +8937,8 @@ struct LogicCheckMain {
         let snap1 = UsageSnapshot(
             inputTokens: 10000, outputTokens: 2000, reasoningTokens: 500,
             cacheReadTokens: 1000, cacheWriteTokens: 500, costUSD: 0.45,
-            costBySource: ["claude": 0.35, "codex": 0.10]
+            costBySource: ["claude": 0.35, "codex": 0.10],
+            tokensBySource: ["claude": 12000, "codex": 2000]
         )
         spendStore.recordUsage(snapshot: snap1, peakTPM: 1200.0, date: sampleDate)
         let dailyRec = spendStore.dailyRecords[dateKey]
@@ -8948,6 +8949,9 @@ struct LogicCheckMain {
             "L145 daily record totalTokens matches snapshot"
         )
         check(dailyRec?.costByAgent["claude"] == 0.35, "L145 daily record tracks per-agent cost")
+        check(
+            dailyRec?.tokensByAgent?["claude"] == 12000,
+            "L145 daily record tracks per-agent tokens")
         check(dailyRec?.peakBurnRateTPM == 1200.0, "L145 daily record tracks peak TPM")
 
         let opencodeHome = mockOpenCodeHome()
