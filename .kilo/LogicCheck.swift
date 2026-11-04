@@ -3360,6 +3360,73 @@ struct LogicCheckMain {
                 "L154 reported and measured rows keep distinct ids")
         }
 
+        // L155 Antigravity summary registry: active conversations carry
+        // status, role, depth, workspace, and a unique roster identity.
+        do {
+            let home = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bantay-l155-\(UUID().uuidString)")
+            let dir = home.appendingPathComponent(".gemini/antigravity")
+            try? FileManager.default.createDirectory(
+                at: dir, withIntermediateDirectories: true)
+            let db = dir.appendingPathComponent("conversation_summaries.db")
+            var handle: OpaquePointer?
+            if sqlite3_open(db.path, &handle) == SQLITE_OK, let h = handle {
+                let sql = """
+                    CREATE TABLE conversation_summaries(
+                        conversation_id TEXT PRIMARY KEY,
+                        title TEXT, preview TEXT, step_count INTEGER,
+                        last_modified_time TEXT, workspace_uris TEXT, status TEXT,
+                        agent_name TEXT, parent_conversation_id TEXT,
+                        nesting_depth INTEGER, not_fully_idle NUMERIC, killed NUMERIC
+                    );
+                    INSERT INTO conversation_summaries VALUES(
+                        'root', 'Root task', 'Root task', 10,
+                        '2026-11-04 23:09:32', '["file:///tmp/bantay-project"]',
+                        'CASCADE_RUN_STATUS_IDLE', '', '', 0, 1, 0);
+                    INSERT INTO conversation_summaries VALUES(
+                        'teamwork', '', '', 47,
+                        '2026-11-04 23:09:35', '["file:///tmp/bantay-project"]',
+                        'CASCADE_RUN_STATUS_IDLE', 'teamwork', 'root', 1, 1, 0);
+                    INSERT INTO conversation_summaries VALUES(
+                        'worker', '', '', 0,
+                        '0001-01-01 00:00:00', '["file:///tmp/bantay-project"]',
+                        'CASCADE_RUN_STATUS_RUNNING', 'teamwork_worker',
+                        'teamwork', 2, 1, 0);
+                    INSERT INTO conversation_summaries VALUES(
+                        'idle', 'Idle chat', '', 5,
+                        '2026-11-04 22:00:00', '["file:///tmp/bantay-project"]',
+                        'CASCADE_RUN_STATUS_IDLE', '', '', 0, 0, 0);
+                    """
+                sqlite3_exec(h, sql, nil, nil, nil)
+                sqlite3_close(h)
+            }
+            let agents = AntigravitySummaryStore.activeAgents(home: home.path)
+            check(
+                agents.map(\.id) == ["root", "teamwork", "worker"]
+                    && agents.first?.workspacePath == "/tmp/bantay-project"
+                    && agents.last?.label == "Teamwork worker"
+                    && agents.last?.depth == 2
+                    && agents.last?.parentID == "teamwork"
+                    && agents.allSatisfy { $0.isWorking },
+                "L155 summary rows keep status, role, depth, and workspace")
+
+            let first = HerdrAgentInfo(
+                agent: "antigravity", agentStatus: "working", paneId: nil,
+                workspaceId: nil, terminalTitle: "Root", cwd: "/tmp/project",
+                agentSession: HerdrAgentSession(
+                    agent: "antigravity", kind: "path", value: "/tmp/root.db"))
+            let second = HerdrAgentInfo(
+                agent: "antigravity", agentStatus: "working", paneId: nil,
+                workspaceId: nil, terminalTitle: "Worker", cwd: "/tmp/project",
+                agentSession: HerdrAgentSession(
+                    agent: "antigravity", kind: "path", value: "/tmp/worker.db"))
+            let firstID = AgentEventManager.snapshot(for: first)?.id
+            let secondID = AgentEventManager.snapshot(for: second)?.id
+            check(
+                firstID != nil && secondID != nil && firstID != secondID,
+                "L155 pane-less conversations keep distinct roster ids")
+        }
+
         // L15. Full-screen & space policy: pure visibility policy and
         // transition settle delay, plus config persistence.
         check(

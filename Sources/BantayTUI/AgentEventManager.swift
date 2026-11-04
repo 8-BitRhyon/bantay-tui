@@ -1072,10 +1072,18 @@ extension AgentEventManager {
         // pane-less agents of the same source (e.g. two herdr/freebuff
         // processes) must not share an id — ForEach(id:) and Dictionary
         // keyed on id would crash/duplicate.
-        let id: String =
-            agent.paneId
-            ?? (agent.cwd.map { "\(agent.agent):\($0)" }
-                ?? agent.agent + ":standalone")
+        let id: String
+        if let paneId = agent.paneId {
+            id = paneId
+        } else if let session = agent.agentSession?.value, !session.isEmpty {
+            // Pane-less agents can still have several live sessions under
+            // one source and cwd. The session ref is the unique key.
+            id = "\(agent.agent):\(session)"
+        } else if let cwd = agent.cwd {
+            id = "\(agent.agent):\(cwd)"
+        } else {
+            id = agent.agent + ":standalone"
+        }
         return AgentSnapshot(
             id: id,
             source: agent.agent,
@@ -2532,8 +2540,18 @@ extension AgentEventManager {
     func mergeStandalone(
         into herdr: [HerdrAgentInfo], detected: [DetectedAgent]
     ) -> [HerdrAgentInfo] {
+        // Antigravity's detected rows are per conversation and carry the
+        // authoritative status. Drop a single herdr Antigravity row so it
+        // cannot hide or duplicate them.
+        let hasDetectedAntigravity = detected.contains {
+            $0.name == "antigravity"
+                && ($0.sessionPath?.hasSuffix(".db") ?? false)
+        }
+        let base =
+            hasDetectedAntigravity
+            ? herdr.filter { $0.agent != "antigravity" } : herdr
         let extras = detected.filter { det in
-            !herdr.contains { h in
+            !base.contains { h in
                 h.agent == det.name && (h.cwd == nil || h.cwd == det.cwd)
             }
         }.map { det in
@@ -2550,7 +2568,7 @@ extension AgentEventManager {
                 agentSession: sessionRef
             )
         }
-        return herdr + extras
+        return base + extras
     }
 
     // MARK: - Active Budget & Quota Enforcement (Direction B)

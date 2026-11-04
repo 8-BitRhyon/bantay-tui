@@ -1272,14 +1272,21 @@ enum StandaloneAgentScanner {
         var raw: [DetectedAgent] = []
         // Several processes can share one agent transcript root; scan it once.
         var sessionsByRoot: [String: [AgentDetector.ActiveSession]] = [:]
-        // Antigravity's structured store beats transcript tails: it gives
-        // the current step summary and a reliable working heartbeat.
+        // Antigravity's summary table is the per-agent registry the
+        // workbench itself uses: one row per conversation with a live
+        // status, subagent role, and parent. Fall back to the conversation
+        // store only when the summary DB is absent.
+        let hasAntigravityProcess = samples.contains {
+            AgentDetector.classifyProcess(name: $0.name, command: $0.command)
+                == "antigravity"
+        }
+        let antigravitySummaryAgents: [AntigravitySummaryStore.Agent] =
+            hasAntigravityProcess
+            ? AntigravitySummaryStore.activeAgents(home: home) : []
         let antigravitySnapshot: AntigravityStore.Snapshot? =
-            samples.contains {
-                AgentDetector.classifyProcess(name: $0.name, command: $0.command)
-                    == "antigravity"
-            }
+            hasAntigravityProcess && antigravitySummaryAgents.isEmpty
             ? AntigravityStore.snapshot(home: home) : nil
+        var seenAntigravityIDs = Set<String>()
         for sample in samples {
             guard
                 let name = AgentDetector.classifyProcess(
@@ -1291,6 +1298,22 @@ enum StandaloneAgentScanner {
             // pane agents already arrive through the adapter.
             guard name != "herdr" else { continue }
             guard !AgentDetector.isHerdrManaged(environmentLines: sample.environmentLines) else {
+                continue
+            }
+            if name == "antigravity", !antigravitySummaryAgents.isEmpty {
+                for agent in antigravitySummaryAgents {
+                    guard seenAntigravityIDs.insert(agent.id).inserted else { continue }
+                    raw.append(
+                        DetectedAgent(
+                            pid: sample.pid,
+                            name: name,
+                            activity: agent.label,
+                            isWorking: agent.isWorking,
+                            cwd: agent.workspacePath,
+                            sessionPath: agent.conversationPath
+                        )
+                    )
+                }
                 continue
             }
             let roots = AgentDetector.transcriptSearchPaths(home: home, name: name)
@@ -1352,7 +1375,17 @@ enum StandaloneAgentScanner {
 
         var seenKeys = Set<String>()
         return raw.filter { agent in
-            let key = "\(agent.name):\(agent.cwd ?? "default")"
+            // Antigravity summary rows point at a conversation DB and must
+            // stay distinct even when they share a source and cwd. Other
+            // agents keep the old cwd key so transcript siblings still fold.
+            let key: String
+            if agent.name == "antigravity", let session = agent.sessionPath,
+                session.hasSuffix(".db")
+            {
+                key = "\(agent.name):\(session)"
+            } else {
+                key = "\(agent.name):\(agent.cwd ?? "default")"
+            }
             guard !seenKeys.contains(key) else { return false }
             seenKeys.insert(key)
             return true
