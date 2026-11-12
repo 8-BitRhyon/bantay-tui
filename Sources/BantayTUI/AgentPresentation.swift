@@ -126,7 +126,26 @@ enum AgentPresentation {
         }
     }
 
-    static func groupRoster(_ agents: [AgentSnapshot]) -> [AgentRosterGroup] {
+    /// Maps an agent source to its provider quota row. Kept pure so the
+    /// roster sort and the row badge use one definition.
+    static func quotaKey(for source: String) -> String {
+        let lower = source.lowercased()
+        if lower.contains("antigravity") || lower.contains("agy")
+            || lower.contains("gemini")
+        {
+            return "antigravity"
+        }
+        if lower.contains("opencode") { return "opencode" }
+        if lower.contains("claude") || lower.contains("anthropic") { return "claude" }
+        if lower.contains("codex") || lower.contains("openai") { return "codex" }
+        if lower.contains("cursor") { return "cursor" }
+        if lower.contains("windsurf") || lower.contains("cascade") { return "windsurf" }
+        return lower
+    }
+
+    static func groupRoster(
+        _ agents: [AgentSnapshot], quotaBySource: [String: Double] = [:]
+    ) -> [AgentRosterGroup] {
         var order: [String] = []
         var buckets: [String: [AgentSnapshot]] = [:]
         for agent in agents {
@@ -165,6 +184,13 @@ enum AgentPresentation {
             let rightWorking = $1.lead.isWorking || $1.subagents.contains(where: \.isWorking)
             if leftWorking != rightWorking {
                 return leftWorking && !rightWorking
+            }
+            // Quota is a tiebreaker only: more headroom first among groups
+            // in the same attention/work state.
+            let leftQuota = quotaBySource[quotaKey(for: $0.lead.source)] ?? -1
+            let rightQuota = quotaBySource[quotaKey(for: $1.lead.source)] ?? -1
+            if leftQuota != rightQuota {
+                return leftQuota > rightQuota
             }
             return $0.id < $1.id
         }

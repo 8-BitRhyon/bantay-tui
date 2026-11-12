@@ -56,4 +56,7 @@ done
 
 OUT="${LOGIC_CHECK_BIN:-/tmp/logic-check}"
 swiftc -o "$OUT" "${SRC[@]}" "$ROOT/.kilo/LogicCheck.swift"
+# The harness may run on a developer machine with Accessibility granted.
+# Logic checks must never synthesize keystrokes into a live agent.
+export BANTAY_SUPPRESS_INPUT_SYNTHESIS=1
 "$OUT"

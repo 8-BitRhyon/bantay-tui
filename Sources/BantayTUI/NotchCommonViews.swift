@@ -175,6 +175,69 @@ struct TactileRowButton: View {
     }
 }
 
+/// Compact slide-arrow pill adapted from Amicro's button motion: the icon
+/// slides out, the arrow slides in, and a spring carries the hover scale.
+/// React and Framer Motion are not dependencies; the motion is native
+/// SwiftUI. The geometry stays compact for the 456pt notch panel.
+struct AmicroSlideButton: View {
+    let title: String
+    let systemName: String
+    var hoverSystemName: String = "arrow.right"
+    var color: Color = .white
+    var helpText: String = ""
+    let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                ZStack {
+                    if !isHovered {
+                        Image(systemName: systemName)
+                            .transition(
+                                .move(edge: .leading).combined(with: .opacity))
+                    }
+                    if isHovered {
+                        Image(systemName: hoverSystemName)
+                            .transition(
+                                .move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+                .font(.system(size: 9, weight: .semibold))
+                .frame(width: 10, height: 10)
+
+                Text(title)
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundColor(isHovered ? .white : color.opacity(0.8))
+            .padding(.horizontal, 7)
+            .frame(minHeight: 26)
+            .background(
+                Capsule().fill(Color.white.opacity(isHovered ? 0.06 : 0.04))
+            )
+            .overlay(
+                Capsule().strokeBorder(Color.white.opacity(0.05), lineWidth: 0.8)
+            )
+            .scaleEffect(isHovered && !reduceMotion ? 1.02 : 1)
+            .animation(
+                reduceMotion
+                    ? nil : .interpolatingSpring(stiffness: 600, damping: 28),
+                value: isHovered
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(
+            PressableButtonStyle(pressedScale: 0.96, reduceMotion: reduceMotion)
+        )
+        .onHover { isHovered = $0 }
+        .help(helpText)
+        .accessibilityLabel(helpText.isEmpty ? title : helpText)
+    }
+}
+
 /// Copies text string to the system general pasteboard.
 @MainActor
 func copyToClipboard(_ text: String) {

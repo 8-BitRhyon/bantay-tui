@@ -11,6 +11,7 @@ import SwiftUI
 struct AgentRowView: View {
     let agent: AgentSnapshot
     let adapter: PlexerAdapter
+    @ObservedObject private var quotaMonitor = QuotaMonitor.shared
     @Binding var hoveredRow: String?
     @Binding var composingPaneId: String?
     @Binding var promptText: String
@@ -48,6 +49,16 @@ struct AgentRowView: View {
 
     private var status: HumanizedAgentStatus {
         AgentPresentation.status(for: agent)
+    }
+
+    /// Tightest live provider quota for this agent's source. Read-only:
+    /// this is a routing signal, not a dispatch trigger.
+    private var quotaHeadroom: ProviderQuota? {
+        let key = AgentPresentation.quotaKey(for: agent.source)
+        let candidates = quotaMonitor.quotas.filter {
+            !$0.isStale && ($0.id == key || $0.id == "\(key) go")
+        }
+        return candidates.min { $0.remainingPercent < $1.remainingPercent }
     }
 
     var body: some View {
@@ -221,6 +232,9 @@ struct AgentRowView: View {
                         .padding(.vertical, 1)
                         .background(Capsule().fill(Color.white.opacity(0.06)))
                 }
+                if let quota = quotaHeadroom, quota.remainingPercent < 100 {
+                    quotaBadge(quota)
+                }
                 Spacer(minLength: 4)
                 if NotchHUDConfig.shared.showElapsedTime,
                     let startedAt = agent.startedAt,
@@ -247,12 +261,14 @@ struct AgentRowView: View {
         .layoutPriority(0)
     }
 
-    /// Hover affordances only: an explicit Open button plus an overflow menu.
+    /// Hover affordances only: an explicit Focus pill plus an overflow menu.
     /// Stop, browser view, mute, and diagnostics moved out of the row.
     private var hoverActionsView: some View {
         HStack(spacing: 2) {
-            TactileRowButton(
+            AmicroSlideButton(
+                title: "Focus",
                 systemName: "arrow.up.right",
+                hoverSystemName: "arrow.right",
                 helpText: "Focus \(agent.source)"
             ) {
                 onFocus(agent)
@@ -309,6 +325,21 @@ struct AgentRowView: View {
             .help("More actions")
             .accessibilityLabel("More actions for \(agent.source)")
         }
+    }
+
+    private func quotaBadge(_ quota: ProviderQuota) -> some View {
+        let percent = Int(quota.remainingPercent)
+        let color =
+            quota.isCritical
+            ? Color.red
+            : (quota.isWarning ? Color.orange : Color.white.opacity(0.4))
+        return Text("\(percent)%")
+            .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+            .foregroundColor(color)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(color.opacity(0.12)))
+            .help("Provider quota remaining")
     }
 
     /// Opens exactly the agent's working directory. A workspace id is

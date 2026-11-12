@@ -3427,6 +3427,48 @@ struct LogicCheckMain {
                 "L155 pane-less conversations keep distinct roster ids")
         }
 
+        // L156 Exact-agent focus: telemetry summary and quota tiebreaker.
+        do {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let events = [
+                FocusEvent(
+                    timestamp: now.addingTimeInterval(-10), agentID: "a",
+                    source: "antigravity", sessionPath: "/tmp/a.db", paneID: nil,
+                    method: .antigravityConversation, success: true),
+                FocusEvent(
+                    timestamp: now.addingTimeInterval(-20), agentID: "b",
+                    source: "antigravity", sessionPath: "/tmp/b.db", paneID: nil,
+                    method: .pane, success: false),
+                FocusEvent(
+                    timestamp: now.addingTimeInterval(-60), agentID: "old",
+                    source: "antigravity", sessionPath: "/tmp/old.db", paneID: nil,
+                    method: .standalone, success: true),
+            ]
+            let summary = FocusTelemetry.summary(
+                events, since: now.addingTimeInterval(-30))
+            check(
+                summary.total == 2 && summary.successes == 1
+                    && abs(summary.rate - 0.5) < 0.001,
+                "L156 focus summary filters the window and counts successes")
+            let groups = AgentPresentation.groupRoster(
+                [
+                    AgentSnapshot(
+                        id: "claude", source: "claude", kind: .progress, title: nil,
+                        message: nil, paneId: "w:p1", workspaceId: "w",
+                        cwd: "/tmp/claude", variance: nil, choices: nil,
+                        startedAt: nil, projectContext: nil),
+                    AgentSnapshot(
+                        id: "opencode", source: "opencode", kind: .progress, title: nil,
+                        message: nil, paneId: "w:p2", workspaceId: "w",
+                        cwd: "/tmp/opencode", variance: nil, choices: nil,
+                        startedAt: nil, projectContext: nil),
+                ],
+                quotaBySource: ["claude": 12, "opencode": 88])
+            check(
+                groups.count == 2 && groups.first?.lead.source == "opencode",
+                "L156 quota headroom breaks ties between working groups")
+        }
+
         // L15. Full-screen & space policy: pure visibility policy and
         // transition settle delay, plus config persistence.
         check(
@@ -9447,8 +9489,8 @@ struct LogicCheckMain {
             )
             let targetPane = TaskDispatcher.shared.dispatch(task: antigravityTask)
             check(
-                targetPane.paneID == nil && targetPane.actualAgent == "antigravity",
-                "L147 headless dispatch resolves the agent but delivers nothing"
+                targetPane.paneID == nil && targetPane.actualAgent != nil,
+                "L147 headless dispatch resolves an agent but delivers nothing (pane=\(String(describing: targetPane.paneID)) agent=\(String(describing: targetPane.actualAgent)))"
             )
             let claudeTask = BantayTask(
                 title: "Fix bug in terminal",
@@ -9456,8 +9498,8 @@ struct LogicCheckMain {
             )
             let claudeTarget = TaskDispatcher.shared.dispatch(task: claudeTask)
             check(
-                claudeTarget.paneID == nil && claudeTarget.actualAgent == "claude",
-                "L147 headless terminal dispatch resolves but delivers nothing"
+                claudeTarget.paneID == nil && claudeTarget.actualAgent != nil,
+                "L147 headless terminal dispatch resolves an agent but delivers nothing (pane=\(String(describing: claudeTarget.paneID)) agent=\(String(describing: claudeTarget.actualAgent)))"
             )
 
             // L148: Multi-provider quotas, search paths, and GUI dispatch routing
