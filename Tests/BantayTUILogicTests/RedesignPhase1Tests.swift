@@ -52,6 +52,24 @@
             #expect(groups.first?.needsAttention == true)
         }
 
+        @Test("quota headroom breaks ties between working groups")
+        func quotaTiebreaker() {
+            let groups = AgentPresentation.groupRoster(
+                [
+                    snapshot(
+                        id: "claude", source: "claude", kind: .progress,
+                        paneId: "w:p1", workspaceId: "w",
+                        cwd: "/Users/test/claude-project"),
+                    snapshot(
+                        id: "opencode", source: "opencode", kind: .progress,
+                        paneId: "w:p2", workspaceId: "w",
+                        cwd: "/Users/test/opencode-project"),
+                ],
+                quotaBySource: ["claude": 12, "opencode": 88])
+            #expect(groups.count == 2)
+            #expect(groups.first?.lead.source == "opencode")
+        }
+
         @Test("settings routes resolve")
         func settingsRoutes() {
             #expect(SettingsRoute.resolve(cliArgument: "desktop") == .desktop)

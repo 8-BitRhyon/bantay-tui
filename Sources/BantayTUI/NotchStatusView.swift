@@ -2332,41 +2332,87 @@ struct NotchStatusView: View {
     /// router (exact pane in herdr, tmux, or zellij), never through an
     /// app-name guess. Only pane-less standalone agents raise their app.
     private func focusAgent(_ agent: AgentSnapshot) {
+        if let conversationID = antigravityConversationID(for: agent) {
+            let opened = openAntigravityConversation(conversationID)
+            FocusTelemetry.record(
+                FocusEvent(
+                    timestamp: Date(),
+                    agentID: agent.id,
+                    source: agent.source,
+                    sessionPath: agent.sessionPath,
+                    paneID: agent.paneId,
+                    method: .antigravityConversation,
+                    success: opened))
+            if opened { return }
+        }
         if let paneId = agent.paneId, !paneId.hasPrefix("standalone:") {
-            focusAgentPane(paneId)
+            focusAgentPane(paneId, agent: agent)
             return
         }
         let clean = StandaloneAgentDispatcher.cleanAgentName(from: agent.paneId ?? agent.source)
-        focusStandaloneAgent(clean.isEmpty ? agent.source : clean, cwd: agent.cwd)
+        let success = focusStandaloneAgent(
+            clean.isEmpty ? agent.source : clean, cwd: agent.cwd)
+        FocusTelemetry.record(
+            FocusEvent(
+                timestamp: Date(),
+                agentID: agent.id,
+                source: agent.source,
+                sessionPath: agent.sessionPath,
+                paneID: agent.paneId,
+                method: .standalone,
+                success: success))
+    }
+
+    /// The summary row points at a conversation DB. Its filename is the
+    /// cascade ID the Antigravity URI handler expects.
+    private func antigravityConversationID(for agent: AgentSnapshot) -> String? {
+        let source = agent.source.lowercased()
+        guard source.contains("antigravity") || source == "agy" else { return nil }
+        guard let path = agent.sessionPath, path.hasSuffix(".db") else { return nil }
+        let id = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        return id.isEmpty ? nil : id
+    }
+
+    private func openAntigravityConversation(_ id: String) -> Bool {
+        guard
+            let url = URL(
+                string:
+                    "antigravity-ide://google.antigravity/open-conversation?cascadeId=\(id)"
+            )
+        else { return false }
+        return NSWorkspace.shared.open(url)
     }
 
     /// Raise the standalone application window (e.g. Antigravity IDE,
     /// Cursor) and, for chat-first IDEs, land on the input box. Raising
     /// a window without focusing its composer makes the user hunt for
     /// the cursor, which is the opposite of what Focus promises.
-    private func focusStandaloneAgent(_ source: String, cwd: String? = nil) {
+    @discardableResult
+    private func focusStandaloneAgent(_ source: String, cwd: String? = nil) -> Bool {
         let focused = TerminalFocusser.focusStandalone(source: source, cwd: cwd)
-        guard focused else { return }
+        guard focused else { return false }
         let name = source.lowercased()
         let chatForks: Set<String> = [
             "antigravity", "antigravity-ide", "agy", "cursor", "windsurf", "cascade",
         ]
-        guard chatForks.contains(name) else { return }
+        guard chatForks.contains(name) else { return true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             KeyboardSynthesizer.focusChatInput()
         }
+        return true
     }
 
     /// Focuses an agent pane via multiplexer routing or terminal app activation.
-    private func focusAgentPane(_ paneId: String) {
+    private func focusAgentPane(_ paneId: String, agent: AgentSnapshot? = nil) {
         if paneId.hasPrefix("standalone:") {
             let stripped = paneId.replacingOccurrences(of: "standalone:", with: "")
             let comps = stripped.split(separator: ":")
             let source = String(comps.first ?? "")
-            let agent = eventManager.agents.first {
+            let existing = eventManager.agents.first {
                 ($0.paneId ?? "standalone:\($0.source)") == paneId
             }
-            focusStandaloneAgent(source, cwd: agent?.cwd)
+            let success = focusStandaloneAgent(source, cwd: agent?.cwd ?? existing?.cwd)
+            logPaneFocus(agent, method: .standalone, success: success)
             return
         }
         let kind = PlexerDetection.detect(env: ProcessInfo.processInfo.environment)
@@ -2374,8 +2420,9 @@ struct NotchStatusView: View {
             adapter.focusPane(paneId: paneId)
             // Focusing the pane inside the multiplexer is invisible if
             // the terminal itself stays behind another app. Raise it.
-            _ = TerminalFocusser.focus(
+            let raised = TerminalFocusser.focus(
                 preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+            logPaneFocus(agent, method: .pane, success: raised)
             return
         }
         let target = PaneFocusRouter.resolveForFocus(
@@ -2386,23 +2433,48 @@ struct NotchStatusView: View {
             // No router opinion is not a dead click: the adapter can
             // still focus the pane directly, and the terminal comes up.
             adapter.focusPane(paneId: paneId)
-            _ = TerminalFocusser.focus(
+            let raised = TerminalFocusser.focus(
                 preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+            logPaneFocus(agent, method: .pane, success: raised)
             return
         case .terminalOnly:
-            _ = TerminalFocusser.focus(
+            let raised = TerminalFocusser.focus(
                 preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+            logPaneFocus(agent, method: .pane, success: raised)
         case .muxFocus, .both:
-            if let command = PaneFocusRouter.focusCommand(target: target) {
-                ProcessRunner.launch(
+            guard let command = PaneFocusRouter.focusCommand(target: target) else {
+                logPaneFocus(agent, method: .pane, success: false)
+                return
+            }
+            Task {
+                let result = await ProcessRunner.run(
                     executableURL: URL(fileURLWithPath: "/usr/bin/env"),
                     arguments: ["env"] + command)
-            }
-            if action == .both {
-                _ = TerminalFocusser.focus(
-                    preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+                let raised =
+                    action == .both
+                    ? TerminalFocusser.focus(
+                        preferredBundleID: NotchHUDConfig.shared.preferredTerminalBundleID)
+                    : true
+                logPaneFocus(
+                    agent, method: .pane,
+                    success: result.status == 0 && raised)
             }
         }
+    }
+
+    private func logPaneFocus(
+        _ agent: AgentSnapshot?, method: FocusEvent.Method, success: Bool
+    ) {
+        guard let agent else { return }
+        FocusTelemetry.record(
+            FocusEvent(
+                timestamp: Date(),
+                agentID: agent.id,
+                source: agent.source,
+                sessionPath: agent.sessionPath,
+                paneID: agent.paneId,
+                method: method,
+                success: success))
     }
 
     // MARK: - Behavior

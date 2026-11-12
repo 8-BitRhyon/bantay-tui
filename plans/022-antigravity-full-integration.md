@@ -87,6 +87,21 @@ measured, and its notch text is often raw transcript noise.
   percentage and reset time, opens SQLite read-only without `immutable=1`
   so the WAL is visible, and labels an expired window STALE. The reported
   and measured rows share one Antigravity group with distinct ids.
+- CLI root: `AntigravityStore` now reads both
+  `~/.gemini/antigravity-ide/conversations` and
+  `~/.gemini/antigravity/conversations`, dedupes by conversation ID, and
+  uses the WAL mtime as the working heartbeat. Agents launched through the
+  IDE hub no longer read as idle.
+- Per-agent registry: `AntigravitySummaryStore` reads the CLI hub's
+  `conversation_summaries.db`. The table carries the same active fields the
+  webview uses (`not_fully_idle`, `parent_conversation_id`, `agent_name`,
+  `nesting_depth`, `workspace_uris`). Bantay now emits one row per active
+  conversation instead of one row per source.
+- Exact focus: clicking an Antigravity conversation opens
+  `antigravity-ide://google.antigravity/open-conversation?cascadeId=<id>`.
+  `FocusTelemetry` logs each attempt locally and `scripts/focus-report.py`
+  reports the 7-day exact-focus success metric. Multiplexer rows keep exact
+  pane routing; the row also shows a read-only provider quota badge.
 - Messages: the scanner headline is the step summary; the tool vocabulary
   in `summarizeToolCall` covers find, code search, URL reading, image
   generation, browser, and planning steps.

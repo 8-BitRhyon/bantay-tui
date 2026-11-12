@@ -4,6 +4,7 @@ import SwiftUI
 struct NotchRosterView: View {
     let visibleAgents: [AgentSnapshot]
     let mergedRoster: [AgentSnapshot]
+    @ObservedObject private var quotaMonitor = QuotaMonitor.shared
     let recentCompletions: [RecentCompletion]
     let rosterScrollHeight: CGFloat
     let focusedRow: Int?
@@ -80,7 +81,11 @@ struct NotchRosterView: View {
     /// Inbox layout: approval cards first, then working groups with
     /// collapsible subagents, then compact idle rows, then recent activity.
     private var inboxGroups: some View {
-        let groups = AgentPresentation.groupRoster(mergedRoster)
+        let quotaBySource = Dictionary(
+            quotaMonitor.quotas.map { ($0.id, $0.remainingPercent) },
+            uniquingKeysWith: min)
+        let groups = AgentPresentation.groupRoster(
+            mergedRoster, quotaBySource: quotaBySource)
         let attention = groups.filter(\.needsAttention)
         let working = groups.filter {
             !$0.needsAttention

@@ -32,26 +32,64 @@ enum AntigravityStore {
     /// the IDE writes steps as the agent acts, so mtime is the heartbeat.
     static let workingWindow: TimeInterval = 120
 
+    /// Two stores exist on most installs: the IDE root and the CLI/hub root.
+    /// The CLI root is where `agy --hub` writes when the IDE runs agents
+    /// through its hub, so reading only the IDE root makes live work look
+    /// idle.
+    static func conversationsDirectories(home: String = NSHomeDirectory()) -> [URL] {
+        let root = URL(fileURLWithPath: home)
+        return [
+            root.appendingPathComponent(
+                ".gemini/antigravity/conversations", isDirectory: true),
+            root.appendingPathComponent(
+                ".gemini/antigravity-ide/conversations", isDirectory: true),
+        ]
+    }
+
+    /// Directory used for display and recording. Prefer the root that
+    /// actually has conversations, then the CLI root.
     static func conversationsDirectory(home: String = NSHomeDirectory()) -> URL {
-        URL(fileURLWithPath: home)
-            .appendingPathComponent(".gemini/antigravity-ide/conversations", isDirectory: true)
+        let dirs = conversationsDirectories(home: home)
+        for dir in dirs {
+            let files =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: dir, includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles])) ?? []
+            if files.contains(where: { $0.pathExtension == "db" }) {
+                return dir
+            }
+        }
+        return dirs[0]
     }
 
     static func snapshot(
         home: String = NSHomeDirectory(), now: Date = Date(), limit: Int = 12
     ) -> Snapshot {
-        let dir = conversationsDirectory(home: home)
-        let files =
-            ((try? FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles])) ?? [])
-            .filter { $0.pathExtension == "db" }
-        let sorted = files.sorted { lhs, rhs in
-            (modificationDate(of: lhs) ?? .distantPast)
-                > (modificationDate(of: rhs) ?? .distantPast)
+        var candidates: [String: (url: URL, updatedAt: Date)] = [:]
+        for dir in conversationsDirectories(home: home) {
+            let files =
+                ((try? FileManager.default.contentsOfDirectory(
+                    at: dir, includingPropertiesForKeys: [.contentModificationDateKey],
+                    options: [.skipsHiddenFiles])) ?? [])
+                .filter { $0.pathExtension == "db" }
+            for file in files {
+                let id = file.deletingPathExtension().lastPathComponent
+                let dbDate = modificationDate(of: file) ?? .distantPast
+                // The WAL is the live write path; the main DB mtime can
+                // lag behind while an agent is actively working.
+                let walDate =
+                    modificationDate(of: URL(fileURLWithPath: file.path + "-wal"))
+                    ?? .distantPast
+                let updatedAt = max(dbDate, walDate)
+                if let existing = candidates[id], existing.updatedAt >= updatedAt {
+                    continue
+                }
+                candidates[id] = (file, updatedAt)
+            }
         }
+        let sorted = candidates.values.sorted { $0.updatedAt > $1.updatedAt }
         let conversations = sorted.prefix(max(limit, 0)).compactMap {
-            readConversation(at: $0, now: now)
+            readConversation(at: $0.url, updatedAt: $0.updatedAt, now: now)
         }
         return Snapshot(conversations: conversations)
     }
@@ -61,8 +99,15 @@ enum AntigravityStore {
             .contentModificationDate
     }
 
-    private static func readConversation(at url: URL, now: Date) -> Conversation? {
+    private static func readConversation(
+        at url: URL, updatedAt: Date, now: Date
+    ) -> Conversation? {
         var handle: OpaquePointer?
+        // immutable=1 avoids taking a write lock on the live SHM. The
+        // checkpointed steps match the plain read in practice; the WAL
+        // mtime above is the real working heartbeat. If the newest step is
+        // still uncheckpointed, the headline lags by one checkpoint, but
+        // the row is never falsely idle.
         let uri = "file://\(url.path)?immutable=1&mode=ro"
         guard
             sqlite3_open_v2(uri, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)
@@ -111,7 +156,6 @@ enum AntigravityStore {
             sqlite3_finalize(countStmt)
         }
 
-        let updatedAt = modificationDate(of: url) ?? .distantPast
         let resolvedHeadline = latestHeadline ?? stepTypeHeadline(latestType)
         return Conversation(
             id: url.deletingPathExtension().lastPathComponent,
