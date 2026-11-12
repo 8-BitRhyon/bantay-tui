@@ -433,5 +433,32 @@
                     kind: .failed, isFinishedPaneFocused: true,
                     userFocusedInPanel: true) == .show)
         }
+
+        @Test("manual dismiss mutes the done stream but not approvals")
+        func transientNoticeSuppression() {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            #expect(
+                IslandMetrics.transientNoticeSuppressed(
+                    kind: .completed, key: "w:p", keyMutedUntil: [:],
+                    doneMutedUntil: now.addingTimeInterval(60), now: now))
+            #expect(
+                !IslandMetrics.transientNoticeSuppressed(
+                    kind: .failed, key: "w:p", keyMutedUntil: [:],
+                    doneMutedUntil: now.addingTimeInterval(60), now: now))
+            #expect(
+                IslandMetrics.transientNoticeSuppressed(
+                    kind: .failed, key: "w:p",
+                    keyMutedUntil: ["w:p": now.addingTimeInterval(60)],
+                    doneMutedUntil: nil, now: now))
+            #expect(
+                !IslandMetrics.transientNoticeSuppressed(
+                    kind: .accessRequest, key: "w:p",
+                    keyMutedUntil: ["w:p": now.addingTimeInterval(60)],
+                    doneMutedUntil: nil, now: now))
+            #expect(
+                !IslandMetrics.transientNoticeSuppressed(
+                    kind: .completed, key: "w:p", keyMutedUntil: [:],
+                    doneMutedUntil: now.addingTimeInterval(-1), now: now))
+        }
     }
 #endif

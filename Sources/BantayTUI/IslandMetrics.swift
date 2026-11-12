@@ -1626,6 +1626,24 @@ public enum IslandMetrics: Sendable {
         return !islandVisible || displayLocked
     }
 
+    /// Manual dismissal policy for transient cards. A done X mutes the
+    /// whole done stream; a dismissed failure stays down for that agent.
+    /// Approvals and questions are never muted here.
+    static func transientNoticeSuppressed(
+        kind: AgentEventKind,
+        key: String,
+        keyMutedUntil: [String: Date],
+        doneMutedUntil: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        guard kind == .completed || kind == .failed else { return false }
+        if kind == .completed, let doneMutedUntil, doneMutedUntil > now {
+            return true
+        }
+        if let until = keyMutedUntil[key], until > now { return true }
+        return false
+    }
+
     /// F8 "attention only" triage filter: keeps needs-input (blocked) and
     /// failed agents, in roster order; everything else is dropped.
     static func attentionFilter(_ roster: [AgentSnapshot]) -> [AgentSnapshot] {

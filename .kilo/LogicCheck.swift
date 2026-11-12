@@ -3469,6 +3469,28 @@ struct LogicCheckMain {
                 "L156 quota headroom breaks ties between working groups")
         }
 
+        // L157 Manual notification dismiss: done notices mute, approvals
+        // and failures keep their own policy.
+        do {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            check(
+                IslandMetrics.transientNoticeSuppressed(
+                    kind: .completed, key: "w:p", keyMutedUntil: [:],
+                    doneMutedUntil: now.addingTimeInterval(60), now: now),
+                "L157 a done dismissal mutes the done stream")
+            check(
+                !IslandMetrics.transientNoticeSuppressed(
+                    kind: .failed, key: "w:p", keyMutedUntil: [:],
+                    doneMutedUntil: now.addingTimeInterval(60), now: now),
+                "L157 a done mute does not hide failures")
+            check(
+                !IslandMetrics.transientNoticeSuppressed(
+                    kind: .accessRequest, key: "w:p",
+                    keyMutedUntil: ["w:p": now.addingTimeInterval(60)],
+                    doneMutedUntil: nil, now: now),
+                "L157 a done mute never hides approvals")
+        }
+
         // L15. Full-screen & space policy: pure visibility policy and
         // transition settle delay, plus config persistence.
         check(
