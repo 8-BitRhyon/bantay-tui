@@ -13,6 +13,11 @@ struct NotchStatusView: View {
     /// idle-show is off, so X closes the notice, not the plane.
     @State private var keepVisibleUntil: Date?
     @State private var keepVisibleTask: Task<Void, Never>?
+    /// Manual dismissal muting. X on a done card clears the done stack and
+    /// keeps the done stream quiet for five minutes; a dismissed failure
+    /// stays down for the same agent.
+    @State private var dismissedNoticeUntil: [String: Date] = [:]
+    @State private var doneNoticesMutedUntil: Date?
     /// True while a shelf card is being dragged to another app. The island
     /// must stay expanded: the pointer leaves it during the drag.
     @State private var isDraggingShelfItem = false
@@ -1563,17 +1568,19 @@ struct NotchStatusView: View {
     }
 
     private func notificationDismissButton(_ id: UUID, paneId: String?) -> some View {
-        TactileRowButton(
+        let kind = notificationQueue.first { $0.id == id }?.kind
+        let isApproval = kind == .accessRequest || kind == .waiting
+        return TactileRowButton(
             systemName: "xmark",
             color: Color.white.opacity(0.5),
-            helpText: paneId == nil
-                ? "Dismiss notification"
-                : "Acknowledge until the request changes"
+            helpText: isApproval
+                ? "Acknowledge until the request changes"
+                : "Dismiss notification"
         ) {
-            if let paneId {
+            if isApproval, let paneId {
                 eventManager.acknowledgeApproval(paneId: paneId)
             }
-            dismissNotification(id)
+            dismissNotification(id, manual: true)
             keepNotchVisibleBriefly()
         }
     }
@@ -1631,9 +1638,54 @@ struct NotchStatusView: View {
         }
     }
 
-    private func dismissNotification(_ id: UUID) {
+    private func noticeKey(_ event: AgentEvent) -> String {
+        event.paneId ?? event.sourceKey
+    }
+
+    private func isNoticeSuppressed(_ event: AgentEvent) -> Bool {
+        IslandMetrics.transientNoticeSuppressed(
+            kind: event.kind,
+            key: noticeKey(event),
+            keyMutedUntil: dismissedNoticeUntil,
+            doneMutedUntil: doneNoticesMutedUntil)
+    }
+
+    private func dismissNotification(_ id: UUID, manual: Bool = false) {
         commitTask?.cancel()
         commitTask = nil
+        transientNoticeTasks[id]?.cancel()
+        transientNoticeTasks[id] = nil
+
+        let dismissed = notificationQueue.first { $0.id == id }
+        if manual, let dismissed {
+            switch dismissed.kind {
+            case .completed:
+                // X means "I am done with done notices": clear the whole
+                // completed stack and keep it quiet for five minutes.
+                let until = Date().addingTimeInterval(300)
+                doneNoticesMutedUntil = until
+                for card in notificationQueue where card.kind == .completed {
+                    dismissedNoticeUntil[noticeKey(card)] = until
+                    transientNoticeTasks[card.id]?.cancel()
+                    transientNoticeTasks[card.id] = nil
+                }
+                withAnimation(morphAnimation) {
+                    notificationQueue.removeAll { $0.kind == .completed }
+                    queueIndex = IslandMetrics.notificationQueueClampIndex(
+                        queueIndex, count: notificationQueue.count)
+                }
+                if activeNotification?.id != dismissed.id {
+                    cancelNotificationDetail()
+                }
+                return
+            case .failed:
+                dismissedNoticeUntil[noticeKey(dismissed)] =
+                    Date().addingTimeInterval(600)
+            default:
+                break
+            }
+        }
+
         let topBefore = activeNotification?.id
         withAnimation(morphAnimation) {
             notificationQueue = IslandMetrics.notificationQueueRemove(
@@ -2618,46 +2670,50 @@ struct NotchStatusView: View {
                 // resume at once. Hold the card for the settle window; if
                 // the roster shows the agent working again by then, the
                 // card never appears.
-                let pending = event
-                transientNoticeTasks[pending.id] = Task { @MainActor in
-                    try? await Task.sleep(
-                        for: .seconds(IslandMetrics.transientNoticeSettleSeconds))
-                    transientNoticeTasks[pending.id] = nil
-                    guard !Task.isCancelled else { return }
-                    let agent = eventManager.agents.first {
-                        (pending.paneId != nil && $0.paneId == pending.paneId)
-                            || $0.source == pending.sourceKey
+                if !isNoticeSuppressed(event) {
+                    let pending = event
+                    transientNoticeTasks[pending.id] = Task { @MainActor in
+                        try? await Task.sleep(
+                            for: .seconds(IslandMetrics.transientNoticeSettleSeconds))
+                        transientNoticeTasks[pending.id] = nil
+                        guard !Task.isCancelled else { return }
+                        guard !isNoticeSuppressed(pending) else { return }
+                        let agent = eventManager.agents.first {
+                            (pending.paneId != nil && $0.paneId == pending.paneId)
+                                || $0.source == pending.sourceKey
+                        }
+                        guard IslandMetrics.transientNoticeShouldShow(agentKind: agent?.kind)
+                        else { return }
+                        // Pane-level attention: watching this agent finish
+                        // needs no card; working in another pane of the same
+                        // terminal holds it silently until attention returns.
+                        switch IslandMetrics.transientNoticeDisposition(
+                            kind: pending.kind,
+                            isFinishedPaneFocused: pending.paneId != nil
+                                && pending.paneId == eventManager.focusedPaneId,
+                            userFocusedInPanel: isTerminalFocused())
+                        {
+                        case .suppress:
+                            return
+                        case .defer:
+                            deferredDoneEvents[pending.paneId ?? pending.sourceKey] = pending
+                            return
+                        case .show:
+                            break
+                        }
+                        withAnimation(morphAnimation) {
+                            notificationQueue = IslandMetrics.notificationQueueInsert(
+                                notificationQueue, event: pending)
+                            queueIndex = 0
+                        }
+                        if pending.playSound && eventManager.shouldPlaySound(for: pending) {
+                            playSound(for: pending)
+                        }
+                        scheduleNotificationDismiss(pending.id)
                     }
-                    guard IslandMetrics.transientNoticeShouldShow(agentKind: agent?.kind)
-                    else { return }
-                    // Pane-level attention: watching this agent finish
-                    // needs no card; working in another pane of the same
-                    // terminal holds it silently until attention returns.
-                    switch IslandMetrics.transientNoticeDisposition(
-                        kind: pending.kind,
-                        isFinishedPaneFocused: pending.paneId != nil
-                            && pending.paneId == eventManager.focusedPaneId,
-                        userFocusedInPanel: isTerminalFocused())
-                    {
-                    case .suppress:
-                        return
-                    case .defer:
-                        deferredDoneEvents[pending.paneId ?? pending.sourceKey] = pending
-                        return
-                    case .show:
-                        break
-                    }
-                    withAnimation(morphAnimation) {
-                        notificationQueue = IslandMetrics.notificationQueueInsert(
-                            notificationQueue, event: pending)
-                        queueIndex = 0
-                    }
-                    if pending.playSound && eventManager.shouldPlaySound(for: pending) {
-                        playSound(for: pending)
-                    }
-                    scheduleNotificationDismiss(pending.id)
                 }
             } else {
+                dismissedNoticeUntil.removeValue(forKey: noticeKey(event))
                 let visibleKinds = Set(notificationQueue.map(\.kind))
                 let hasApprovalCard =
                     visibleKinds.contains(.accessRequest)
